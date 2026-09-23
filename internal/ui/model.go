@@ -13,6 +13,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/cllpse/youtuimusic/internal/player"
 )
 
 // Pane identifies which half of the split has keyboard focus.
@@ -47,7 +49,6 @@ func (r Rating) glyph() string {
 type Playlist struct {
 	ID    string
 	Title string
-	Count int
 }
 
 // Track is one row in the table.
@@ -62,6 +63,8 @@ type Track struct {
 // Model is the whole application state.
 type Model struct {
 	width, height int
+
+	services Services
 
 	Playlists []Playlist
 	Tracks    []Track
@@ -80,17 +83,42 @@ type Model struct {
 	Searching bool
 	Query     string
 
+	// playingID is the track mpv is on, which is not necessarily the one
+	// under the cursor — it is what "next" is relative to when a track ends.
+	playingID string
+	// status describes what the table is showing.
+	status  string
+	loading bool
+
 	Err error
 }
 
 const sidebarWidth = 28
 
-// New returns a Model with nothing loaded.
-func New() Model {
-	return Model{focus: PaneSidebar}
+// New returns a Model with nothing loaded. A zero Services makes a model
+// that talks to nothing, which is what the view tests use.
+func New(s Services) Model {
+	return Model{focus: PaneSidebar, services: s, loading: s.Library != nil}
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+// Init starts the first fetch and opens the stream of player events.
+func (m Model) Init() tea.Cmd {
+	return batch(m.fetchPlaylists(), m.watchEvents())
+}
+
+// batch drops the nil commands a zero Services produces.
+func batch(cmds ...tea.Cmd) tea.Cmd {
+	live := make([]tea.Cmd, 0, len(cmds))
+	for _, c := range cmds {
+		if c != nil {
+			live = append(live, c)
+		}
+	}
+	if len(live) == 0 {
+		return nil
+	}
+	return tea.Batch(live...)
+}
 
 // SelectedTrack returns the row under the cursor, if any.
 func (m Model) SelectedTrack() (Track, bool) {
@@ -122,8 +150,81 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case playlistsMsg:
+		m.Playlists = m.Playlists[:0]
+		for _, p := range msg {
+			m.Playlists = append(m.Playlists, Playlist{ID: p.ID, Title: p.Title})
+		}
+		m.sidebarCursor, m.loading, m.Err = 0, false, nil
+		// Open the first playlist, so the table is not empty on arrival.
+		if len(m.Playlists) > 0 {
+			m.loading = true
+			return m, m.fetchTracks(m.Playlists[0])
+		}
+		return m, nil
+
+	case tracksMsg:
+		m.Tracks = fromAPI(msg.tracks)
+		m.trackCursor, m.loading, m.Err = 0, false, nil
+		m.status = msg.source
+		if len(m.Tracks) > 0 {
+			return m, m.prefetch(m.Tracks[0].VideoID)
+		}
+		return m, nil
+
+	case ratedMsg:
+		if msg.err != nil {
+			// The row was changed before the call; put it back.
+			m.setRating(msg.videoID, msg.previous)
+			m.Err = msg.err
+		}
+		return m, nil
+
+	case playingMsg:
+		m.playingID, m.NowPlaying, m.Length = msg.videoID, msg.title, msg.length
+		m.Position, m.Paused, m.Err = 0, false, nil
+		if next, ok := m.trackAfter(msg.videoID); ok {
+			return m, m.prefetch(next.VideoID)
+		}
+		return m, nil
+
+	case eventMsg:
+		return m.handleEvent(player.Event(msg))
+
+	case errMsg:
+		m.Err, m.loading = msg.err, false
+		return m, nil
 	}
 	return m, nil
+}
+
+// handleEvent folds an mpv property change into the model. Every branch
+// re-arms the watch; forgetting to would silently end the event stream.
+func (m Model) handleEvent(ev player.Event) (tea.Model, tea.Cmd) {
+	switch ev.Name {
+	case "time-pos":
+		if f, ok := ev.Data.(float64); ok {
+			m.Position = time.Duration(f * float64(time.Second))
+		}
+	case "duration":
+		if f, ok := ev.Data.(float64); ok && f > 0 {
+			m.Length = time.Duration(f * float64(time.Second))
+		}
+	case "pause":
+		if b, ok := ev.Data.(bool); ok {
+			m.Paused = b
+		}
+	case "eof-reached":
+		// mpv reports this at the end of a file, which is where a playlist
+		// advances on its own.
+		if b, ok := ev.Data.(bool); ok && b {
+			if next, ok := m.trackAfter(m.playingID); ok {
+				return m, batch(m.watchEvents(), m.play(next))
+			}
+		}
+	}
+	return m, m.watchEvents()
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -136,6 +237,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.Searching, m.Query = false, ""
 		case "enter":
 			m.Searching = false
+			if m.Query != "" {
+				m.loading, m.focus = true, PaneTracks
+				return m, m.runSearch(m.Query)
+			}
 		case "backspace":
 			if m.Query != "" {
 				m.Query = m.Query[:len(m.Query)-1]
@@ -155,6 +260,23 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		m.Searching, m.Query = true, ""
 
+	case "enter":
+		if m.focus == PaneSidebar {
+			if p, ok := m.SelectedPlaylist(); ok {
+				m.loading = true
+				return m, m.fetchTracks(p)
+			}
+			return m, nil
+		}
+		if t, ok := m.SelectedTrack(); ok {
+			// Show the track at once; resolving it takes a moment.
+			m.NowPlaying, m.Position, m.Length = nowPlaying(t), 0, t.Duration
+			return m, m.play(t)
+		}
+
+	case " ", "space":
+		return m, m.togglePause()
+
 	case "tab":
 		if m.focus == PaneSidebar {
 			m.focus = PaneTracks
@@ -169,15 +291,51 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "up", "k":
 		m.moveCursor(-1)
+		return m, m.prefetchCursor()
 	case "down", "j":
 		m.moveCursor(1)
+		return m, m.prefetchCursor()
 
 	case "+", "=":
-		m.rateSelected(RatingUp)
+		return m.applyRating(RatingUp)
 	case "-", "_":
-		m.rateSelected(RatingDown)
+		return m.applyRating(RatingDown)
 	}
 	return m, nil
+}
+
+// prefetchCursor resolves the highlighted row ahead of time. A cold resolve
+// is ~2.3s and a cached one ~600ns, so this is where pressing play getting
+// to feel instant actually comes from.
+func (m Model) prefetchCursor() tea.Cmd {
+	if m.focus != PaneTracks {
+		return nil
+	}
+	t, ok := m.SelectedTrack()
+	if !ok {
+		return nil
+	}
+	return m.prefetch(t.VideoID)
+}
+
+// trackAfter returns the row following a video id, which is what plays when
+// the current one ends.
+func (m Model) trackAfter(videoID string) (Track, bool) {
+	for i, t := range m.Tracks {
+		if t.VideoID == videoID && i+1 < len(m.Tracks) {
+			return m.Tracks[i+1], true
+		}
+	}
+	return Track{}, false
+}
+
+func (m *Model) setRating(videoID string, r Rating) {
+	for i := range m.Tracks {
+		if m.Tracks[i].VideoID == videoID {
+			m.Tracks[i].Rating = r
+			return
+		}
+	}
 }
 
 // moveCursor moves the focused pane's cursor, clamped to its list.
@@ -189,17 +347,22 @@ func (m *Model) moveCursor(delta int) {
 	m.trackCursor = clamp(m.trackCursor+delta, len(m.Tracks))
 }
 
-// rateSelected toggles the thumbs state of the highlighted track: rating it
+// applyRating toggles the thumbs state of the highlighted track: rating it
 // the same way twice clears it, which is what the YouTube Music API does.
-func (m *Model) rateSelected(r Rating) {
+//
+// The row changes immediately and the server is told afterwards. Waiting for
+// the round trip would make a keystroke feel like a network call; if it
+// fails, the message handler puts the row back.
+func (m Model) applyRating(r Rating) (tea.Model, tea.Cmd) {
 	if m.focus != PaneTracks || m.trackCursor >= len(m.Tracks) {
-		return
+		return m, nil
 	}
-	if m.Tracks[m.trackCursor].Rating == r {
-		m.Tracks[m.trackCursor].Rating = RatingNone
-		return
+	previous := m.Tracks[m.trackCursor].Rating
+	if previous == r {
+		r = RatingNone
 	}
 	m.Tracks[m.trackCursor].Rating = r
+	return m, m.rate(m.Tracks[m.trackCursor].VideoID, r, previous)
 }
 
 func clamp(v, length int) int {
@@ -217,6 +380,7 @@ func clamp(v, length int) int {
 
 var (
 	dim      = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	failed   = lipgloss.NewStyle().Foreground(lipgloss.Color("204"))
 	selected = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("170"))
 	active   = lipgloss.NewStyle().Foreground(lipgloss.Color("170"))
 )
@@ -311,11 +475,20 @@ func (m Model) trackLine(t Track, width int) string {
 
 func (m Model) renderProgress() string {
 	title := m.NowPlaying
-	if title == "" {
-		title = dim.Render("Nothing playing")
+	if m.Paused && title != "" {
+		title += dim.Render("  paused")
 	}
-	if m.Searching {
+	switch {
+	case m.Searching:
 		title = "/" + m.Query + "█"
+	case m.Err != nil:
+		title = failed.Render(truncate(m.Err.Error(), m.width))
+	case m.loading:
+		title = dim.Render("Loading…")
+	case title == "" && m.status != "":
+		title = dim.Render(m.status)
+	case title == "":
+		title = dim.Render("Nothing playing")
 	}
 
 	barWidth := m.width - 16

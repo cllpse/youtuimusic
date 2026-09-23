@@ -38,7 +38,7 @@ func press(m Model, keys ...string) Model {
 }
 
 func sample() Model {
-	m := New()
+	m := New(Services{})
 	m.Playlists = []Playlist{{Title: "One"}, {Title: "Two"}, {Title: "Three"}}
 	m.Tracks = []Track{
 		{VideoID: "a", Title: "Alpha", Artist: "A", Duration: time.Minute},
@@ -93,7 +93,7 @@ func TestCursorClampsAtBothEnds(t *testing.T) {
 }
 
 func TestEmptyListsDoNotPanic(t *testing.T) {
-	m := New()
+	m := New(Services{})
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = press(sized.(Model), "down", "up", "tab", "down", "+")
 	if _, ok := m.SelectedTrack(); ok {
@@ -161,7 +161,7 @@ func TestViewRendersAllThreeRegions(t *testing.T) {
 
 func TestViewIsStableBeforeFirstResize(t *testing.T) {
 	// Rendering before a WindowSizeMsg must not divide by a zero width.
-	if got := New().View().Content; got != "" {
+	if got := New(Services{}).View().Content; got != "" {
 		t.Fatalf("unsized view = %q, want empty", got)
 	}
 }
@@ -169,7 +169,7 @@ func TestViewIsStableBeforeFirstResize(t *testing.T) {
 // tmux's capture-pane renders runs of spaces as tabs, which looks like a
 // layout bug in a screenshot. Assert on the real output instead.
 func TestNoTabsAndWidthIsExact(t *testing.T) {
-	m := New()
+	m := New(Services{})
 	m.Playlists = []Playlist{{Title: "Liked Music"}}
 	m.Tracks = []Track{{Title: "Poly", Artist: "DAPHNI", Duration: 6*time.Minute + 14*time.Second, Rating: RatingUp}}
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 18})
