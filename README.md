@@ -1,8 +1,8 @@
 # youtuimusic
 
-A small YouTube Music TUI: playlists on the left, tracks on the right, a
-progress bar at the bottom. Search, and thumbs up/down. That is the whole
-scope, deliberately.
+A small YouTube Music TUI: playlists as tabs, tracks below them, a progress
+bar at the bottom. Search, and thumbs up/down. That is the whole scope,
+deliberately.
 
 ## Running
 
@@ -50,17 +50,24 @@ the first page and fill in the rest behind it.
 
 | | |
 |---|---|
-| `tab`, `h`/`l`, `←`/`→` | move between the sidebar and the table |
+| `h`/`l`, `←`/`→`, `tab` | move between playlist tabs |
 | `j`/`k`, `↑`/`↓` | move the cursor |
-| `enter` | open a playlist, or play the highlighted track |
+| `pgup`/`pgdown`, `ctrl+u`/`ctrl+d` | a window at a time |
+| `g` / `G`, `home`/`end` | the top, the bottom |
+| `enter` | play the highlighted track |
 | `space` | pause and resume |
-| `/` | search, `enter` to run it, `esc` to cancel |
+| `/` | search, `enter` to run it, `esc` to cancel; results arrive as their own tab |
 | `+` / `-` | thumbs up or down; the same key again clears it |
 | `q`, `ctrl+c` | quit |
 
-The mouse works too: click a playlist to open it, click a track to select it
-and again to play it, scroll either list with the wheel, and drag the
-progress bar to scrub. Scrolling deliberately does not move keyboard focus.
+The mouse works too: click a tab to open it, click a track to select it and
+again to play it, use the wheel over the tabs or the list, and drag the
+progress bar to scrub.
+
+A tab already visited comes back from memory, so moving between them is
+instant after the first look. A move only reaches the server once the
+selection settles, so running across the tabs is one request rather than one
+per tab.
 
 **Colours come from the terminal, not from this program.** Everything drawn
 names an entry in the sixteen-colour ANSI palette, so the scheme the user
@@ -79,7 +86,7 @@ cmd/youtuimusic     entry point
 internal/ytm        InnerTube client (auth, playlists, search, rating)
 internal/player     mpv over JSON IPC
 internal/stream     yt-dlp resolution + cache
-internal/ui         bubbletea model, sidebar / table / progress
+internal/ui         bubbletea model, tabs / table / progress
 ```
 
 ## Status
@@ -89,7 +96,7 @@ internal/ui         bubbletea model, sidebar / table / progress
 - [x] `internal/ytm` — playlists, tracks, search and rating, all verified
       against a real account
 - [x] `internal/ui` — bubbletea shell, wired to the backends, keyboard and
-      mouse
+      mouse, scrolling
 - [ ] `internal/chromium` — reading the browser's cookies directly, so that
       signing in needs no steps. Decryption and the keyring are done; profile
       discovery is not. Until it lands, `internal/auth` reads a session file.

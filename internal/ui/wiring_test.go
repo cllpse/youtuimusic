@@ -166,22 +166,45 @@ func TestInitLoadsPlaylistsAndOpensTheFirst(t *testing.T) {
 	}
 }
 
-func TestEnterOnASidebarRowLoadsThatPlaylist(t *testing.T) {
+func TestMovingToATabLoadsIt(t *testing.T) {
 	lib := library()
 	lib.tracks["PL1"] = []ytm.Track{{VideoID: "c", Title: "Gamma"}}
 	m := wired(t, lib, &fakeStreams{}, newFakeAudio())
 	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
 
-	next, cmd := m.Update(keyPress("down"))
-	m = next.(Model)
-	next, cmd = m.Update(keyPress("enter"))
+	next, cmd := m.Update(keyPress("l"))
 	m = drain(t, next.(Model), cmd)
 
+	if m.tabCursor != 1 {
+		t.Fatalf("tab cursor = %d", m.tabCursor)
+	}
 	if len(m.Tracks) != 1 || m.Tracks[0].Title != "Gamma" {
 		t.Fatalf("tracks = %+v", m.Tracks)
 	}
-	if m.status != "Favorites" {
-		t.Errorf("status = %q", m.status)
+}
+
+// A tab already visited comes back without asking the server again.
+func TestGoingBackToATabIsServedFromMemory(t *testing.T) {
+	lib := library()
+	lib.tracks["PL1"] = []ytm.Track{{VideoID: "c", Title: "Gamma"}}
+	m := wired(t, lib, &fakeStreams{}, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
+
+	for _, key := range []string{"l", "h", "l"} {
+		next, cmd := m.Update(keyPress(key))
+		m = drain(t, next.(Model), cmd)
+	}
+	requests := 0
+	for _, id := range lib.askedFor {
+		if id == "PL1" {
+			requests++
+		}
+	}
+	if requests != 1 {
+		t.Errorf("asked for PL1 %d times, want once: %v", requests, lib.askedFor)
+	}
+	if len(m.Tracks) != 1 || m.Tracks[0].Title != "Gamma" {
+		t.Fatalf("tracks = %+v", m.Tracks)
 	}
 }
 
@@ -189,7 +212,6 @@ func TestEnterOnATrackResolvesAndPlays(t *testing.T) {
 	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
 	m := wired(t, lib, st, au)
 	m.Tracks = fromAPI(lib.tracks["LM"])
-	m.focus = PaneTracks
 
 	next, cmd := m.Update(keyPress("enter"))
 	m = drain(t, next.(Model), cmd)
@@ -218,7 +240,6 @@ func TestAResolveFailureSurfaces(t *testing.T) {
 	au := newFakeAudio()
 	m := wired(t, lib, st, au)
 	m.Tracks = fromAPI(lib.tracks["LM"])
-	m.focus = PaneTracks
 
 	next, cmd := m.Update(keyPress("enter"))
 	m = drain(t, next.(Model), cmd)
@@ -235,7 +256,6 @@ func TestRatingReachesTheAPI(t *testing.T) {
 	lib, st := library(), &fakeStreams{}
 	m := wired(t, lib, st, newFakeAudio())
 	m.Tracks = fromAPI(lib.tracks["LM"])
-	m.focus = PaneTracks
 
 	next, cmd := m.Update(keyPress("+"))
 	m = drain(t, next.(Model), cmd)
@@ -253,7 +273,6 @@ func TestRatingTwiceClearsItRemotely(t *testing.T) {
 	lib, st := library(), &fakeStreams{}
 	m := wired(t, lib, st, newFakeAudio())
 	m.Tracks = fromAPI(lib.tracks["LM"])
-	m.focus = PaneTracks
 
 	next, cmd := m.Update(keyPress("+"))
 	m = drain(t, next.(Model), cmd)
@@ -275,7 +294,6 @@ func TestAFailedRatingIsPutBack(t *testing.T) {
 	m := wired(t, lib, st, newFakeAudio())
 	m.Tracks = fromAPI(lib.tracks["LM"])
 	m.Tracks[0].Rating = RatingDown
-	m.focus = PaneTracks
 
 	next, cmd := m.Update(keyPress("+"))
 	if next.(Model).Tracks[0].Rating != RatingUp {
@@ -311,8 +329,8 @@ func TestSearchReplacesTheTable(t *testing.T) {
 	if len(m.Tracks) != 1 || m.Tracks[0].Title != "Found" {
 		t.Fatalf("tracks = %+v", m.Tracks)
 	}
-	if m.focus != PaneTracks {
-		t.Error("focus should move to the results")
+	if got, _ := m.SelectedPlaylist(); got.Title != "xtal" {
+		t.Errorf("front tab = %q, want the search", got.Title)
 	}
 	if len(lib.askedFor) == 0 || lib.askedFor[len(lib.askedFor)-1] != "search:xtal" {
 		t.Errorf("asked for %v", lib.askedFor)
@@ -378,7 +396,6 @@ func TestMovingTheCursorPrefetches(t *testing.T) {
 	lib, st := library(), &fakeStreams{}
 	m := wired(t, lib, st, newFakeAudio())
 	m.Tracks = fromAPI(lib.tracks["LM"])
-	m.focus = PaneTracks
 
 	next, cmd := m.Update(keyPress("down"))
 	drain(t, next.(Model), cmd)
@@ -388,18 +405,18 @@ func TestMovingTheCursorPrefetches(t *testing.T) {
 	}
 }
 
-// Moving in the sidebar must not resolve anything: those are playlists.
-func TestSidebarMovementDoesNotPrefetch(t *testing.T) {
+// Moving between tabs must not resolve anything: those are playlists.
+func TestTabMovementDoesNotPrefetch(t *testing.T) {
 	lib, st := library(), &fakeStreams{}
 	m := wired(t, lib, st, newFakeAudio())
 	m.Playlists = []Playlist{{ID: "LM"}, {ID: "PL1"}}
 	m.Tracks = fromAPI(lib.tracks["LM"])
 
-	next, cmd := m.Update(keyPress("down"))
+	next, cmd := m.Update(keyPress("l"))
 	drain(t, next.(Model), cmd)
 
 	if len(st.prefetched) != 0 {
-		t.Fatalf("prefetched %v from the sidebar", st.prefetched)
+		t.Fatalf("prefetched %v from a tab move", st.prefetched)
 	}
 }
 
@@ -440,7 +457,6 @@ func TestZeroServicesIsInert(t *testing.T) {
 		t.Error("a model with no services should start nothing")
 	}
 	m.Tracks = []Track{{VideoID: "a", Title: "Alpha"}}
-	m.focus = PaneTracks
 	for _, k := range []string{"enter", "+", "-", " ", "down", "/"} {
 		next, cmd := m.Update(keyPress(k))
 		m = next.(Model)

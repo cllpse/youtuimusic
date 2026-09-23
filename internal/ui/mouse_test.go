@@ -37,27 +37,42 @@ func frozen(m Model, at *time.Time) Model {
 	return m
 }
 
-// trackX is a column inside the track table.
-const trackX = sidebarWidth + 3
+// trackRow is the screen row of the nth track, which sits under the tabs.
+func trackRow(n int) int { return tabsHeight + n }
 
-func TestClickOpensAPlaylist(t *testing.T) {
+// trackX is a column inside the track table.
+const trackX = 10
+
+func TestClickOpensATab(t *testing.T) {
 	lib := library()
 	lib.tracks["PL1"] = []ytm.Track{{VideoID: "c", Title: "Gamma"}}
 	m := wired(t, lib, &fakeStreams{}, newFakeAudio())
 	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
-	m.focus = PaneTracks
 
-	next, cmd := m.Update(click(2, 1))
+	// Click somewhere inside the second tab, wherever the layout put it.
+	spans := m.tabSpans()
+	if len(spans) < 2 {
+		t.Fatalf("only %d tabs fit", len(spans))
+	}
+	next, cmd := m.Update(click(spans[1].start+1, 1))
 	m = drain(t, next.(Model), cmd)
 
-	if m.sidebarCursor != 1 {
-		t.Errorf("sidebar cursor = %d, want the clicked row", m.sidebarCursor)
-	}
-	if m.focus != PaneSidebar {
-		t.Error("clicking the sidebar should focus it")
+	if m.tabCursor != 1 {
+		t.Errorf("tab cursor = %d, want the clicked tab", m.tabCursor)
 	}
 	if len(m.Tracks) != 1 || m.Tracks[0].Title != "Gamma" {
 		t.Fatalf("tracks = %+v", m.Tracks)
+	}
+}
+
+// The gap past the last tab is not a tab.
+func TestClickPastTheTabsDoesNothing(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}}
+	next, cmd := m.Update(click(m.width-1, 1))
+	m = drain(t, next.(Model), cmd)
+	if m.tabCursor != 0 {
+		t.Errorf("tab cursor = %d", m.tabCursor)
 	}
 }
 
@@ -68,11 +83,11 @@ func TestOneClickSelectsATrackWithoutPlaying(t *testing.T) {
 	m := wired(t, lib, st, au)
 	m.Tracks = fromAPI(lib.tracks["LM"])
 
-	next, cmd := m.Update(click(trackX, 1))
+	next, cmd := m.Update(click(trackX, trackRow(1)))
 	m = drain(t, next.(Model), cmd)
 
-	if m.trackCursor != 1 || m.focus != PaneTracks {
-		t.Errorf("cursor = %d, focus = %v", m.trackCursor, m.focus)
+	if m.trackCursor != 1 {
+		t.Errorf("cursor = %d, want the clicked row", m.trackCursor)
 	}
 	if len(au.loaded) != 0 {
 		t.Fatalf("a single click started playback: %v", au.loaded)
@@ -89,10 +104,10 @@ func TestSecondClickPlays(t *testing.T) {
 	m := frozen(wired(t, lib, st, au), &now)
 	m.Tracks = fromAPI(lib.tracks["LM"])
 
-	next, cmd := m.Update(click(trackX, 0))
+	next, cmd := m.Update(click(trackX, trackRow(0)))
 	m = drain(t, next.(Model), cmd)
 	now = now.Add(150 * time.Millisecond)
-	next, cmd = m.Update(click(trackX, 0))
+	next, cmd = m.Update(click(trackX, trackRow(0)))
 	m = drain(t, next.(Model), cmd)
 
 	if len(au.loaded) != 1 || au.loaded[0] != "https://stream/a" {
@@ -109,10 +124,10 @@ func TestTwoSlowClicksDoNotPlay(t *testing.T) {
 	m := frozen(wired(t, lib, &fakeStreams{}, au), &now)
 	m.Tracks = fromAPI(lib.tracks["LM"])
 
-	next, cmd := m.Update(click(trackX, 0))
+	next, cmd := m.Update(click(trackX, trackRow(0)))
 	m = drain(t, next.(Model), cmd)
 	now = now.Add(2 * time.Second)
-	next, cmd = m.Update(click(trackX, 0))
+	next, cmd = m.Update(click(trackX, trackRow(0)))
 	drain(t, next.(Model), cmd)
 
 	if len(au.loaded) != 0 {
@@ -127,10 +142,10 @@ func TestTwoClicksOnDifferentRowsDoNotPlay(t *testing.T) {
 	m := frozen(wired(t, lib, &fakeStreams{}, au), &now)
 	m.Tracks = fromAPI(lib.tracks["LM"])
 
-	next, cmd := m.Update(click(trackX, 0))
+	next, cmd := m.Update(click(trackX, trackRow(0)))
 	m = drain(t, next.(Model), cmd)
 	now = now.Add(50 * time.Millisecond)
-	next, cmd = m.Update(click(trackX, 1))
+	next, cmd = m.Update(click(trackX, trackRow(1)))
 	drain(t, next.(Model), cmd)
 
 	if len(au.loaded) != 0 {
@@ -145,18 +160,13 @@ func TestClickBelowTheLastRowDoesNothing(t *testing.T) {
 	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}}
 	before := m
 
-	next, cmd := m.Update(click(trackX, 10))
+	next, cmd := m.Update(click(trackX, trackRow(10)))
 	m = drain(t, next.(Model), cmd)
 	if m.trackCursor != before.trackCursor {
 		t.Errorf("cursor moved to %d on an empty row", m.trackCursor)
 	}
-	next, cmd = m.Update(click(2, 8))
-	m = drain(t, next.(Model), cmd)
-	if m.sidebarCursor != before.sidebarCursor {
-		t.Errorf("sidebar cursor moved to %d on an empty row", m.sidebarCursor)
-	}
 	if len(st.prefetched) != 0 {
-		t.Errorf("prefetched %v from empty rows", st.prefetched)
+		t.Errorf("prefetched %v from an empty row", st.prefetched)
 	}
 }
 
@@ -262,37 +272,20 @@ func TestWheelScrollsTheListUnderThePointer(t *testing.T) {
 	m.Playlists = []Playlist{{ID: "LM"}, {ID: "PL1"}}
 	m.Tracks = fromAPI(lib.tracks["LM"])
 
-	next, _ := m.Update(wheel(trackX, 0, tea.MouseWheelDown))
+	next, _ := m.Update(wheel(trackX, trackRow(0), tea.MouseWheelDown))
 	m = next.(Model)
 	if m.trackCursor != 1 {
 		t.Errorf("track cursor = %d", m.trackCursor)
 	}
-	if m.sidebarCursor != 0 {
-		t.Errorf("the sidebar moved too: %d", m.sidebarCursor)
+	if m.tabCursor != 0 {
+		t.Errorf("the tabs moved too: %d", m.tabCursor)
 	}
 
-	next, _ = m.Update(wheel(2, 0, tea.MouseWheelDown))
-	m = next.(Model)
-	if m.sidebarCursor != 1 || m.trackCursor != 1 {
-		t.Errorf("sidebar = %d, tracks = %d", m.sidebarCursor, m.trackCursor)
-	}
-
-	next, _ = m.Update(wheel(2, 0, tea.MouseWheelUp))
-	if next.(Model).sidebarCursor != 0 {
-		t.Errorf("scrolling up did not come back")
-	}
-}
-
-// Scrolling is not a click: the keyboard stays where it was put.
-func TestWheelDoesNotStealFocus(t *testing.T) {
-	lib := library()
-	m := wired(t, lib, &fakeStreams{}, newFakeAudio())
-	m.Tracks = fromAPI(lib.tracks["LM"])
-	m.focus = PaneSidebar
-
-	next, _ := m.Update(wheel(trackX, 0, tea.MouseWheelDown))
-	if next.(Model).focus != PaneSidebar {
-		t.Error("the wheel moved focus")
+	// Over the tabs the wheel changes tab instead.
+	next, cmd := m.Update(wheel(m.tabSpans()[0].start+1, 1, tea.MouseWheelDown))
+	m = drain(t, next.(Model), cmd)
+	if m.tabCursor != 1 {
+		t.Errorf("tab cursor = %d", m.tabCursor)
 	}
 }
 
@@ -310,19 +303,24 @@ func TestHitTestingMatchesTheRenderedFrame(t *testing.T) {
 		t.Fatalf("rendered %d lines, want the terminal's 20", len(lines))
 	}
 
-	for row, want := range map[int]string{0: "Liked Music", 1: "Favorites"} {
-		if !strings.Contains(lines[row], want) {
-			t.Fatalf("row %d is %q, not %q", row, lines[row], want)
+	// Every tab is hit where it is drawn.
+	for _, span := range m.tabSpans() {
+		title := m.tabAt(span.index).Title
+		if !strings.Contains(plain(lines[1]), title) {
+			t.Fatalf("tab %q is not on the label row: %q", title, plain(lines[1]))
 		}
-		if where, n := m.hit(2, row); where != regionSidebar || n != row {
-			t.Errorf("hit on the sidebar row %d = %v, %d", row, where, n)
+		for _, x := range []int{span.start, span.start + 1, span.end - 1} {
+			if where, n := m.hit(x, 1); where != regionTabs || n != span.index {
+				t.Errorf("hit at column %d = %v, %d; want tab %d", x, where, n, span.index)
+			}
 		}
 	}
 	for row, want := range map[int]string{0: "Alpha", 1: "Beta"} {
-		if !strings.Contains(lines[row], want) {
-			t.Fatalf("row %d is %q, not %q", row, lines[row], want)
+		line := lines[trackRow(row)]
+		if !strings.Contains(line, want) {
+			t.Fatalf("row %d is %q, not %q", trackRow(row), plain(line), want)
 		}
-		if where, n := m.hit(trackX, row); where != regionTracks || n != row {
+		if where, n := m.hit(trackX, trackRow(row)); where != regionTracks || n != row {
 			t.Errorf("hit on the track row %d = %v, %d", row, where, n)
 		}
 	}

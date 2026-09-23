@@ -55,8 +55,12 @@ type Services struct {
 type (
 	playlistsMsg []ytm.Playlist
 	tracksMsg    struct {
+		id     string // the tab these belong to
 		tracks []ytm.Track
-		source string // what the table is showing, for the status line
+	}
+	searchMsg struct {
+		query  string
+		tracks []ytm.Track
 	}
 	ratedMsg struct {
 		videoID  string
@@ -126,7 +130,7 @@ func (m Model) fetchTracks(p Playlist) tea.Cmd {
 		if err != nil {
 			return errMsg{fmt.Errorf("%s: %w", p.Title, err)}
 		}
-		return tracksMsg{tracks: ts, source: p.Title}
+		return tracksMsg{id: p.ID, tracks: ts}
 	}
 }
 
@@ -142,7 +146,7 @@ func (m Model) runSearch(query string) tea.Cmd {
 		if err != nil {
 			return errMsg{fmt.Errorf("searching %q: %w", query, err)}
 		}
-		return tracksMsg{tracks: ts, source: "search: " + query}
+		return searchMsg{query: query, tracks: ts}
 	}
 }
 
