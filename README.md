@@ -46,6 +46,22 @@ play is worth more than any speedup to resolving itself.
 paged at ~100 tracks server-side: 100 tracks ≈ 0.8 s, 529 tracks ≈ 2.7 s. Show
 the first page and fill in the rest behind it.
 
+## Using it
+
+| | |
+|---|---|
+| `tab`, `h`/`l`, `←`/`→` | move between the sidebar and the table |
+| `j`/`k`, `↑`/`↓` | move the cursor |
+| `enter` | open a playlist, or play the highlighted track |
+| `space` | pause and resume |
+| `/` | search, `enter` to run it, `esc` to cancel |
+| `+` / `-` | thumbs up or down; the same key again clears it |
+| `q`, `ctrl+c` | quit |
+
+The mouse works too: click a playlist to open it, click a track to select it
+and again to play it, scroll either list with the wheel, and drag the
+progress bar to scrub. Scrolling deliberately does not move keyboard focus.
+
 ## Layout
 
 ```
@@ -60,5 +76,10 @@ internal/ui         bubbletea model, sidebar / table / progress
 
 - [x] `internal/player` — mpv IPC, observed state, proven end to end
 - [x] `internal/stream` — resolution, TTL cache, single-flight
-- [ ] `internal/ytm` — blocked on a valid session to verify auth against
-- [ ] `internal/ui` — bubbletea shell
+- [x] `internal/ytm` — playlists, tracks, search and rating, all verified
+      against a real account
+- [x] `internal/ui` — bubbletea shell, wired to the backends, keyboard and
+      mouse
+- [ ] `internal/chromium` — reading the browser's cookies directly, so that
+      signing in needs no steps. Decryption and the keyring are done; profile
+      discovery is not. Until it lands, `internal/auth` reads a session file.

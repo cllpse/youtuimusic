@@ -90,6 +90,20 @@ type Model struct {
 	status  string
 	loading bool
 
+	// Mouse state: a drag on the progress bar, and enough of the last click
+	// to recognise the second one of a pair.
+	scrubbing       bool
+	lastClickAt     time.Time
+	lastClickRegion region
+	lastClickRow    int
+
+	// prefetchGen invalidates a pending prefetch when the cursor moves
+	// again before it fires.
+	prefetchGen int
+
+	// now is overridable so click timing is testable.
+	now func() time.Time
+
 	Err error
 }
 
@@ -98,7 +112,7 @@ const sidebarWidth = 28
 // New returns a Model with nothing loaded. A zero Services makes a model
 // that talks to nothing, which is what the view tests use.
 func New(s Services) Model {
-	return Model{focus: PaneSidebar, services: s, loading: s.Library != nil}
+	return Model{focus: PaneSidebar, services: s, loading: s.Library != nil, now: time.Now}
 }
 
 // Init starts the first fetch and opens the stream of player events.
@@ -150,6 +164,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
+	case prefetchTickMsg:
+		// A later move armed its own; this one is stale.
+		if msg.generation != m.prefetchGen {
+			return m, nil
+		}
+		if t, ok := m.SelectedTrack(); ok {
+			return m, m.prefetch(t.VideoID)
+		}
+		return m, nil
 
 	case playlistsMsg:
 		m.Playlists = m.Playlists[:0]
@@ -291,10 +318,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "up", "k":
 		m.moveCursor(-1)
-		return m, m.prefetchCursor()
+		return m.afterCursorMove()
 	case "down", "j":
 		m.moveCursor(1)
-		return m, m.prefetchCursor()
+		return m.afterCursorMove()
 
 	case "+", "=":
 		return m.applyRating(RatingUp)
@@ -304,18 +331,32 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// prefetchCursor resolves the highlighted row ahead of time. A cold resolve
-// is ~2.3s and a cached one ~600ns, so this is where pressing play getting
-// to feel instant actually comes from.
-func (m Model) prefetchCursor() tea.Cmd {
+// afterCursorMove arms a prefetch when the move happened in the track list.
+func (m Model) afterCursorMove() (tea.Model, tea.Cmd) {
 	if m.focus != PaneTracks {
-		return nil
+		return m, nil
 	}
-	t, ok := m.SelectedTrack()
-	if !ok {
-		return nil
+	return m.schedulePrefetch()
+}
+
+// prefetchDelay is how long the cursor has to sit still before the row under
+// it is resolved. Without it, holding j down the length of a playlist starts
+// a yt-dlp process per row.
+const prefetchDelay = 250 * time.Millisecond
+
+type prefetchTickMsg struct{ generation int }
+
+// schedulePrefetch arms a delayed resolve of the highlighted row, cancelling
+// any earlier one by moving the generation past it.
+func (m Model) schedulePrefetch() (tea.Model, tea.Cmd) {
+	if m.services.Streams == nil {
+		return m, nil
 	}
-	return m.prefetch(t.VideoID)
+	m.prefetchGen++
+	generation := m.prefetchGen
+	return m, tea.Tick(prefetchDelay, func(time.Time) tea.Msg {
+		return prefetchTickMsg{generation: generation}
+	})
 }
 
 // trackAfter returns the row following a video id, which is what plays when
@@ -387,16 +428,15 @@ var (
 
 func (m Model) View() tea.View {
 	if m.width == 0 {
+		// Before the first resize there is nothing to draw, but the terminal
+		// modes still have to be declared or the frame turns them back off.
 		v := tea.NewView("")
 		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
 		return v
 	}
 
-	bodyHeight := m.height - 4 // progress block: blank, title, bar, blank
-	if bodyHeight < 1 {
-		bodyHeight = 1
-	}
-
+	bodyHeight := m.bodyHeight()
 	sidebar := m.renderSidebar(bodyHeight)
 	tracks := m.renderTracks(m.width-sidebarWidth, bodyHeight)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, tracks)
@@ -406,7 +446,32 @@ func (m Model) View() tea.View {
 	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, body, m.renderProgress()))
 	v.AltScreen = true
 	v.WindowTitle = "youtuimusic"
+	// Cell motion reports drags, which is what scrubbing the bar needs.
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+
+// progressBlock is the four rows below the lists: a blank, the title, the
+// bar, and a blank.
+const progressBlock = 4
+
+// bodyHeight is how many rows the lists get.
+func (m Model) bodyHeight() int {
+	if h := m.height - progressBlock; h > 1 {
+		return h
+	}
+	return 1
+}
+
+// barGeometry is the column the progress bar starts at and how wide it is.
+// Rendering and hit-testing both go through this, so a click lands where the
+// bar appears to be.
+func (m Model) barGeometry() (start, width int) {
+	width = m.width - 16
+	if width < 4 {
+		width = 4
+	}
+	return lipgloss.Width(formatDuration(m.Position)) + 1, width
 }
 
 func (m Model) renderSidebar(height int) string {
@@ -491,10 +556,7 @@ func (m Model) renderProgress() string {
 		title = dim.Render("Nothing playing")
 	}
 
-	barWidth := m.width - 16
-	if barWidth < 4 {
-		barWidth = 4
-	}
+	_, barWidth := m.barGeometry()
 	filled := 0
 	if m.Length > 0 {
 		filled = int(float64(barWidth) * (float64(m.Position) / float64(m.Length)))

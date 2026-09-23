@@ -77,6 +77,7 @@ func (f *fakeStreams) Prefetch(_ context.Context, id string) {
 type fakeAudio struct {
 	loaded  []string
 	toggles int
+	seeks   []float64
 	events  chan player.Event
 }
 
@@ -92,6 +93,7 @@ func newFakeAudio(evs ...player.Event) *fakeAudio {
 
 func (f *fakeAudio) Load(url string) error       { f.loaded = append(f.loaded, url); return nil }
 func (f *fakeAudio) TogglePause() error          { f.toggles++; return nil }
+func (f *fakeAudio) Seek(s float64) error        { f.seeks = append(f.seeks, s); return nil }
 func (f *fakeAudio) Events() <-chan player.Event { return f.events }
 
 func wired(t *testing.T, lib *fakeLibrary, st *fakeStreams, au *fakeAudio) Model {
@@ -369,6 +371,9 @@ func TestPlaybackEventsUpdateTheBar(t *testing.T) {
 	}
 }
 
+// Cursor movement arms a delayed prefetch rather than resolving at once:
+// holding a cursor key down a playlist would otherwise start a yt-dlp
+// process per row.
 func TestMovingTheCursorPrefetches(t *testing.T) {
 	lib, st := library(), &fakeStreams{}
 	m := wired(t, lib, st, newFakeAudio())

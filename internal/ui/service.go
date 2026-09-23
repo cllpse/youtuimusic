@@ -38,6 +38,7 @@ type Streams interface {
 type Audio interface {
 	Load(url string) error
 	TogglePause() error
+	Seek(seconds float64) error
 	Events() <-chan player.Event
 }
 
@@ -190,6 +191,20 @@ func (m Model) prefetch(videoID string) tea.Cmd {
 		ctx, cancel := context.WithCancel(context.Background())
 		time.AfterFunc(resolveTimeout, cancel)
 		streams.Prefetch(ctx, videoID)
+		return nil
+	}
+}
+
+// seek jumps to an absolute position.
+func (m Model) seek(to time.Duration) tea.Cmd {
+	audio := m.services.Audio
+	if audio == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		if err := audio.Seek(to.Seconds()); err != nil {
+			return errMsg{err}
+		}
 		return nil
 	}
 }
