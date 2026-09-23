@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/cllpse/youtuimusic/internal/player"
@@ -123,6 +124,12 @@ func drain(t *testing.T, m Model, cmds ...tea.Cmd) Model {
 		}
 		if b, ok := msg.(tea.BatchMsg); ok {
 			queue = append(queue, b...)
+			continue
+		}
+		// Animation frames are not plumbing, and following the spring to a
+		// standstill costs a real second per test. TestBarSettlesOnThe
+		// Position covers the animation on its own.
+		if _, ok := msg.(progress.FrameMsg); ok {
 			continue
 		}
 		next, out := m.Update(msg)

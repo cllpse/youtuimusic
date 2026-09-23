@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -104,6 +105,9 @@ type Model struct {
 	// now is overridable so click timing is testable.
 	now func() time.Time
 
+	// bar springs towards the playback position rather than jumping to it.
+	bar progress.Model
+
 	Err error
 }
 
@@ -112,7 +116,29 @@ const sidebarWidth = 28
 // New returns a Model with nothing loaded. A zero Services makes a model
 // that talks to nothing, which is what the view tests use.
 func New(s Services) Model {
-	return Model{focus: PaneSidebar, services: s, loading: s.Library != nil, now: time.Now}
+	return Model{
+		focus:    PaneSidebar,
+		services: s,
+		loading:  s.Library != nil,
+		now:      time.Now,
+		// The blend needs the half block: two colours per cell doubles the
+		// resolution the gradient has to work with. The empty half stays a
+		// thin rule so the untravelled part of the bar keeps quiet.
+		bar: progress.New(
+			progress.WithoutPercentage(),
+			progress.WithDefaultBlend(),
+			progress.WithFillCharacters(progress.DefaultFullCharHalfBlock, '─'),
+		),
+	}
+}
+
+// syncBar aims the progress bar at the current position. The bar springs
+// towards it over the next few frames rather than snapping.
+func (m *Model) syncBar() tea.Cmd {
+	if m.Length <= 0 {
+		return m.bar.SetPercent(0)
+	}
+	return m.bar.SetPercent(float64(m.Position) / float64(m.Length))
 }
 
 // Init starts the first fetch and opens the stream of player events.
@@ -160,7 +186,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		_, barWidth := m.barGeometry()
+		m.bar.SetWidth(barWidth)
 		return m, nil
+
+	case progress.FrameMsg:
+		bar, cmd := m.bar.Update(msg)
+		m.bar = bar
+		return m, cmd
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -212,9 +245,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.playingID, m.NowPlaying, m.Length = msg.videoID, msg.title, msg.length
 		m.Position, m.Paused, m.Err = 0, false, nil
 		if next, ok := m.trackAfter(msg.videoID); ok {
-			return m, m.prefetch(next.VideoID)
+			return m, batch(m.prefetch(next.VideoID), m.syncBar())
 		}
-		return m, nil
+		return m, m.syncBar()
 
 	case eventMsg:
 		return m.handleEvent(player.Event(msg))
@@ -231,12 +264,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleEvent(ev player.Event) (tea.Model, tea.Cmd) {
 	switch ev.Name {
 	case "time-pos":
-		if f, ok := ev.Data.(float64); ok {
+		// A drag owns the position until the button comes up. mpv carries on
+		// playing and reporting where it actually is, and letting that
+		// through makes the bar fight the pointer.
+		if f, ok := ev.Data.(float64); ok && !m.scrubbing {
 			m.Position = time.Duration(f * float64(time.Second))
+			return m, batch(m.watchEvents(), m.syncBar())
 		}
 	case "duration":
 		if f, ok := ev.Data.(float64); ok && f > 0 {
 			m.Length = time.Duration(f * float64(time.Second))
+			return m, batch(m.watchEvents(), m.syncBar())
 		}
 	case "pause":
 		if b, ok := ev.Data.(bool); ok {
@@ -463,6 +501,14 @@ func (m Model) bodyHeight() int {
 	return 1
 }
 
+// fraction is how far through the track the position is.
+func (m Model) fraction() float64 {
+	if m.Length <= 0 {
+		return 0
+	}
+	return float64(m.Position) / float64(m.Length)
+}
+
 // barGeometry is the column the progress bar starts at and how wide it is.
 // Rendering and hit-testing both go through this, so a click lands where the
 // bar appears to be.
@@ -556,14 +602,12 @@ func (m Model) renderProgress() string {
 		title = dim.Render("Nothing playing")
 	}
 
-	_, barWidth := m.barGeometry()
-	filled := 0
-	if m.Length > 0 {
-		filled = int(float64(barWidth) * (float64(m.Position) / float64(m.Length)))
-		filled = clamp(filled, barWidth+1)
+	// A drag renders the exact position so the bar tracks the pointer; the
+	// spring would lag behind it. Everything else is animated.
+	bar := m.bar.View()
+	if m.scrubbing {
+		bar = m.bar.ViewAs(m.fraction())
 	}
-	bar := active.Render(strings.Repeat("━", filled)) +
-		dim.Render(strings.Repeat("─", barWidth-filled))
 
 	return "\n" + title + "\n" +
 		fmt.Sprintf("%s %s %s",

@@ -5,8 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
+	"github.com/cllpse/youtuimusic/internal/player"
 	"github.com/cllpse/youtuimusic/internal/ytm"
 )
 
@@ -342,5 +345,105 @@ func TestHitTestingMatchesTheRenderedFrame(t *testing.T) {
 	}
 	if got := m.positionAt(start + width/2); got < 29*time.Second || got > 31*time.Second {
 		t.Errorf("the middle is %v, want about 30s", got)
+	}
+}
+
+// settle runs the bar's animation to a standstill, the way the runtime's
+// frame ticks would.
+func settle(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+	for frames := 0; cmd != nil; frames++ {
+		if frames > 600 { // ten seconds at sixty frames a second
+			t.Fatal("the bar never settled")
+		}
+		msg := cmd()
+		if _, ok := msg.(progress.FrameMsg); !ok {
+			return m
+		}
+		next, out := m.Update(msg)
+		m, cmd = next.(Model), out
+	}
+	return m
+}
+
+// The bar springs towards the position rather than jumping to it, so it has
+// to actually arrive.
+func TestBarSettlesOnThePosition(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	m.Length = 200 * time.Second
+	m.Position = 50 * time.Second
+
+	cmd := m.syncBar()
+	if cmd == nil {
+		t.Fatal("no animation was started")
+	}
+	before := m.bar.View()
+	m = settle(t, m, cmd)
+
+	if got := m.bar.Percent(); got < 0.24 || got > 0.26 {
+		t.Errorf("bar is at %v, want a quarter", got)
+	}
+	if m.bar.View() == before {
+		t.Error("the bar never moved")
+	}
+}
+
+// A drag has to track the pointer exactly; the spring would trail it.
+func TestScrubbingRendersTheExactPosition(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	m.Length = 100 * time.Second
+	start, width := m.barGeometry()
+
+	next, _ := m.Update(click(start+width*3/4, m.barRow()))
+	m = next.(Model)
+
+	if !strings.Contains(m.View().Content, m.bar.ViewAs(m.fraction())) {
+		t.Error("the drag is not rendered at the exact position")
+	}
+	// The spring is aimed there too, so letting go does not snap the bar.
+	if got := m.bar.Percent(); got < 0.7 || got > 0.8 {
+		t.Errorf("spring target = %v, want to follow the pointer", got)
+	}
+}
+
+// The bar has to occupy exactly the width the hit-testing assumes, or a
+// click lands somewhere other than where it looks.
+func TestBarRendersExactlyItsGeometry(t *testing.T) {
+	for _, width := range []int{40, 80, 100, 120, 200} {
+		m := New(Services{})
+		sized, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 20})
+		m = sized.(Model)
+		m.Length, m.Position = time.Minute, 30*time.Second
+
+		_, barWidth := m.barGeometry()
+		if got := lipgloss.Width(m.bar.View()); got != barWidth {
+			t.Errorf("width %d: bar renders %d cells, geometry says %d", width, got, barWidth)
+		}
+	}
+}
+
+// mpv keeps playing while a drag is in progress. Letting its position
+// through would make the bar fight the pointer.
+func TestPlaybackDoesNotFightADrag(t *testing.T) {
+	au := newFakeAudio(player.Event{Name: "time-pos", Data: 12.0})
+	m := wired(t, library(), &fakeStreams{}, au)
+	m.Length = 200 * time.Second
+	start, width := m.barGeometry()
+
+	next, cmd := m.Update(click(start+width/2, m.barRow()))
+	m = drain(t, next.(Model), cmd)
+	dragged := m.Position
+
+	m = drain(t, m, m.watchEvents())
+	if m.Position != dragged {
+		t.Fatalf("a playback tick moved the bar from %v to %v mid-drag", dragged, m.Position)
+	}
+
+	// Once the button is up, the position follows playback again.
+	next, cmd = m.Update(release(start+width/2, m.barRow()))
+	m = drain(t, next.(Model), cmd)
+	m = drain(t, m, func() tea.Msg { return eventMsg(player.Event{Name: "time-pos", Data: 99.0}) })
+	if m.Position != 99*time.Second {
+		t.Errorf("position = %v after the drag ended, want playback back in charge", m.Position)
 	}
 }
