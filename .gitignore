@@ -1,0 +1,14 @@
+# Build output
+/youtuimusic
+/dist/
+*.test
+
+# Local config / credentials — never commit
+/auth.json
+/config.toml
+*.local.*
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
