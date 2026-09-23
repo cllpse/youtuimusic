@@ -20,6 +20,8 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/cllpse/youtuimusic/internal/ytm"
 )
 
 // URLs are signed and expire. YouTube's are good for around six hours; five
@@ -152,6 +154,9 @@ func (r *Resolver) run(ctx context.Context, videoID string) (Track, error) {
 		"--no-playlist",
 		"https://music.youtube.com/watch?v="+videoID,
 	)
+	// Some tracks need a signed-in session. yt-dlp reads browser cookies, and
+	// its keyring choice depends on XDG_CURRENT_DESKTOP — see ytm.CookieEnv.
+	cmd.Env = ytm.Environ()
 	out, err := cmd.Output()
 	if err != nil {
 		var ee *exec.ExitError
