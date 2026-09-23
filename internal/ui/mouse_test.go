@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -325,12 +326,18 @@ func TestHitTestingMatchesTheRenderedFrame(t *testing.T) {
 		}
 	}
 
-	// The bar row is the one with the bar drawn on it.
-	if !strings.ContainsAny(lines[m.barRow()], "━─") {
+	// The bar row is the one with the bar drawn on it, and it is the whole
+	// row: nothing flanks it.
+	const barChars = string(progress.DefaultFullCharHalfBlock) +
+		string(progress.DefaultEmptyCharBlock)
+	if !strings.ContainsAny(lines[m.barRow()], barChars) {
 		t.Fatalf("row %d is %q, which has no bar on it", m.barRow(), lines[m.barRow()])
 	}
+	if got := lipgloss.Width(lines[m.barRow()]); got != m.width {
+		t.Errorf("the bar row is %d cells wide, want the full %d", got, m.width)
+	}
 	for row, line := range lines {
-		if row != m.barRow() && strings.ContainsAny(line, "━─") {
+		if row != m.barRow() && strings.ContainsAny(line, barChars) {
 			t.Errorf("row %d also looks like a bar: %q", row, line)
 		}
 	}
@@ -445,5 +452,31 @@ func TestPlaybackDoesNotFightADrag(t *testing.T) {
 	m = drain(t, m, func() tea.Msg { return eventMsg(player.Event{Name: "time-pos", Data: 99.0}) })
 	if m.Position != 99*time.Second {
 		t.Errorf("position = %v after the drag ended, want playback back in charge", m.Position)
+	}
+}
+
+// plain strips the styling so the text underneath can be asserted on.
+var ansiSequence = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
+
+func plain(s string) string { return ansiSequence.ReplaceAllString(s, "") }
+
+// The bar row carries no numbers: no elapsed time, no total, no percentage.
+func TestTheBarRowIsNothingButTheBar(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	m.Length, m.Position = 256*time.Second, 64*time.Second
+	m = settle(t, m, m.syncBar())
+
+	row := plain(strings.Split(m.View().Content, "\n")[m.barRow()])
+	if strings.ContainsAny(row, "0123456789:%") {
+		t.Errorf("the bar row reads %q, want only the bar", row)
+	}
+	full := strings.Count(row, string(progress.DefaultFullCharHalfBlock))
+	empty := strings.Count(row, string(progress.DefaultEmptyCharBlock))
+	if full+empty != m.width {
+		t.Errorf("the bar is %d cells of %d", full+empty, m.width)
+	}
+	// A quarter of the way in, a quarter of the bar should be filled.
+	if want := m.width / 4; full < want-2 || full > want+2 {
+		t.Errorf("%d cells filled, want about %d", full, want)
 	}
 }

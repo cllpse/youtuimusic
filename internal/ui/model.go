@@ -121,13 +121,12 @@ func New(s Services) Model {
 		services: s,
 		loading:  s.Library != nil,
 		now:      time.Now,
-		// The blend needs the half block: two colours per cell doubles the
-		// resolution the gradient has to work with. The empty half stays a
-		// thin rule so the untravelled part of the bar keeps quiet.
+		// Left at the component's own defaults: the half block carries two
+		// colours per cell, which doubles the resolution the blend has to
+		// work with.
 		bar: progress.New(
 			progress.WithoutPercentage(),
 			progress.WithDefaultBlend(),
-			progress.WithFillCharacters(progress.DefaultFullCharHalfBlock, '─'),
 		),
 	}
 }
@@ -511,13 +510,12 @@ func (m Model) fraction() float64 {
 
 // barGeometry is the column the progress bar starts at and how wide it is.
 // Rendering and hit-testing both go through this, so a click lands where the
-// bar appears to be.
+// bar appears to be. The bar is the whole row: nothing flanks it.
 func (m Model) barGeometry() (start, width int) {
-	width = m.width - 16
-	if width < 4 {
-		width = 4
+	if m.width < 4 {
+		return 0, 4
 	}
-	return lipgloss.Width(formatDuration(m.Position)) + 1, width
+	return 0, m.width
 }
 
 func (m Model) renderSidebar(height int) string {
@@ -609,9 +607,7 @@ func (m Model) renderProgress() string {
 		bar = m.bar.ViewAs(m.fraction())
 	}
 
-	return "\n" + title + "\n" +
-		fmt.Sprintf("%s %s %s",
-			formatDuration(m.Position), bar, formatDuration(m.Length)) + "\n"
+	return "\n" + title + "\n" + bar + "\n"
 }
 
 func formatDuration(d time.Duration) string {
