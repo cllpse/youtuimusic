@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -355,48 +356,8 @@ func TestHitTestingMatchesTheRenderedFrame(t *testing.T) {
 	}
 }
 
-// settle runs the bar's animation to a standstill, the way the runtime's
-// frame ticks would.
-func settle(t *testing.T, m Model, cmd tea.Cmd) Model {
-	t.Helper()
-	for frames := 0; cmd != nil; frames++ {
-		if frames > 600 { // ten seconds at sixty frames a second
-			t.Fatal("the bar never settled")
-		}
-		msg := cmd()
-		if _, ok := msg.(progress.FrameMsg); !ok {
-			return m
-		}
-		next, out := m.Update(msg)
-		m, cmd = next.(Model), out
-	}
-	return m
-}
-
-// The bar springs towards the position rather than jumping to it, so it has
-// to actually arrive.
-func TestBarSettlesOnThePosition(t *testing.T) {
-	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
-	m.Length = 200 * time.Second
-	m.Position = 50 * time.Second
-
-	cmd := m.syncBar()
-	if cmd == nil {
-		t.Fatal("no animation was started")
-	}
-	before := m.bar.View()
-	m = settle(t, m, cmd)
-
-	if got := m.bar.Percent(); got < 0.24 || got > 0.26 {
-		t.Errorf("bar is at %v, want a quarter", got)
-	}
-	if m.bar.View() == before {
-		t.Error("the bar never moved")
-	}
-}
-
-// A drag has to track the pointer exactly; the spring would trail it.
-func TestScrubbingRendersTheExactPosition(t *testing.T) {
+// The bar is drawn where the position is, with nothing in between.
+func TestTheBarFollowsThePositionExactly(t *testing.T) {
 	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
 	m.Length = 100 * time.Second
 	start, width := m.barGeometry()
@@ -404,12 +365,13 @@ func TestScrubbingRendersTheExactPosition(t *testing.T) {
 	next, _ := m.Update(click(start+width*3/4, m.barRow()))
 	m = next.(Model)
 
-	if !strings.Contains(m.View().Content, m.bar.ViewAs(m.fraction())) {
-		t.Error("the drag is not rendered at the exact position")
+	if got := m.fraction(); got < 0.7 || got > 0.8 {
+		t.Fatalf("position is at %v of the track, want three quarters", got)
 	}
-	// The spring is aimed there too, so letting go does not snap the bar.
-	if got := m.bar.Percent(); got < 0.7 || got > 0.8 {
-		t.Errorf("spring target = %v, want to follow the pointer", got)
+	row := plain(strings.Split(m.View().Content, "\n")[m.barRow()])
+	full := strings.Count(row, string(progress.DefaultFullCharHalfBlock))
+	if want := width * 3 / 4; full < want-1 || full > want+1 {
+		t.Errorf("%d cells filled of %d, want about %d", full, width, want)
 	}
 }
 
@@ -464,7 +426,6 @@ func plain(s string) string { return ansiSequence.ReplaceAllString(s, "") }
 func TestTheBarRowIsNothingButTheBar(t *testing.T) {
 	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
 	m.Length, m.Position = 256*time.Second, 64*time.Second
-	m = settle(t, m, m.syncBar())
 
 	row := plain(strings.Split(m.View().Content, "\n")[m.barRow()])
 	if strings.ContainsAny(row, "0123456789:%") {
@@ -478,5 +439,42 @@ func TestTheBarRowIsNothingButTheBar(t *testing.T) {
 	// A quarter of the way in, a quarter of the bar should be filled.
 	if want := m.width / 4; full < want-2 || full > want+2 {
 		t.Errorf("%d cells filled, want about %d", full, want)
+	}
+}
+
+// The bar has to use the terminal's own palette. An SGR foreground of
+// 38;2;r;g;b or 38;5;n is a colour this program chose; 3x and 9x are the
+// scheme's, whatever the user has set them to.
+func TestTheBarStaysInTheTerminalPalette(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	m.Length, m.Position = 100*time.Second, 50*time.Second
+
+	row := strings.Split(m.View().Content, "\n")[m.barRow()]
+	if strings.Contains(row, "38;2;") || strings.Contains(row, "48;2;") {
+		t.Errorf("the bar emits true colour, which ignores the scheme:\n%q", row)
+	}
+	if strings.Contains(row, "38;5;") || strings.Contains(row, "48;5;") {
+		t.Errorf("the bar emits 256-colour indices, which ignore the scheme:\n%q", row)
+	}
+	// And it is actually coloured, so the check above is not vacuous.
+	if !ansiSequence.MatchString(row) {
+		t.Error("the bar is not styled at all")
+	}
+}
+
+// The whole interface, not just the bar.
+func TestNothingRendersOffPaletteColours(t *testing.T) {
+	lib := library()
+	m := wired(t, lib, &fakeStreams{}, newFakeAudio())
+	m.Playlists = []Playlist{{Title: "Liked Music"}, {Title: "Favorites"}}
+	m.Tracks = fromAPI(lib.tracks["LM"])
+	m.Tracks[0].Rating = RatingUp
+	m.Length, m.Position = 100*time.Second, 25*time.Second
+	m.Err = errors.New("something went wrong")
+
+	for _, bad := range []string{"38;2;", "48;2;", "38;5;", "48;5;"} {
+		if strings.Contains(m.View().Content, bad) {
+			t.Errorf("the interface emits %q, which ignores the terminal scheme", bad)
+		}
 	}
 }

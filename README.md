@@ -62,6 +62,16 @@ The mouse works too: click a playlist to open it, click a track to select it
 and again to play it, scroll either list with the wheel, and drag the
 progress bar to scrub. Scrolling deliberately does not move keyboard focus.
 
+**Colours come from the terminal, not from this program.** Everything drawn
+names an entry in the sixteen-colour ANSI palette, so the scheme the user
+already has is the scheme the app wears. That rules out the progress
+component's own blend: it interpolates in RGB and emits true colour, so the
+steps between two named endpoints are values this program invented. The bar
+uses a colour function returning palette entries instead — a ramp with steps
+rather than a fade, softened by the half block, which carries a foreground
+and a background and so fits two steps in every cell. A test asserts no
+frame ever emits a `38;5;` or `38;2;` sequence.
+
 ## Layout
 
 ```

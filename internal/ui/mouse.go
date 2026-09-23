@@ -57,7 +57,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// seeking on every motion event makes mpv stutter.
 		m.scrubbing = false
 		m.Position = m.positionAt(mouse.X)
-		return m, batch(m.seek(m.Position), m.syncBar())
+		return m, m.seek(m.Position)
 
 	case tea.MouseMotionMsg:
 		// Motion is only reported while a button is held down.
@@ -67,9 +67,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// Only the column matters: dragging a scrubber usually wanders off
 		// its row, and that should not stop it tracking the pointer.
 		m.Position = m.positionAt(mouse.X)
-		// The drag renders exactly, but the spring is kept aimed at the
-		// pointer so releasing does not snap the bar somewhere else.
-		return m, m.syncBar()
+		return m, nil
 
 	case tea.MouseWheelMsg:
 		return m.handleWheel(mouse)
@@ -115,7 +113,7 @@ func (m Model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		}
 		m.scrubbing = true
 		m.Position = m.positionAt(mouse.X)
-		return m, m.syncBar()
+		return m, nil
 	}
 	return m, nil
 }

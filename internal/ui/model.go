@@ -8,6 +8,7 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 	"time"
 
@@ -105,7 +106,8 @@ type Model struct {
 	// now is overridable so click timing is testable.
 	now func() time.Time
 
-	// bar springs towards the playback position rather than jumping to it.
+	// bar renders the playback position. It holds no animation state: the
+	// position is drawn where it is.
 	bar progress.Model
 
 	Err error
@@ -121,23 +123,51 @@ func New(s Services) Model {
 		services: s,
 		loading:  s.Library != nil,
 		now:      time.Now,
-		// Left at the component's own defaults: the half block carries two
-		// colours per cell, which doubles the resolution the blend has to
-		// work with.
-		bar: progress.New(
-			progress.WithoutPercentage(),
-			progress.WithDefaultBlend(),
-		),
+		bar:      newBar(),
 	}
 }
 
-// syncBar aims the progress bar at the current position. The bar springs
-// towards it over the next few frames rather than snapping.
-func (m *Model) syncBar() tea.Cmd {
-	if m.Length <= 0 {
-		return m.bar.SetPercent(0)
+// barRamp is the bar's gradient, as ANSI palette entries. Naming the
+// palette rather than a hex value is what keeps the bar inside the
+// terminal's own colour scheme: the terminal resolves these, so they are
+// whatever the user's theme says they are.
+//
+// The component's own blend cannot be used for this. It interpolates in RGB
+// through lipgloss.Blend1D, which has to invent concrete values for the
+// steps in between and emits them as true colour — off-scheme by
+// construction, however the endpoints were named.
+var barRamp = []color.Color{
+	lipgloss.Blue,
+	lipgloss.Magenta,
+	lipgloss.BrightMagenta,
+}
+
+// rampAt picks the ramp entry for a position along the bar. Sixteen colours
+// cannot make a smooth blend, so this steps rather than fades; the half
+// block softens it, carrying a foreground and a background so each cell can
+// show two steps.
+//
+// The ramp is laid along the track rather than squeezed into the played
+// part, so a colour means a place in the song and stays put as it plays.
+func rampAt(_, position float64) color.Color {
+	i := int(position * float64(len(barRamp)))
+	if i < 0 {
+		i = 0
 	}
-	return m.bar.SetPercent(float64(m.Position) / float64(m.Length))
+	if i >= len(barRamp) {
+		i = len(barRamp) - 1
+	}
+	return barRamp[i]
+}
+
+func newBar() progress.Model {
+	bar := progress.New(
+		progress.WithoutPercentage(),
+		progress.WithColorFunc(rampAt),
+	)
+	// The default is a fixed grey, which is off-scheme like the rest.
+	bar.EmptyColor = lipgloss.BrightBlack
+	return bar
 }
 
 // Init starts the first fetch and opens the stream of player events.
@@ -189,11 +219,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.bar.SetWidth(barWidth)
 		return m, nil
 
-	case progress.FrameMsg:
-		bar, cmd := m.bar.Update(msg)
-		m.bar = bar
-		return m, cmd
-
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
@@ -244,9 +269,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.playingID, m.NowPlaying, m.Length = msg.videoID, msg.title, msg.length
 		m.Position, m.Paused, m.Err = 0, false, nil
 		if next, ok := m.trackAfter(msg.videoID); ok {
-			return m, batch(m.prefetch(next.VideoID), m.syncBar())
+			return m, m.prefetch(next.VideoID)
 		}
-		return m, m.syncBar()
+		return m, nil
 
 	case eventMsg:
 		return m.handleEvent(player.Event(msg))
@@ -268,12 +293,10 @@ func (m Model) handleEvent(ev player.Event) (tea.Model, tea.Cmd) {
 		// through makes the bar fight the pointer.
 		if f, ok := ev.Data.(float64); ok && !m.scrubbing {
 			m.Position = time.Duration(f * float64(time.Second))
-			return m, batch(m.watchEvents(), m.syncBar())
 		}
 	case "duration":
 		if f, ok := ev.Data.(float64); ok && f > 0 {
 			m.Length = time.Duration(f * float64(time.Second))
-			return m, batch(m.watchEvents(), m.syncBar())
 		}
 	case "pause":
 		if b, ok := ev.Data.(bool); ok {
@@ -457,10 +480,13 @@ func clamp(v, length int) int {
 }
 
 var (
-	dim      = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	failed   = lipgloss.NewStyle().Foreground(lipgloss.Color("204"))
-	selected = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("170"))
-	active   = lipgloss.NewStyle().Foreground(lipgloss.Color("170"))
+	// Named palette entries, not indices into the 256-colour cube: 0-15 are
+	// the terminal's own scheme, and anything above that is a fixed table
+	// that ignores it.
+	dim      = lipgloss.NewStyle().Foreground(lipgloss.BrightBlack)
+	failed   = lipgloss.NewStyle().Foreground(lipgloss.Red)
+	selected = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Magenta)
+	active   = lipgloss.NewStyle().Foreground(lipgloss.Magenta)
 )
 
 func (m Model) View() tea.View {
@@ -600,14 +626,7 @@ func (m Model) renderProgress() string {
 		title = dim.Render("Nothing playing")
 	}
 
-	// A drag renders the exact position so the bar tracks the pointer; the
-	// spring would lag behind it. Everything else is animated.
-	bar := m.bar.View()
-	if m.scrubbing {
-		bar = m.bar.ViewAs(m.fraction())
-	}
-
-	return "\n" + title + "\n" + bar + "\n"
+	return "\n" + title + "\n" + m.bar.ViewAs(m.fraction()) + "\n"
 }
 
 func formatDuration(d time.Duration) string {
