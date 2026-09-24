@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -38,7 +39,7 @@ func menuModel(t *testing.T) (Model, *fakeLibrary, *fakeStreams, *fakeAudio) {
 func rowAt(m Model, item menuItem) (x, y int) {
 	for i, row := range m.menuRows() {
 		if row.item == item {
-			return m.menu.x + 2, m.menu.y + 1 + i
+			return m.menu.x + 2, m.menu.y + 1 + visualRow(i)
 		}
 	}
 	return -1, -1
@@ -139,7 +140,17 @@ func TestLikeFromTheMenuRatesTheTrack(t *testing.T) {
 	}
 }
 
-func TestGoToAlbumAndArtistTakeOverTheView(t *testing.T) {
+// openAlbum right-clicks the first track and chooses a row of the menu.
+func openVia(t *testing.T, m Model, item menuItem) Model {
+	t.Helper()
+	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
+	m = drain(t, next.(Model), cmd)
+	x, y := rowAt(m, item)
+	next, cmd = m.Update(click(x, y))
+	return drain(t, next.(Model), cmd)
+}
+
+func TestGoToAlbumAndArtistOpenAPopover(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		item  menuItem
@@ -152,22 +163,18 @@ func TestGoToAlbumAndArtistTakeOverTheView(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, lib, _, _ := menuModel(t)
-			tabs := m.tabCount()
+			tabs, beneath := m.tabCount(), m.Tracks
 
-			next, cmd := m.Update(rightClick(trackX, trackRow(0)))
-			m = drain(t, next.(Model), cmd)
-			x, y := rowAt(m, tc.item)
-			next, cmd = m.Update(click(x, y))
-			m = drain(t, next.(Model), cmd)
+			m = openVia(t, m, tc.item)
 
 			if !m.detour.active {
-				t.Fatal("the view did not change")
+				t.Fatal("no popover")
 			}
 			if m.detour.tab.Title != tc.title {
 				t.Errorf("showing %q, want %q", m.detour.tab.Title, tc.title)
 			}
-			if m.tabCount() != tabs {
-				t.Errorf("the tab row grew from %d to %d", tabs, m.tabCount())
+			if len(m.detour.tracks) != 1 || m.detour.tracks[0].Title != tc.track {
+				t.Fatalf("popover tracks = %+v", m.detour.tracks)
 			}
 			var asked bool
 			for _, a := range lib.askedFor {
@@ -176,98 +183,142 @@ func TestGoToAlbumAndArtistTakeOverTheView(t *testing.T) {
 			if !asked {
 				t.Errorf("asked for %v, want %q", lib.askedFor, tc.asked)
 			}
-			if len(m.Tracks) != 1 || m.Tracks[0].Title != tc.track {
-				t.Fatalf("tracks = %+v", m.Tracks)
+
+			// What it covers is untouched: the tabs, and the list itself.
+			if m.tabCount() != tabs {
+				t.Errorf("the tab row grew from %d to %d", tabs, m.tabCount())
 			}
-			// The tab row says where you are and how to get back.
+			if len(m.Tracks) != len(beneath) || m.Tracks[0].Title != beneath[0].Title {
+				t.Errorf("the list underneath changed to %+v", m.Tracks)
+			}
 			row := plain(strings.Split(m.View().Content, "\n")[1])
-			if !strings.Contains(row, tc.title) || !strings.Contains(row, iconBack) {
-				t.Errorf("the tab row reads %q", row)
-			}
-			if strings.Contains(row, "Liked Music") {
-				t.Error("the playlist tabs are still on screen")
+			if !strings.Contains(row, "Liked Music") {
+				t.Errorf("the tab row reads %q; the tabs should still be there", row)
 			}
 		})
 	}
 }
 
-// Leaving puts back the tab and the place in it the detour interrupted.
-func TestLeavingADetourPutsBackWhatWasThere(t *testing.T) {
-	m, lib, _, _ := menuModel(t)
-	lib.tracks["LM"] = fromUI(rows(40))
-	opened, cmd := m.showTab()
-	m = drain(t, opened, cmd)
+// It floats over the frame, inset, rather than replacing it.
+func TestThePopoverIsInsetAndOverlays(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+	before := strings.Split(m.View().Content, "\n")
+	m = openVia(t, m, menuAlbum)
+	after := strings.Split(m.View().Content, "\n")
 
-	m.trackCursor = 22
-	m.scroll()
-	// The list is scrolled, so the top row on screen is not the first track.
-	m.Tracks[m.trackOffset] = fromAPI(linked())[0]
+	if len(after) != len(before) {
+		t.Fatalf("the frame is %d lines with the popover, %d without", len(after), len(before))
+	}
+	x, y, width, height := m.modalBounds()
+	if x <= 0 || y <= 0 || x+width >= m.width || y+height >= m.height {
+		t.Errorf("the popover fills the screen: %d,%d %dx%d on %dx%d",
+			x, y, width, height, m.width, m.height)
+	}
+	if !strings.Contains(plain(strings.Join(after, "\n")), "Cherry Track") {
+		t.Error("the popover's tracks are not on the frame")
+	}
+	// The player box below it is untouched.
+	if plain(after[len(after)-1]) != plain(before[len(before)-1]) {
+		t.Error("the bottom of the frame moved")
+	}
+}
 
-	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
+func TestEscAndClickingOutsideClosethePopover(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+
+	m = openVia(t, m, menuAlbum)
+	next, cmd := m.Update(keyPress("esc"))
+	if drain(t, next.(Model), cmd).detour.active {
+		t.Error("esc did not close it")
+	}
+
+	m = openVia(t, m, menuAlbum)
+	x, y, _, _ := m.modalBounds()
+	next, cmd = m.Update(click(max(x-1, 0), max(y-1, 0)))
 	m = drain(t, next.(Model), cmd)
-	// The right-click selected that row, and that is the place to come back
-	// to — not wherever the cursor was before it.
-	wasCursor, wasOffset := m.trackCursor, m.trackOffset
-	x, y := rowAt(m, menuAlbum)
-	next, cmd = m.Update(click(x, y))
+	if m.detour.active {
+		t.Error("clicking outside did not close it")
+	}
+	// And that click was swallowed rather than also hitting the list.
+	if m.trackCursor != 0 {
+		t.Errorf("the dismissing click moved the list cursor to %d", m.trackCursor)
+	}
+}
+
+// Going from an album to its artist replaces the popover; one esc is still
+// the way out.
+func TestASecondGoToReplacesThePopover(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+	m = openVia(t, m, menuAlbum)
+
+	// Right-click a row inside the popover and follow its artist.
+	_, my, _, _ := m.modalBounds()
+	inside := my + 1 + modalHeader
+	next, cmd := m.Update(rightClick(m.width/2, inside))
 	m = drain(t, next.(Model), cmd)
-	if !m.detour.active {
-		t.Fatal("no detour")
+	if !m.menu.open {
+		t.Fatal("no menu inside the popover")
 	}
 
 	next, cmd = m.Update(keyPress("esc"))
 	m = drain(t, next.(Model), cmd)
-
-	if m.detour.active {
-		t.Fatal("esc did not leave")
+	if !m.detour.active {
+		t.Error("closing the menu should not close the popover")
 	}
-	if got, _ := m.SelectedPlaylist(); got.Title != "Liked Music" {
-		t.Errorf("came back to %q", got.Title)
-	}
-	if m.trackCursor != wasCursor || m.trackOffset != wasOffset {
-		t.Errorf("came back to cursor %d offset %d, want %d and %d",
-			m.trackCursor, m.trackOffset, wasCursor, wasOffset)
+	next, cmd = m.Update(keyPress("esc"))
+	if drain(t, next.(Model), cmd).detour.active {
+		t.Error("the second esc should close the popover")
 	}
 }
 
-// Album then artist is one detour, and leaving returns to where it started
-// rather than stepping back through it.
-func TestADetourWithinADetourStillReturnsHome(t *testing.T) {
-	m, _, _, _ := menuModel(t)
-	m.tabCursor = 0
+// The popover takes the navigation keys; the transport keys go through it.
+func TestThePopoverOwnsNavigationButNotTransport(t *testing.T) {
+	m, lib, _, au := menuModel(t)
+	lib.tracks["MPREbCherry"] = fromUI(rows(20))
+	m = openVia(t, m, menuAlbum)
 
-	for _, item := range []menuItem{menuAlbum, menuArtist} {
-		m.Tracks = fromAPI(linked())
-		next, cmd := m.Update(rightClick(trackX, trackRow(0)))
-		m = drain(t, next.(Model), cmd)
-		x, y := rowAt(m, item)
-		next, cmd = m.Update(click(x, y))
-		m = drain(t, next.(Model), cmd)
+	next, _ := m.Update(keyPress("j"))
+	m = next.(Model)
+	if m.detour.cursor != 1 {
+		t.Errorf("popover cursor = %d", m.detour.cursor)
 	}
-	if m.detour.tab.Title != "DAPHNI" {
-		t.Fatalf("second hop landed on %q", m.detour.tab.Title)
+	if m.trackCursor != 0 {
+		t.Errorf("the list underneath moved to %d", m.trackCursor)
 	}
 
-	next, cmd := m.Update(keyPress("esc"))
-	m = drain(t, next.(Model), cmd)
-	if m.detour.active {
-		t.Error("one esc should leave altogether, not step back a hop")
+	m.playing = m.Tracks[0]
+	next, cmd := m.Update(keyPress(" "))
+	drain(t, next.(Model), cmd)
+	if au.toggles != 1 {
+		t.Errorf("space did not reach the player: toggles = %d", au.toggles)
 	}
 }
 
-// Clicking the tab row is the other way out.
-func TestClickingTheDetourTabLeaves(t *testing.T) {
-	m, _, _, _ := menuModel(t)
-	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
-	m = drain(t, next.(Model), cmd)
-	x, y := rowAt(m, menuAlbum)
-	next, cmd = m.Update(click(x, y))
-	m = drain(t, next.(Model), cmd)
+// Clicking a row in the popover selects it; clicking again plays it.
+func TestClickingInsidethePopover(t *testing.T) {
+	m, lib, st, au := menuModel(t)
+	lib.tracks["MPREbCherry"] = fromUI(rows(20))
+	now := time.Unix(1000, 0)
+	m = frozen(m, &now)
+	m = openVia(t, m, menuAlbum)
 
-	next, cmd = m.Update(click(2, 1))
+	_, my, _, _ := m.modalBounds()
+	row := my + 1 + modalHeader + 2 // the third track
+
+	next, cmd := m.Update(click(m.width/2, row))
 	m = drain(t, next.(Model), cmd)
-	if m.detour.active {
-		t.Error("clicking the tab row did not leave")
+	if m.detour.cursor != 2 {
+		t.Fatalf("popover cursor = %d", m.detour.cursor)
+	}
+	if len(au.loaded) != 0 {
+		t.Error("one click started playback")
+	}
+
+	now = now.Add(100 * time.Millisecond)
+	next, cmd = m.Update(click(m.width/2, row))
+	m = drain(t, next.(Model), cmd)
+	if len(st.resolved) == 0 || st.resolved[len(st.resolved)-1] != m.detour.tracks[2].VideoID {
+		t.Fatalf("resolved %v, want the clicked row", st.resolved)
 	}
 }
 
@@ -290,10 +341,11 @@ func TestRowsThatLeadNowhereAreDisabled(t *testing.T) {
 			}
 		}
 	}
-	// And they are drawn greyed rather than looking available.
+	// And they are drawn greyed rather than looking available. Line 1 is
+	// the like row, 2 the rule, 3 the album row.
 	lines := strings.Split(m.renderMenu(), "\n")
-	if !sgrCodes(lines[2])["90"] { // past the top border: the album row
-		t.Errorf("a dead row is not greyed: %v", sgrCodes(lines[2]))
+	if !sgrCodes(lines[3])["90"] {
+		t.Errorf("a dead row is not greyed: %v", sgrCodes(lines[3]))
 	}
 	if sgrCodes(lines[1])["90"] {
 		t.Errorf("the like row is greyed too; nothing distinguishes them")
@@ -369,11 +421,11 @@ func TestTheMenuIsNudgedOnScreen(t *testing.T) {
 	width, height := m.menuSize()
 
 	for _, p := range []struct{ x, y int }{
-		// Just inside the scrollbar, which a long list puts in the last
-		// column and which is not a track.
-		{m.width - 2, trackRow(0)},
+		// Just inside the scrollbar, which a long list draws near the right
+		// edge and which is not a track.
+		{m.scrollbarColumn() - 1, trackRow(0)},
 		{trackX, tabsHeight + m.bodyHeight() - 1},
-		{m.width - 2, tabsHeight + m.bodyHeight() - 1},
+		{m.scrollbarColumn() - 1, tabsHeight + m.bodyHeight() - 1},
 	} {
 		next, cmd := m.Update(rightClick(p.x, p.y))
 		opened := drain(t, next.(Model), cmd)
@@ -385,6 +437,36 @@ func TestTheMenuIsNudgedOnScreen(t *testing.T) {
 		}
 		if opened.menu.y < 0 || opened.menu.y+height > opened.height {
 			t.Errorf("menu at y=%d runs off a %d-tall screen", opened.menu.y, opened.height)
+		}
+	}
+}
+
+// The popover must not cover the tabs or the player: the transport has to
+// stay reachable while it is open.
+func TestThePopoverStaysInsideTheList(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{100, 20}, {80, 14}, {60, 10}, {120, 40}} {
+		m, _, _, _ := menuModel(t)
+		sized, _ := m.Update(tea.WindowSizeMsg{Width: size.w, Height: size.h})
+		m = sized.(Model)
+		m = openVia(t, m, menuAlbum)
+		if !m.detour.active {
+			t.Fatalf("%dx%d: no popover", size.w, size.h)
+		}
+		x, y, width, height := m.modalBounds()
+		if y < tabsHeight {
+			t.Errorf("%dx%d: the popover starts at row %d, over the tabs", size.w, size.h, y)
+		}
+		if bottom, list := y+height, tabsHeight+m.bodyHeight(); bottom > list {
+			t.Errorf("%dx%d: the popover ends at row %d, past the list at %d",
+				size.w, size.h, bottom, list)
+		}
+		if x < 0 || x+width > m.width {
+			t.Errorf("%dx%d: the popover spans %d..%d", size.w, size.h, x, x+width)
+		}
+		// The player's bottom border is still drawn.
+		lines := strings.Split(m.View().Content, "\n")
+		if last := plain(lines[len(lines)-1]); !strings.HasSuffix(last, "╯") {
+			t.Errorf("%dx%d: the player box is broken: %q", size.w, size.h, last)
 		}
 	}
 }

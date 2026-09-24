@@ -40,17 +40,49 @@ type menuRow struct {
 	enabled bool
 }
 
+// dividerAfter is the item the rule follows. Liking is about this track;
+// everything under the rule is about going somewhere else.
+const dividerAfter = 0
+
 func (m Model) menuRows() []menuRow {
 	t := m.menu.track
-	like := iconThumbUpOff
+	// The row says what pressing it does, so a liked track offers to undo
+	// it rather than offering to do it again.
+	like := menuRow{menuLike, iconThumbUpOff, "Like track", true}
 	if t.Rating == RatingUp {
-		like = iconThumbUp
+		like = menuRow{menuLike, iconThumbUp, "Unlike track", true}
 	}
 	return []menuRow{
-		{menuLike, like, "Like track", true},
+		like,
 		{menuAlbum, iconAlbum, "Go to album", t.AlbumID != ""},
 		{menuArtist, iconArtist, "Go to artist", t.ArtistID != ""},
 	}
+}
+
+// visualRow is the line an item is drawn on, once the rule is counted.
+func visualRow(item int) int {
+	if item > dividerAfter {
+		return item + 1
+	}
+	return item
+}
+
+// itemAtVisual is the reverse, and reports false on the rule itself, which
+// is not something you can choose.
+func itemAtVisual(line, items int) (int, bool) {
+	var item int
+	switch {
+	case line <= dividerAfter:
+		item = line
+	case line == dividerAfter+1:
+		return 0, false
+	default:
+		item = line - 1
+	}
+	if item < 0 || item >= items {
+		return 0, false
+	}
+	return item, true
 }
 
 var (
@@ -68,7 +100,7 @@ func (m Model) menuSize() (width, height int) {
 		longest = max(longest, lipgloss.Width(row.label))
 	}
 	// icon, space, label, then padding and border either side.
-	return longest + 2 + 2 + 2, len(m.menuRows()) + 2
+	return longest + 2 + 2 + 2, len(m.menuRows()) + 1 + 2
 }
 
 // openMenu puts the menu on screen at a point, nudged so that all of it
@@ -86,7 +118,7 @@ func (m Model) renderMenu() string {
 	width, _ := m.menuSize()
 	inner := width - 4 // padding and border
 
-	lines := make([]string, 0, len(rows))
+	lines := make([]string, 0, len(rows)+1)
 	for i, row := range rows {
 		line := pad(row.icon+" "+row.label, inner)
 		switch {
@@ -96,6 +128,9 @@ func (m Model) renderMenu() string {
 			line = menuSelected.Render(line)
 		}
 		lines = append(lines, line)
+		if i == dividerAfter {
+			lines = append(lines, dim.Render(strings.Repeat("─", inner)))
+		}
 	}
 	return menuBox.Render(strings.Join(lines, "\n"))
 }
@@ -116,11 +151,11 @@ func (m Model) menuHit(x, y int) (int, bool) {
 	if !m.menuContains(x, y) {
 		return 0, false
 	}
-	row := y - m.menu.y - 1 // past the top border
-	if row < 0 || row >= len(m.menuRows()) {
+	line := y - m.menu.y - 1 // past the top border
+	if line < 0 {
 		return 0, false // on the border
 	}
-	return row, true
+	return itemAtVisual(line, len(m.menuRows()))
 }
 
 // handleMenuKey runs the menu while it is open, swallowing everything else:

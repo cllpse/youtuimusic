@@ -208,20 +208,19 @@ func (m *Model) startLoading() tea.Cmd {
 
 // ---------------------------------------------------------------- tabs ---
 
-// detour is a temporary view of an album or an artist. It takes over the
-// screen rather than joining the tab row, and leaving it puts back what was
-// there, including where the reader had got to.
+// detour is an album or an artist, shown in a popover over the main view.
+// It keeps its own list, because what is underneath is still there and must
+// not be disturbed.
 type detour struct {
 	active bool
 	tab    Playlist
-
-	fromTab    int
-	fromCursor int
-	fromOffset int
+	tracks []Track
+	cursor int
+	offset int
 }
 
-// currentTab is what the list is showing: the detour when there is one, the
-// tab in front otherwise.
+// currentTab is what a fetch in flight belongs to: the popover when one is
+// open, the tab in front otherwise.
 func (m Model) currentTab() Playlist {
 	if m.detour.active {
 		return m.detour.tab
@@ -229,50 +228,53 @@ func (m Model) currentTab() Playlist {
 	return m.tabAt(m.tabCursor)
 }
 
-// enterDetour shows an album or an artist in place of everything.
+// enterDetour opens the popover on an album or an artist, replacing
+// whatever it was showing.
 func (m Model) enterDetour(tab Playlist) (Model, tea.Cmd) {
 	if tab.ID == "" {
 		return m, nil
 	}
-	if !m.detour.active {
-		// Only the first hop remembers the way back, so going from an album
-		// to its artist still returns to the playlist it started from.
-		m.detour = detour{
-			fromTab:    m.tabCursor,
-			fromCursor: m.trackCursor,
-			fromOffset: m.trackOffset,
-		}
-	}
-	m.detour.active, m.detour.tab = true, tab
 	m.menu = trackMenu{}
-	m.trackCursor, m.trackOffset = 0, 0
+	m.detour = detour{active: true, tab: tab}
 
 	if tracks, ok := m.cache[tab.ID]; ok {
-		m.Tracks, m.showingID, m.loading, m.Err = tracks, tab.ID, false, nil
+		m.detour.tracks = tracks
 		if len(tracks) > 0 {
 			return m, m.prefetch(tracks[0].VideoID)
 		}
 		return m, nil
 	}
-	m.Tracks, m.showingID = nil, ""
 	return m, batch(m.startLoading(), m.scheduleTabLoad())
 }
 
-// leaveDetour puts back the tab and the position the detour interrupted.
+// leaveDetour closes it. Nothing has to be put back: the view underneath was
+// never touched.
 func (m Model) leaveDetour() (Model, tea.Cmd) {
-	if !m.detour.active {
-		return m, nil
-	}
-	back := m.detour
 	m.detour = detour{}
 	m.menu = trackMenu{}
-	m.tabCursor = clamp(back.fromTab, m.tabCount())
+	return m, nil
+}
 
-	m, cmd := m.showTab()
-	m.trackCursor = clamp(back.fromCursor, len(m.Tracks))
-	m.trackOffset = back.fromOffset
-	m.scroll()
-	return m, cmd
+// selectedDetourTrack is the row under the popover's cursor.
+func (m Model) selectedDetourTrack() (Track, bool) {
+	if m.detour.cursor < 0 || m.detour.cursor >= len(m.detour.tracks) {
+		return Track{}, false
+	}
+	return m.detour.tracks[m.detour.cursor], true
+}
+
+// moveDetour moves the popover's cursor and scrolls to keep it in view.
+func (m *Model) moveDetour(delta int) {
+	height := m.modalListHeight()
+	m.detour.cursor = clamp(m.detour.cursor+delta, len(m.detour.tracks))
+	if m.detour.cursor < m.detour.offset {
+		m.detour.offset = m.detour.cursor
+	}
+	if m.detour.cursor >= m.detour.offset+height {
+		m.detour.offset = m.detour.cursor - height + 1
+	}
+	m.detour.offset = min(m.detour.offset, max(0, len(m.detour.tracks)-height))
+	m.detour.offset = max(m.detour.offset, 0)
 }
 
 // tabCount is the playlists plus the search results, when there are any.
@@ -407,6 +409,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.menu.open {
 			return m.handleMenuKey(msg.String())
 		}
+		if m.detour.active {
+			if next, cmd, handled := m.handleModalKey(msg.String()); handled {
+				return next, cmd
+			}
+		}
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
@@ -467,6 +474,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.cache[msg.id] = tracks
+		if m.detour.active && m.detour.tab.ID == msg.id {
+			m.detour.tracks = tracks
+			m.detour.cursor, m.detour.offset = 0, 0
+			m.loading, m.Err = false, nil
+			if len(tracks) > 0 {
+				return m, m.prefetch(tracks[0].VideoID)
+			}
+			return m, nil
+		}
 		if m.currentTab().ID != msg.id {
 			return m, nil // the view moved on while this was in flight
 		}
@@ -610,18 +626,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m.press(controlRepeat)
 
-	case "esc":
-		return m.leaveDetour()
-
 	case "left", "h", "shift+tab":
-		if m.detour.active {
-			return m.leaveDetour()
-		}
 		return m.selectTab(m.tabCursor - 1)
 	case "right", "l", "tab":
-		if m.detour.active {
-			return m.leaveDetour()
-		}
 		return m.selectTab(m.tabCursor + 1)
 
 	case "up", "k":
@@ -679,11 +686,16 @@ func (m *Model) setRating(videoID string, r Rating) {
 	if m.playing.VideoID == videoID {
 		m.playing.Rating = r
 	}
-	for i := range m.Tracks {
-		if m.Tracks[i].VideoID == videoID {
-			m.Tracks[i].Rating = r
-			return
+	// The same track can be in the list, in the popover over it, or both.
+	for _, rows := range [][]Track{m.Tracks, m.detour.tracks} {
+		for i := range rows {
+			if rows[i].VideoID == videoID {
+				rows[i].Rating = r
+			}
 		}
+	}
+	if m.menu.track.VideoID == videoID {
+		m.menu.track.Rating = r
 	}
 }
 
@@ -814,17 +826,23 @@ func (m Model) View() tea.View {
 		m.renderTracks(m.width, m.bodyHeight()),
 		m.renderPlayer(),
 	)
+	// Anything floating sits over the frame rather than in it, so opening
+	// one reflows nothing underneath.
+	//
+	// This goes through a compositor rather than composing layers onto a
+	// canvas directly: a layer's own Draw ignores its position, and only
+	// the compositor works out where each one belongs.
+	layers := []*lipgloss.Layer{lipgloss.NewLayer(content)}
+	if m.detour.active {
+		x, y, _, _ := m.modalBounds()
+		layers = append(layers, lipgloss.NewLayer(m.renderModal()).X(x).Y(y).Z(1))
+	}
 	if m.menu.open {
-		// The menu sits over the frame rather than in it, so opening one
-		// does not reflow anything underneath.
-		//
-		// This goes through a compositor rather than composing the layers
-		// onto a canvas directly: a layer's own Draw ignores its position,
-		// and only the compositor works out where each one belongs.
-		content = lipgloss.NewCompositor(
-			lipgloss.NewLayer(content),
-			lipgloss.NewLayer(m.renderMenu()).X(m.menu.x).Y(m.menu.y).Z(1),
-		).Render()
+		layers = append(layers,
+			lipgloss.NewLayer(m.renderMenu()).X(m.menu.x).Y(m.menu.y).Z(2))
+	}
+	if len(layers) > 1 {
+		content = lipgloss.NewCompositor(layers...).Render()
 	}
 
 	v := tea.NewView(content)
@@ -849,12 +867,6 @@ func tabWidth(title string) int {
 // Rendering and hit-testing share it, so a click lands on the tab it looks
 // like it should.
 func (m Model) tabSpans() []tabSpan {
-	if m.detour.active {
-		// One span, and clicking it is the way back.
-		width := lipgloss.Width(iconBack) + 1 + tabFurniture +
-			lipgloss.Width(truncate(m.detour.tab.Title, maxTabTitle))
-		return []tabSpan{{index: 0, start: 0, end: min(width, m.width)}}
-	}
 	count := m.tabCount()
 	if count == 0 || m.width <= 0 {
 		return nil
@@ -882,17 +894,7 @@ func (m Model) tabSpans() []tabSpan {
 	return spans
 }
 
-// iconBack leads the detour's label, so the row reads as a way out.
-const iconBack = "\U000f004d" // md-arrow_left
-
 func (m Model) renderTabs() string {
-	if m.detour.active {
-		label := iconBack + " " + truncate(m.detour.tab.Title, maxTabTitle)
-		row := activeTabStyle.Render(label)
-		gap := tabGapStyle.Render(strings.Repeat(" ", max(0, m.width-lipgloss.Width(row))))
-		return lipgloss.JoinHorizontal(lipgloss.Bottom, row, gap)
-	}
-
 	spans := m.tabSpans()
 	if len(spans) == 0 {
 		// With no tabs the row still has to be exactly as tall, or
@@ -916,7 +918,7 @@ func (m Model) renderTabs() string {
 func (m Model) renderTracks(width, height int) string {
 	bar := m.scrollbar(height)
 	if bar != nil {
-		width-- // the last column belongs to the bar
+		width -= scrollbarWidth
 	}
 
 	var b strings.Builder
@@ -924,8 +926,9 @@ func (m Model) renderTracks(width, height int) string {
 		row := i + m.trackOffset
 		line := ""
 		if row < len(m.Tracks) {
-			line = truncate(m.trackLine(m.Tracks[row], width, m.showsRating()), width)
-			if row == m.trackCursor {
+			highlighted := row == m.trackCursor
+			line = m.trackLine(m.Tracks[row], width, m.showsRating(), highlighted)
+			if highlighted {
 				line = selected.Render(line)
 			}
 		}
@@ -947,30 +950,38 @@ func (m Model) hasScrollbar() bool {
 	return len(m.Tracks) > m.bodyHeight()
 }
 
+// scrollbarWidth is the bar itself plus a blank column to its right, so it
+// does not sit against the edge of the terminal.
+const scrollbarWidth = 2
+
 // scrollbarColumn is where it is drawn.
-func (m Model) scrollbarColumn() int { return m.width - 1 }
+func (m Model) scrollbarColumn() int { return m.width - scrollbarWidth }
 
 // scrollbar returns the column down the right of the list, or nil when
 // everything fits. The thumb is the same grey as the trough: the glyphs
 // carry the difference, as they do on the progress bar.
 func (m Model) scrollbar(height int) []string {
-	total := len(m.Tracks)
+	return scrollbarFor(len(m.Tracks), m.trackOffset, height)
+}
+
+// scrollbarFor draws a trough and thumb for any list.
+func scrollbarFor(total, offset, height int) []string {
 	if height <= 0 || total <= height {
 		return nil
 	}
 	thumb := max(1, height*height/total)
 	start := 0
 	if span, furthest := height-thumb, total-height; furthest > 0 {
-		start = min(m.trackOffset*span/furthest, span)
+		start = min(offset*span/furthest, span)
 	}
 
 	out := make([]string, height)
 	for i := range out {
 		if i >= start && i < start+thumb {
-			out[i] = dim.Render("█")
+			out[i] = dim.Render("█") + " "
 			continue
 		}
-		out[i] = dim.Render("│")
+		out[i] = dim.Render("│") + " "
 	}
 	return out
 }
@@ -989,20 +1000,30 @@ func (m *Model) scrollTo(y int) {
 
 // trackLine draws one row. The leading column is the same two cells whether
 // or not it holds a rating, so the titles line up across tabs.
-func (m Model) trackLine(t Track, width int, showRating bool) string {
+//
+// Everything but the title is muted, which leaves the eye one thing to read
+// down. A highlighted row is drawn plain and coloured whole by the caller —
+// dimming part of it would fight the highlight.
+func (m Model) trackLine(t Track, width int, showRating, highlighted bool) string {
 	const durCol, rateCol = 6, 2
 	prefix := "  "
 	if showRating {
 		prefix = t.Rating.glyph() + " "
 	}
-	rest := max(width-durCol-rateCol-2, 10)
+	rest := width - durCol - rateCol - 2
+	if rest < 4 {
+		// No room for columns; the title is the only thing worth keeping.
+		return pad(truncate(prefix+t.Title, width), width)
+	}
 	titleW := rest / 2
 	artistW := rest - titleW
-	return fmt.Sprintf("%s%-*s %-*s %*s",
-		prefix,
-		titleW, truncate(t.Title, titleW),
-		artistW, truncate(t.Artist, artistW),
-		durCol, formatDuration(t.Duration))
+
+	artist := pad(truncate(t.Artist, artistW), artistW)
+	duration := pad(formatDuration(t.Duration), durCol)
+	if !highlighted {
+		artist, duration = dim.Render(artist), dim.Render(duration)
+	}
+	return prefix + pad(truncate(t.Title, titleW), titleW) + " " + artist + " " + duration
 }
 
 // showsRating is false on the liked playlist, where every row is liked and

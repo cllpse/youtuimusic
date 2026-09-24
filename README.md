@@ -64,8 +64,9 @@ the first page and fill in the rest behind it.
 | `+` / `-` | thumbs up or down; the same key again clears it |
 | `q`, `ctrl+c` | quit |
 
-With the track menu open, `j`/`k` and `enter` work it and `esc` closes it.
-`esc` also leaves an album or an artist.
+With the track menu or the popover open, `j`/`k` and `enter` work it and
+`esc` closes it. The transport keys keep working either way: pausing should
+not depend on what is on top.
 
 The title, the progress bar and the controls share one box: transport on the
 left, thumbs in the middle, repeat on the right. A liked row is marked with
@@ -74,11 +75,11 @@ where every row would carry it. The thumbs there act on what is playing, which i
 sitting beside the transport means; `+` and `-` still act on the highlighted
 row.
 
-Right-clicking a track opens a menu: like it, go to its album, go to its
-artist. The last two take over the view rather than joining the tab row —
-somewhere you went, not somewhere you keep — and `esc`, or clicking the row
-that names them, puts back the tab and the place in it you left. A track
-that links nowhere has those rows greyed.
+Right-clicking a track opens a menu: like or unlike it, go to its album, go
+to its artist. The last two open a popover over the list, inset so that what
+it covers is still visible around it and stopping short of the player, which
+stays usable. `esc` or a click outside closes it, and nothing underneath was
+disturbed. A track that links nowhere has those rows greyed.
 
 A list longer than the window gets a scrollbar down its right edge. It can
 be clicked and dragged, and it is only there when there is something to

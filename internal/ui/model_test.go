@@ -391,8 +391,13 @@ func TestScrollbarAppearsOnlyWhenItOverflows(t *testing.T) {
 		if lipgloss.Width(line) != m.width {
 			t.Fatalf("row %d is %d cells, want %d", i, lipgloss.Width(line), m.width)
 		}
-		if last := []rune(line)[m.width-1]; last != '█' && last != '│' {
-			t.Errorf("row %d ends with %q, not the bar", i, string(last))
+		cells := []rune(line)
+		if bar := cells[m.scrollbarColumn()]; bar != '█' && bar != '│' {
+			t.Errorf("row %d has %q where the bar should be", i, string(bar))
+		}
+		// And a blank column to its right, so it is not against the edge.
+		if last := cells[m.width-1]; last != ' ' {
+			t.Errorf("row %d ends with %q, want a space past the bar", i, string(last))
 		}
 	}
 }

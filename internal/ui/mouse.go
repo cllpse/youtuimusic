@@ -21,6 +21,7 @@ const (
 	regionScrollbar
 	regionBar
 	regionControls
+	regionModal
 )
 
 // hit maps a screen position onto what is drawn there: a tab index, a track
@@ -97,6 +98,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if m.menu.open {
 			return m, nil // the menu is anchored; scrolling under it would lie
 		}
+		if m.detour.active {
+			if m.modalContains(mouse.X, mouse.Y) {
+				m.scrollDetour(wheelDelta(mouse) * wheelStep)
+			}
+			return m, nil
+		}
 		return m.handleWheel(mouse)
 
 	case tea.MouseClickMsg:
@@ -107,6 +114,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if m.menu.open {
 				return m.clickMenu(mouse)
 			}
+			if m.detour.active {
+				return m.clickModal(mouse)
+			}
 			return m.handleClick(mouse)
 		}
 	}
@@ -115,6 +125,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 // openMenuAt opens the track menu on whatever row was right-clicked.
 func (m Model) openMenuAt(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	if m.detour.active {
+		row, ok := m.modalHit(mouse.X, mouse.Y)
+		if !ok {
+			return m, nil
+		}
+		m.detour.cursor = row
+		return m.openMenu(m.detour.tracks[row], mouse.X, mouse.Y), nil
+	}
 	where, n := m.hit(mouse.X, mouse.Y)
 	if where != regionTracks || n >= len(m.Tracks) {
 		return m, nil
@@ -187,14 +205,20 @@ const wheelStep = 3
 // handleWheel scrolls whatever is under the pointer. Over the list it moves
 // the view and not the selection: looking further down a playlist should not
 // lose your place in it, and nothing is resolved because nothing was chosen.
-func (m Model) handleWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
-	var delta int
+// wheelDelta is which way a notch went, and zero for anything else.
+func wheelDelta(mouse tea.Mouse) int {
 	switch mouse.Button {
 	case tea.MouseWheelUp:
-		delta = -1
+		return -1
 	case tea.MouseWheelDown:
-		delta = 1
-	default:
+		return 1
+	}
+	return 0
+}
+
+func (m Model) handleWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	delta := wheelDelta(mouse)
+	if delta == 0 {
 		return m, nil
 	}
 
