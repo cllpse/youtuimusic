@@ -77,12 +77,16 @@ const buttonWidth = 3
 // hit-testing share it, so a click lands on the button it looks like it
 // should.
 func (m Model) controlButtons() []button {
-	if m.width < 3*buttonWidth {
+	width := m.contentWidth()
+	if width < 3*buttonWidth {
 		return nil
 	}
+	// Columns are counted across the whole row, so a span can be compared
+	// against a click without anyone remembering the border is there.
+	right := contentLeft + width
 	playing := m.playing.VideoID != ""
 
-	left := []button{
+	leftGroup := []button{
 		{control: controlPrevious, icon: iconPrevious, lit: playing},
 		{control: controlPlayPause, icon: m.playPauseIcon(), lit: playing},
 		{control: controlNext, icon: iconNext, lit: playing},
@@ -98,28 +102,28 @@ func (m Model) controlButtons() []button {
 		{control: controlThumbUp, icon: up, lit: playing && m.playing.Rating == RatingUp},
 		{control: controlThumbDown, icon: down, lit: playing && m.playing.Rating == RatingDown},
 	}
-	right := []button{
+	repeatGroup := []button{
 		{control: controlRepeat, icon: m.repeat.icon(), lit: m.repeat != RepeatOff},
 	}
 
-	at := lay(left, 0)
+	at := lay(leftGroup, contentLeft)
 
 	// Centred on the row, but never on top of the transport.
-	centreStart := max((m.width-len(centre)*buttonWidth)/2, at)
-	if centreStart+len(centre)*buttonWidth > m.width {
+	centreStart := max(contentLeft+(width-len(centre)*buttonWidth)/2, at)
+	if centreStart+len(centre)*buttonWidth > right {
 		centre = nil
 	} else {
 		at = lay(centre, centreStart)
 	}
 
-	rightStart := m.width - len(right)*buttonWidth
-	if rightStart < at {
-		right = nil
+	repeatStart := right - len(repeatGroup)*buttonWidth
+	if repeatStart < at {
+		repeatGroup = nil
 	} else {
-		lay(right, rightStart)
+		lay(repeatGroup, repeatStart)
 	}
 
-	return append(append(left, centre...), right...)
+	return append(append(leftGroup, centre...), repeatGroup...)
 }
 
 // lay assigns columns to a group and returns where it ends.
@@ -141,12 +145,13 @@ func (m Model) playPauseIcon() string {
 }
 
 func (m Model) renderControls() string {
+	width := m.contentWidth()
 	buttons := m.controlButtons()
 	if len(buttons) == 0 {
-		return strings.Repeat(" ", max(0, m.width))
+		return strings.Repeat(" ", width)
 	}
 	var b strings.Builder
-	at := 0
+	at := contentLeft
 	for _, btn := range buttons {
 		if btn.start > at {
 			b.WriteString(strings.Repeat(" ", btn.start-at))
@@ -158,8 +163,8 @@ func (m Model) renderControls() string {
 		b.WriteString(style.Render(" " + btn.icon + " "))
 		at = btn.end
 	}
-	if at < m.width {
-		b.WriteString(strings.Repeat(" ", m.width-at))
+	if end := contentLeft + width; at < end {
+		b.WriteString(strings.Repeat(" ", end-at))
 	}
 	return b.String()
 }

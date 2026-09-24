@@ -64,8 +64,10 @@ the first page and fill in the rest behind it.
 | `+` / `-` | thumbs up or down; the same key again clears it |
 | `q`, `ctrl+c` | quit |
 
-Under the bar are the controls: transport on the left, thumbs in the middle,
-repeat on the right. The thumbs there act on what is playing, which is what
+The title, the progress bar and the controls share one box: transport on the
+left, thumbs in the middle, repeat on the right. A liked row is marked with
+the same thumb icon the control uses, except in the liked playlist itself,
+where every row would carry it. The thumbs there act on what is playing, which is what
 sitting beside the transport means; `+` and `-` still act on the highlighted
 row.
 

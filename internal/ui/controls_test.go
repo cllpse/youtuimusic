@@ -42,18 +42,19 @@ func TestControlsSitLeftCentreAndRight(t *testing.T) {
 	m, _, _, _ := playingModel(t)
 	row := plain(controlsLine(m))
 
+	// The rendered row includes the box's own border columns.
 	if got := lipgloss.Width(row); got != m.width {
 		t.Fatalf("the controls row is %d cells, want %d", got, m.width)
 	}
 
-	// Transport against the left edge, in order.
+	// Transport against the left edge of the box, in order.
 	for i, c := range []control{controlPrevious, controlPlayPause, controlNext} {
 		b, ok := buttonAt(m, c)
 		if !ok {
 			t.Fatalf("control %v is missing", c)
 		}
-		if b.start != i*buttonWidth {
-			t.Errorf("control %v starts at %d, want %d", c, b.start, i*buttonWidth)
+		if want := contentLeft + i*buttonWidth; b.start != want {
+			t.Errorf("control %v starts at %d, want %d", c, b.start, want)
 		}
 	}
 
@@ -61,14 +62,14 @@ func TestControlsSitLeftCentreAndRight(t *testing.T) {
 	up, _ := buttonAt(m, controlThumbUp)
 	down, _ := buttonAt(m, controlThumbDown)
 	span := down.end - up.start
-	if middle, want := up.start+span/2, m.width/2; middle != want {
+	if middle, want := up.start+span/2, contentLeft+m.contentWidth()/2; middle != want {
 		t.Errorf("the thumbs are centred on %d, want %d", middle, want)
 	}
 
 	// Repeat against the right edge.
 	rep, _ := buttonAt(m, controlRepeat)
-	if rep.end != m.width {
-		t.Errorf("repeat ends at %d, want the right edge %d", rep.end, m.width)
+	if want := contentLeft + m.contentWidth(); rep.end != want {
+		t.Errorf("repeat ends at %d, want the inside of the right border %d", rep.end, want)
 	}
 
 	// And they are where the row actually draws them.
@@ -278,9 +279,23 @@ func TestControlsHitTestingCoversEveryColumn(t *testing.T) {
 			}
 		}
 	}
-	// And the space between groups is not a button.
-	if where, _ := m.hit(3*buttonWidth+1, m.controlsRow()); where != regionNone {
-		t.Errorf("the gap answered %v", where)
+	// And the space between two groups is not a button. Find a real gap
+	// rather than guessing a column.
+	transport, _ := buttonAt(m, controlNext)
+	thumbs, _ := buttonAt(m, controlThumbUp)
+	if thumbs.start <= transport.end {
+		t.Fatal("no gap between the groups to test")
+	}
+	for _, x := range []int{transport.end, thumbs.start - 1} {
+		if where, n := m.hit(x, m.controlsRow()); where != regionNone {
+			t.Errorf("the gap at column %d answered %v, %d", x, where, n)
+		}
+	}
+	// The border columns are not buttons either.
+	for _, x := range []int{0, m.width - 1} {
+		if where, _ := m.hit(x, m.controlsRow()); where != regionNone {
+			t.Errorf("column %d is on the border but answered %v", x, where)
+		}
 	}
 }
 
@@ -358,6 +373,11 @@ func TestNarrowRowsDegradeCleanly(t *testing.T) {
 		}
 		if got := lipgloss.Width(plain(controlsLine(m))); got != width {
 			t.Errorf("width %d: the row renders %d cells", width, got)
+		}
+		for _, b := range m.controlButtons() {
+			if b.start < contentLeft {
+				t.Errorf("width %d: %v starts on the border", width, b.control)
+			}
 		}
 	}
 }

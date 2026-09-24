@@ -283,3 +283,87 @@ func TestTabRowIsThreeLines(t *testing.T) {
 		t.Errorf("row %d is %q, want the first track", tabsHeight, plain(lines[tabsHeight]))
 	}
 }
+
+// The title, the bar and the controls sit in one box, and it costs no
+// height: its border takes the rows the blank lines used to.
+func TestThePlayerIsBoxed(t *testing.T) {
+	m := sample()
+	lines := strings.Split(m.View().Content, "\n")
+	if len(lines) != 20 {
+		t.Fatalf("view is %d lines, want 20", len(lines))
+	}
+
+	top, bottom := lines[m.barRow()-2], lines[m.barRow()+2]
+	if !strings.HasPrefix(plain(top), "╭") || !strings.HasSuffix(plain(top), "╮") {
+		t.Errorf("no top border: %q", plain(top))
+	}
+	if !strings.HasPrefix(plain(bottom), "╰") || !strings.HasSuffix(plain(bottom), "╯") {
+		t.Errorf("no bottom border: %q", plain(bottom))
+	}
+	// The three rows inside it are bounded by the sides.
+	for _, row := range []int{m.barRow() - 1, m.barRow(), m.barRow() + 1} {
+		line := plain(lines[row])
+		if !strings.HasPrefix(line, "│") || !strings.HasSuffix(line, "│") {
+			t.Errorf("row %d is not inside the box: %q", row, line)
+		}
+		if lipgloss.Width(lines[row]) != m.width {
+			t.Errorf("row %d is %d cells, want %d", row, lipgloss.Width(lines[row]), m.width)
+		}
+	}
+}
+
+// A liked row is marked with the same icon the control below it uses.
+func TestALikedRowIsMarkedWithTheThumb(t *testing.T) {
+	m := sample()
+	m.Tracks[0].Rating = RatingUp
+	m.Tracks[1].Rating = RatingDown
+
+	lines := strings.Split(m.View().Content, "\n")
+	if !strings.Contains(lines[tabsHeight], iconThumbUp) {
+		t.Errorf("no thumbs-up on the liked row: %q", plain(lines[tabsHeight]))
+	}
+	if !strings.Contains(lines[tabsHeight+1], iconThumbDown) {
+		t.Errorf("no thumbs-down on the disliked row: %q", plain(lines[tabsHeight+1]))
+	}
+	if strings.ContainsAny(plain(lines[tabsHeight]), "+-") {
+		t.Error("the old plus/minus is still there")
+	}
+}
+
+// Everything in the liked playlist is liked, so the column would say the
+// same thing all the way down.
+func TestTheLikedPlaylistDropsTheRatingColumn(t *testing.T) {
+	m := sample()
+	m.Tracks[0].Rating = RatingUp
+
+	elsewhere := plain(strings.Split(m.View().Content, "\n")[tabsHeight])
+
+	m.showingID = likedPlaylistID
+	liked := plain(strings.Split(m.View().Content, "\n")[tabsHeight])
+
+	if strings.Contains(liked, iconThumbUp) {
+		t.Errorf("the thumb is still drawn in the liked playlist: %q", liked)
+	}
+	if !strings.Contains(elsewhere, iconThumbUp) {
+		t.Fatalf("the comparison is wrong; no thumb elsewhere either: %q", elsewhere)
+	}
+	// The titles still start in the same column, so the two tabs line up.
+	// Columns, not byte offsets: the icon is four bytes and a space is one.
+	if column(liked, "Alpha") != column(elsewhere, "Alpha") {
+		t.Errorf("titles moved from column %d to %d:\n liked %q\n other %q",
+			column(elsewhere, "Alpha"), column(liked, "Alpha"), liked, elsewhere)
+	}
+	if lipgloss.Width(liked) != lipgloss.Width(elsewhere) {
+		t.Errorf("row widths differ: %d vs %d", lipgloss.Width(liked), lipgloss.Width(elsewhere))
+	}
+}
+
+// column is where a substring starts on screen, which is not where it starts
+// in the string.
+func column(line, needle string) int {
+	i := strings.Index(line, needle)
+	if i < 0 {
+		return -1
+	}
+	return lipgloss.Width(line[:i])
+}

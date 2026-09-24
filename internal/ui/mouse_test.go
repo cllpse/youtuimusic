@@ -509,11 +509,11 @@ func TestTheBarRowIsNothingButTheBar(t *testing.T) {
 	}
 	full := strings.Count(row, string(progress.DefaultFullCharHalfBlock))
 	empty := strings.Count(row, string(progress.DefaultEmptyCharBlock))
-	if full+empty != m.width {
-		t.Errorf("the bar is %d cells of %d", full+empty, m.width)
+	if full+empty != m.contentWidth() {
+		t.Errorf("the bar is %d cells of %d", full+empty, m.contentWidth())
 	}
 	// A quarter of the way in, a quarter of the bar should be filled.
-	if want := m.width / 4; full < want-2 || full > want+2 {
+	if want := m.contentWidth() / 4; full < want-2 || full > want+2 {
 		t.Errorf("%d cells filled, want about %d", full, want)
 	}
 }

@@ -29,12 +29,14 @@ const (
 	RatingDown
 )
 
+// glyph marks a rated row with the same icon the control below it uses, so
+// the two cannot be read as different things.
 func (r Rating) glyph() string {
 	switch r {
 	case RatingUp:
-		return "+"
+		return iconThumbUp
 	case RatingDown:
-		return "-"
+		return iconThumbDown
 	default:
 		return " "
 	}
@@ -676,10 +678,9 @@ func (m Model) controlsRow() int { return m.barRow() + 1 }
 // Rendering and hit-testing both go through this, so a click lands where the
 // bar appears to be. The bar is the whole row: nothing flanks it.
 func (m Model) barGeometry() (start, width int) {
-	if m.width < 4 {
-		return 0, 4
-	}
-	return 0, m.width
+	// Never wider than the box: a floor here would push the border out and
+	// take the whole frame with it.
+	return contentLeft, m.contentWidth()
 }
 
 // fraction is how far through the track the position is.
@@ -703,7 +704,7 @@ func (m Model) View() tea.View {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		m.renderTabs(),
 		m.renderTracks(m.width, m.bodyHeight()),
-		m.renderProgress(),
+		m.renderPlayer(),
 	)
 
 	v := tea.NewView(content)
@@ -782,7 +783,7 @@ func (m Model) renderTracks(width, height int) string {
 		row := i + m.trackOffset
 		line := ""
 		if row < len(m.Tracks) {
-			line = truncate(m.trackLine(m.Tracks[row], width), width)
+			line = truncate(m.trackLine(m.Tracks[row], width, m.showsRating()), width)
 			if row == m.trackCursor {
 				line = selected.Render(line)
 			}
@@ -795,17 +796,27 @@ func (m Model) renderTracks(width, height int) string {
 	return b.String()
 }
 
-func (m Model) trackLine(t Track, width int) string {
+// trackLine draws one row. The leading column is the same two cells whether
+// or not it holds a rating, so the titles line up across tabs.
+func (m Model) trackLine(t Track, width int, showRating bool) string {
 	const durCol, rateCol = 6, 2
+	prefix := "  "
+	if showRating {
+		prefix = t.Rating.glyph() + " "
+	}
 	rest := max(width-durCol-rateCol-2, 10)
 	titleW := rest / 2
 	artistW := rest - titleW
-	return fmt.Sprintf("%s %-*s %-*s %*s",
-		t.Rating.glyph(),
+	return fmt.Sprintf("%s%-*s %-*s %*s",
+		prefix,
 		titleW, truncate(t.Title, titleW),
 		artistW, truncate(t.Artist, artistW),
 		durCol, formatDuration(t.Duration))
 }
+
+// showsRating is false on the liked playlist, where every row is liked and
+// the column would say the same thing all the way down.
+func (m Model) showsRating() bool { return m.showingID != likedPlaylistID }
 
 // statusLine is the one line above the bar. Everything on it is cut to the
 // width: a long track title would otherwise push the frame wider than the
@@ -814,23 +825,45 @@ func (m Model) statusLine() string {
 	const pausedNote = "  paused"
 	switch {
 	case m.Searching:
-		return truncate("/"+m.Query+"█", m.width)
+		return truncate("/"+m.Query+"█", m.contentWidth())
 	case m.Err != nil:
-		return failed.Render(truncate(m.Err.Error(), m.width))
+		return failed.Render(truncate(m.Err.Error(), m.contentWidth()))
 	case m.loading:
-		return m.spin.View() + " " + dim.Render(truncate("Loading…", max(0, m.width-2)))
+		return m.spin.View() + " " + dim.Render(truncate("Loading…", max(0, m.contentWidth()-2)))
 	case m.NowPlaying != "" && m.Paused:
-		return truncate(m.NowPlaying, max(0, m.width-len(pausedNote))) + dim.Render(pausedNote)
+		return truncate(m.NowPlaying, max(0, m.contentWidth()-len(pausedNote))) + dim.Render(pausedNote)
 	case m.NowPlaying != "":
-		return truncate(m.NowPlaying, m.width)
+		return truncate(m.NowPlaying, m.contentWidth())
 	default:
-		return dim.Render(truncate("Ready", m.width))
+		return dim.Render(truncate("Ready", m.contentWidth()))
 	}
 }
 
-func (m Model) renderProgress() string {
-	return "\n" + m.statusLine() + "\n" + m.bar.ViewAs(m.fraction()) + "\n" +
-		m.renderControls() + "\n"
+// playerBox is the frame around the title, the bar and the controls. Its
+// border replaces the blank lines that used to separate them from the list,
+// so it costs no height.
+var playerBox = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(muted).
+	Padding(0, playerPadding)
+
+const (
+	playerBorder  = 1
+	playerPadding = 1
+	// contentLeft is the first column inside the box, and contentWidth what
+	// is left of the row once both sides are taken.
+	contentLeft = playerBorder + playerPadding
+)
+
+func (m Model) contentWidth() int { return max(0, m.width-2*contentLeft) }
+
+func (m Model) renderPlayer() string {
+	inner := lipgloss.JoinVertical(lipgloss.Left,
+		pad(m.statusLine(), m.contentWidth()),
+		m.bar.ViewAs(m.fraction()),
+		m.renderControls(),
+	)
+	return playerBox.Render(inner)
 }
 
 // barRamp is the bar's gradient, as ANSI palette entries. Naming the
