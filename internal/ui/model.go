@@ -116,6 +116,9 @@ type Model struct {
 
 	menu   trackMenu
 	detour detour
+	// history is the popovers behind the one in front. Going to an album
+	// from an artist comes back to the artist rather than to nothing.
+	history []detour
 
 	// playing is the track mpv is on, held whole rather than by id so the
 	// controls can still show and rate it after another tab is opened.
@@ -249,6 +252,12 @@ func (m Model) enterDetour(tab Playlist) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.menu = trackMenu{}
+	if m.detour.active {
+		// Copied rather than appended in place: the model is passed around
+		// by value, and a shared backing array would let one copy write
+		// over another's history.
+		m.history = append(append([]detour(nil), m.history...), m.detour)
+	}
 	m.detour = detour{active: true, tab: tab}
 
 	if tracks, ok := m.cache[tab.ID]; ok {
@@ -261,11 +270,24 @@ func (m Model) enterDetour(tab Playlist) (Model, tea.Cmd) {
 	return m, batch(m.startLoading(), m.scheduleTabLoad())
 }
 
-// leaveDetour closes it. Nothing has to be put back: the view underneath was
-// never touched.
+// leaveDetour steps back one popover, closing when there is nothing behind
+// this one. Nothing has to be put back: the view underneath was never
+// touched.
 func (m Model) leaveDetour() (Model, tea.Cmd) {
-	m.detour = detour{}
 	m.menu = trackMenu{}
+	if n := len(m.history); n > 0 {
+		m.detour = m.history[n-1]
+		m.history = m.history[: n-1 : n-1]
+		return m, nil
+	}
+	m.detour = detour{}
+	return m, nil
+}
+
+// closeDetour dismisses the popover and everything behind it, which is what
+// clicking away from one means.
+func (m Model) closeDetour() (Model, tea.Cmd) {
+	m.detour, m.history, m.menu = detour{}, nil, trackMenu{}
 	return m, nil
 }
 
@@ -390,6 +412,11 @@ func (m Model) rowCount() int {
 // page.
 func (m Model) atMoreRow() bool {
 	return m.more.More() && m.trackCursor == len(m.Tracks)
+}
+
+// viewingMoreRow reports whether the offer of another page is on screen.
+func (m Model) viewingMoreRow() bool {
+	return m.more.More() && m.trackOffset+m.bodyHeight() > len(m.Tracks)
 }
 
 // afterCursorMove warms the row the cursor landed on — or, when that row is

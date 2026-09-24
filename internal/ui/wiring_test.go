@@ -719,3 +719,68 @@ func TestAFailedPageIsReported(t *testing.T) {
 		t.Error("the offer was thrown away on a failure")
 	}
 }
+
+// Scrolling to the end of a list asks for more of it, as walking to the end
+// does. A reader using the wheel should not have to reach for the keyboard.
+func TestScrollingToTheEndFetchesTheNextPage(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.tracks["LM"] = fromUI(rows(40))
+	lib.next = ytm.Continuation{Endpoint: "browse", Token: "more"}
+	lib.morePage = fromUI([]Track{{VideoID: "z", Title: "from page two"}})
+
+	m := wired(t, lib, st, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}}
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+	before := len(m.Tracks)
+
+	for range 40 {
+		if len(m.Tracks) != before {
+			break
+		}
+		next, cmd := m.Update(wheel(trackX, trackRow(0), tea.MouseWheelDown))
+		m = drain(t, next.(Model), cmd)
+	}
+
+	if len(m.Tracks) != before+1 {
+		t.Fatalf("tracks = %d, want the next page appended", len(m.Tracks))
+	}
+	// The selection stayed put, as the wheel always leaves it.
+	if m.trackCursor != 0 {
+		t.Errorf("the wheel moved the cursor to %d", m.trackCursor)
+	}
+}
+
+// And the popover pages on the wheel too.
+func TestScrollingThePopoverFetchesItsNextPage(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.tracks["MPREbCherry"] = fromUI(rows(30))
+	lib.next = ytm.Continuation{Endpoint: "browse", Token: "more"}
+	lib.morePage = fromUI([]Track{{VideoID: "z", Title: "from page two"}})
+
+	m := wired(t, lib, st, newFakeAudio())
+	m.Tracks = fromAPI([]ytm.Track{{VideoID: "a", Title: "Poly", AlbumID: "MPREbCherry"}})
+	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
+	m = drain(t, next.(Model), cmd)
+	x, y := rowAt(m, menuAlbum)
+	next, cmd = m.Update(click(x, y))
+	m = drain(t, next.(Model), cmd)
+	before := len(m.detour.tracks)
+
+	inside := m.width / 2
+	_, my, _, _ := m.modalBounds()
+	for range 40 {
+		if len(m.detour.tracks) != before {
+			break
+		}
+		next, cmd := m.Update(wheel(inside, my+modalHeader+1, tea.MouseWheelDown))
+		m = drain(t, next.(Model), cmd)
+	}
+
+	if len(m.detour.tracks) != before+1 {
+		t.Fatalf("popover tracks = %d, want the next page", len(m.detour.tracks))
+	}
+	if len(m.Tracks) != 1 {
+		t.Errorf("the page landed on the list behind it: %d rows", len(m.Tracks))
+	}
+}

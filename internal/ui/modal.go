@@ -42,8 +42,12 @@ func (m Model) modalListHeight() int {
 	return max(height-2-modalHeader, 1)
 }
 
-// iconSearch heads the search popover's input.
-const iconSearch = "\U000f0349" // md-magnify
+const (
+	// iconSearch heads the search popover's input.
+	iconSearch = "\U000f0349" // md-magnify
+	// iconBack marks a popover that has another behind it.
+	iconBack = "\U000f004d" // md-arrow_left
+)
 
 func (m Model) modalIcon() string {
 	switch m.detour.tab.kind {
@@ -66,7 +70,9 @@ func (m Model) modalKind() string {
 
 // openSearch opens the popover on an empty query, with the input focused.
 func (m Model) openSearch() (tea.Model, tea.Cmd) {
-	m.menu = trackMenu{}
+	// A search is a fresh start rather than another step, so there is
+	// nothing behind it to go back to.
+	m.menu, m.history = trackMenu{}, nil
 	m.detour = detour{
 		active: true,
 		tab:    Playlist{Title: "Search", kind: tabSearch},
@@ -80,6 +86,9 @@ func (m Model) openSearch() (tea.Model, tea.Cmd) {
 func (m Model) modalHeader(inner int) string {
 	if m.detour.tab.kind != tabSearch {
 		label := m.modalIcon() + menuGap + m.modalKind()
+		if len(m.history) > 0 {
+			label = iconBack + menuGap + label
+		}
 		room := inner - lipgloss.Width(label) - len(menuGap)
 		return active.Render(label) + menuGap +
 			pad(truncate(m.detour.tab.Title, max(room, 0)), max(room, 0))
@@ -194,6 +203,13 @@ func (m Model) modalHit(x, y int) (int, bool) {
 	return row, true
 }
 
+// viewingDetourMoreRow reports whether the popover is showing its offer of
+// another page.
+func (m Model) viewingDetourMoreRow() bool {
+	return m.detour.more.More() &&
+		m.detour.offset+m.modalListHeight() > len(m.detour.tracks)
+}
+
 // scrollDetour moves the popover's window without moving its selection, the
 // way the wheel behaves on the list underneath.
 func (m *Model) scrollDetour(delta int) {
@@ -214,6 +230,10 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
 			m.detour.typing = true
 			return m, nil, true
 		}
+		// A search from inside a popover is still a fresh start, not
+		// another step on from wherever this got to.
+		next, cmd := m.openSearch()
+		return next, cmd, true
 	case "esc":
 		next, cmd := m.leaveDetour()
 		return next, cmd, true
@@ -267,7 +287,8 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
 // popover when the click lands outside it.
 func (m Model) clickModal(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	if !m.modalContains(mouse.X, mouse.Y) {
-		return m.leaveDetour()
+		// Clicking away dismisses the lot; esc is what steps back.
+		return m.closeDetour()
 	}
 	row, ok := m.modalHit(mouse.X, mouse.Y)
 	if !ok {

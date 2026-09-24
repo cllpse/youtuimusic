@@ -105,6 +105,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if m.detour.active {
 			if m.modalContains(mouse.X, mouse.Y) {
 				m.scrollDetour(wheelDelta(mouse) * wheelStep)
+				if m.viewingDetourMoreRow() {
+					return m.fetchMore(true)
+				}
 			}
 			return m, nil
 		}
@@ -241,6 +244,10 @@ func (m Model) handleWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		return m.selectTab(m.tabCursor + delta)
 	case regionTracks:
 		m.scrollBy(delta * wheelStep)
+		// Scrolling to the end of a list is the same as walking to it.
+		if m.viewingMoreRow() {
+			return m.fetchMore(false)
+		}
 	}
 	return m, nil
 }

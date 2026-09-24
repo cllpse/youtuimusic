@@ -48,8 +48,8 @@ play is worth more than any speedup to resolving itself.
 server — 100 tracks for a playlist, 20 results for a search — and reads cost
 what they page: 100 tracks ≈ 0.8 s, 529 tracks ≈ 2.7 s. So a page comes back
 with the token for the next rather than the requests being spent up front,
-and a list that has more ends with a row offering it. Reaching that row, by
-walking onto it or clicking it, is what asks.
+and a list that has more ends with a row offering it. Reaching that row —
+walking onto it, scrolling to it, or clicking it — is what asks.
 
 ## Using it
 

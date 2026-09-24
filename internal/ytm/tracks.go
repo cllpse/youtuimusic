@@ -198,8 +198,8 @@ func parseReleases(raw json.RawMessage) []Track {
 		}
 		seen[id] = true
 		out = append(out, Track{
-			Title:   runsText(item["title"]),
-			Artist:  runsText(item["subtitle"]),
+			Title:   tidy(runsText(item["title"])),
+			Artist:  tidy(runsText(item["subtitle"])),
 			AlbumID: id,
 		})
 	}
@@ -249,7 +249,9 @@ func parseTracks(raw json.RawMessage) ([]Track, error) {
 			ArtistID: browseTarget(item, pageTypeArtist),
 			Rating:   ratingOf(item),
 		}
+		t.Title = tidy(t.Title)
 		t.Artist, t.Album = artistAndAlbum(item)
+		t.Artist, t.Album = tidy(t.Artist), tidy(t.Album)
 		if t.Duration == 0 {
 			t.Duration = durationIn(flexColumn(item, 1))
 		}
@@ -319,6 +321,14 @@ func linkedText(item map[string]any, pageType string) string {
 		}
 	}
 	return ""
+}
+
+// tidy replaces the bullet YouTube draws between the parts of a field with
+// a separator that reads as text. A release's subtitle is "Album • 2017",
+// and a bullet in the middle of a line reads as a glyph that went wrong.
+func tidy(s string) string {
+	s = strings.ReplaceAll(s, " • ", ", ")
+	return strings.TrimSpace(strings.ReplaceAll(s, "•", ", "))
 }
 
 // rowTypes are the words a search result leads with, which name the kind of

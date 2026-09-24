@@ -519,3 +519,46 @@ func TestArtistPageIncludesReleases(t *testing.T) {
 }
 
 func itoa(i int) string { return strconv.Itoa(i) }
+
+// The bullet YouTube draws between parts of a field reads as a glyph that
+// went wrong in the middle of a line.
+func TestBulletsBecomeCommas(t *testing.T) {
+	tile := func(title, id, subtitle string) string {
+		return `{"musicTwoRowItemRenderer":{
+		  "title":{"runs":[{"text":"` + title + `"}]},
+		  "subtitle":{"runs":[{"text":"` + subtitle + `"}]},
+		  "navigationEndpoint":{"browseEndpoint":{"browseId":"` + id + `",
+		    "browseEndpointContextSupportedConfigs":{
+		      "browseEndpointContextMusicConfig":{"pageType":"MUSIC_PAGE_TYPE_ALBUM"}}}}}}`
+	}
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(signedInBody(tile("Cherry", "MPREbC", "Album • 2017"))))
+	})
+	page, err := c.ArtistPage(context.Background(), "UCd")
+	if err != nil {
+		t.Fatalf("ArtistPage: %v", err)
+	}
+	if len(page.Tracks) != 1 {
+		t.Fatalf("got %d rows", len(page.Tracks))
+	}
+	if got := page.Tracks[0].Artist; got != "Album, 2017" {
+		t.Errorf("subtitle = %q, want the bullet replaced", got)
+	}
+	if strings.Contains(page.Tracks[0].Artist, "•") {
+		t.Error("a bullet survived")
+	}
+}
+
+func TestTidy(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"Album • 2017", "Album, 2017"},
+		{"a•b", "a, b"},
+		{"no separator", "no separator"},
+		{"  padded • thing  ", "padded, thing"},
+		{"", ""},
+	} {
+		if got := tidy(tc.in); got != tc.want {
+			t.Errorf("tidy(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

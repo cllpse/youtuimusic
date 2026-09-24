@@ -605,3 +605,110 @@ func TestThePopoverOffersItsNextPage(t *testing.T) {
 		t.Error("the popover's page landed on the list behind it")
 	}
 }
+
+// From an artist to one of their albums and back again. Going somewhere
+// should be undoable.
+func TestGoingBackFromAnAlbumReturnsToTheArtist(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.tracks["UCdaphni"] = []ytm.Track{
+		{VideoID: "d1", Title: "Daphni Track"},
+		{Title: "Cherry", AlbumID: "MPREbCherry"}, // a release on the page
+	}
+
+	m = openVia(t, m, menuArtist)
+	if m.detour.tab.Title != "DAPHNI" {
+		t.Fatalf("first hop landed on %q", m.detour.tab.Title)
+	}
+	// Move down to the release and open it.
+	next, cmd := m.Update(keyPress("j"))
+	m = drain(t, next.(Model), cmd)
+	next, cmd = m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+
+	if m.detour.tab.kind != tabAlbum || m.detour.tab.Title != "Cherry" {
+		t.Fatalf("the album did not open: %+v", m.detour.tab)
+	}
+	if len(m.history) != 1 {
+		t.Fatalf("history is %d deep, want the artist behind it", len(m.history))
+	}
+
+	next, cmd = m.Update(keyPress("esc"))
+	m = drain(t, next.(Model), cmd)
+	if !m.detour.active {
+		t.Fatal("esc closed the popover instead of stepping back")
+	}
+	if m.detour.tab.Title != "DAPHNI" {
+		t.Errorf("came back to %q", m.detour.tab.Title)
+	}
+	// And where the reader was in it.
+	if m.detour.cursor != 1 {
+		t.Errorf("the artist's cursor is at %d, want where it was left", m.detour.cursor)
+	}
+
+	next, cmd = m.Update(keyPress("esc"))
+	if drain(t, next.(Model), cmd).detour.active {
+		t.Error("the second esc should close, there being nothing behind")
+	}
+}
+
+// Clicking away dismisses the lot rather than stepping back through it.
+func TestClickingAwayClosesEveryPopover(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
+
+	m = openVia(t, m, menuArtist)
+	next, cmd := m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+	if len(m.history) != 1 {
+		t.Fatalf("history is %d deep", len(m.history))
+	}
+
+	x, y, _, _ := m.modalBounds()
+	next, cmd = m.Update(click(max(x-1, 0), max(y-1, 0)))
+	m = drain(t, next.(Model), cmd)
+
+	if m.detour.active || len(m.history) != 0 {
+		t.Errorf("active=%v history=%d, want everything closed", m.detour.active, len(m.history))
+	}
+}
+
+// A popover with something behind it says so.
+func TestAPopoverWithHistoryShowsTheWayBack(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
+
+	m = openVia(t, m, menuArtist)
+	if header := plain(strings.Split(m.renderModal(), "\n")[1]); strings.Contains(header, iconBack) {
+		t.Errorf("the first popover offers a way back: %q", header)
+	}
+
+	next, cmd := m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+	header := plain(strings.Split(m.renderModal(), "\n")[1])
+	if !strings.Contains(header, iconBack) {
+		t.Errorf("no way back shown on %q", header)
+	}
+	if !strings.Contains(header, "Album") {
+		t.Errorf("the header stopped saying what it shows: %q", header)
+	}
+}
+
+// A search starts over rather than stacking on whatever was open.
+func TestSearchClearsWhatWasBehindIt(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
+
+	m = openVia(t, m, menuArtist)
+	next, cmd := m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+
+	next, _ = m.Update(keyPress("/"))
+	m = next.(Model)
+	if len(m.history) != 0 {
+		t.Errorf("history is %d deep behind a search", len(m.history))
+	}
+	next, cmd = m.Update(keyPress("esc"))
+	if drain(t, next.(Model), cmd).detour.active {
+		t.Error("esc from a search should close, not step back")
+	}
+}
