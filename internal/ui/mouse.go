@@ -19,6 +19,7 @@ const (
 	regionTabs
 	regionTracks
 	regionBar
+	regionControls
 )
 
 // hit maps a screen position onto what is drawn there: a tab index, a track
@@ -44,6 +45,14 @@ func (m Model) hit(x, y int) (region, int) {
 
 	case y == m.barRow():
 		return regionBar, x
+
+	case y == m.controlsRow():
+		for _, btn := range m.controlButtons() {
+			if x >= btn.start && x < btn.end {
+				return regionControls, int(btn.control)
+			}
+		}
+		return regionNone, 0
 	}
 	return regionNone, 0
 }
@@ -101,10 +110,12 @@ func (m Model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		m.scroll()
 		t := m.Tracks[n]
 		if again {
-			m.NowPlaying, m.Position, m.Length = nowPlaying(t), 0, t.Duration
-			return m, m.play(t)
+			return m.start(t)
 		}
 		return m, m.prefetch(t.VideoID)
+
+	case regionControls:
+		return m.press(control(n))
 
 	case regionBar:
 		if m.Length <= 0 {

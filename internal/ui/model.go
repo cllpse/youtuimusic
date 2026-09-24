@@ -86,10 +86,11 @@ type Model struct {
 	// searchTitle labels the results tab, and is empty when there is none.
 	searchTitle string
 
-	// playingID is the track mpv is on, which is not necessarily the one
-	// under the cursor — it is what "next" is relative to when a track ends.
-	playingID string
-	loading   bool
+	// playing is the track mpv is on, held whole rather than by id so the
+	// controls can still show and rate it after another tab is opened.
+	playing Track
+	repeat  Repeat
+	loading bool
 
 	// tracks already fetched, by tab id, so going back to a tab is instant.
 	cache map[string][]Track
@@ -366,9 +367,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case playingMsg:
-		m.playingID, m.NowPlaying, m.Length = msg.videoID, msg.title, msg.length
+		m.NowPlaying, m.Length = msg.title, msg.length
 		m.Position, m.Paused, m.Err = 0, false, nil
-		if next, ok := m.trackAfter(msg.videoID); ok {
+		m.playing = msg.track
+		if next, ok := m.following(); ok && next.VideoID != m.playing.VideoID {
 			return m, m.prefetch(next.VideoID)
 		}
 		return m, nil
@@ -406,7 +408,7 @@ func (m Model) handleEvent(ev player.Event) (tea.Model, tea.Cmd) {
 		// mpv reports this at the end of a file, which is where a playlist
 		// advances on its own.
 		if b, ok := ev.Data.(bool); ok && b {
-			if next, ok := m.trackAfter(m.playingID); ok {
+			if next, ok := m.following(); ok {
 				return m, batch(m.watchEvents(), m.play(next))
 			}
 		}
@@ -448,13 +450,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		if t, ok := m.SelectedTrack(); ok {
-			// Show the track at once; resolving it takes a moment.
-			m.NowPlaying, m.Position, m.Length = nowPlaying(t), 0, t.Duration
-			return m, m.play(t)
+			return m.start(t)
 		}
 
 	case " ", "space":
-		return m, m.togglePause()
+		return m.press(controlPlayPause)
+
+	case "n":
+		return m.press(controlNext)
+	case "p":
+		return m.press(controlPrevious)
+	case "r":
+		return m.press(controlRepeat)
 
 	case "left", "h", "shift+tab":
 		return m.selectTab(m.tabCursor - 1)
@@ -510,18 +517,12 @@ func (m Model) schedulePrefetch() (tea.Model, tea.Cmd) {
 	})
 }
 
-// trackAfter returns the row following a video id, which is what plays when
-// the current one ends.
-func (m Model) trackAfter(videoID string) (Track, bool) {
-	for i, t := range m.Tracks {
-		if t.VideoID == videoID && i+1 < len(m.Tracks) {
-			return m.Tracks[i+1], true
-		}
-	}
-	return Track{}, false
-}
-
+// setRating puts a rating on the row and on the playing track, which are
+// not always the same object.
 func (m *Model) setRating(videoID string, r Rating) {
+	if m.playing.VideoID == videoID {
+		m.playing.Rating = r
+	}
 	for i := range m.Tracks {
 		if m.Tracks[i].VideoID == videoID {
 			m.Tracks[i].Rating = r
@@ -540,12 +541,13 @@ func (m Model) applyRating(r Rating) (tea.Model, tea.Cmd) {
 	if m.trackCursor >= len(m.Tracks) {
 		return m, nil
 	}
+	videoID := m.Tracks[m.trackCursor].VideoID
 	previous := m.Tracks[m.trackCursor].Rating
 	if previous == r {
 		r = RatingNone
 	}
-	m.Tracks[m.trackCursor].Rating = r
-	return m, m.rate(m.Tracks[m.trackCursor].VideoID, r, previous)
+	m.setRating(videoID, r)
+	return m, m.rate(videoID, r, previous)
 }
 
 // --------------------------------------------------------------- view ----
@@ -605,7 +607,7 @@ var (
 
 const (
 	tabsHeight   = 3 // border, label, border
-	progressRows = 4 // blank, title, bar, blank
+	progressRows = 5 // blank, title, bar, controls, blank
 	maxTabTitle  = 18
 	tabFurniture = 4 // a border and a space either side
 )
@@ -620,6 +622,9 @@ func (m Model) bodyHeight() int {
 
 // barRow is the line the progress bar is drawn on.
 func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 2 }
+
+// controlsRow is the line of buttons under the bar.
+func (m Model) controlsRow() int { return m.barRow() + 1 }
 
 // barGeometry is the column the progress bar starts at and how wide it is.
 // Rendering and hit-testing both go through this, so a click lands where the
@@ -731,7 +736,7 @@ func (m Model) renderTracks(width, height int) string {
 		row := i + m.trackOffset
 		line := ""
 		if row < len(m.Tracks) {
-			line = m.trackLine(m.Tracks[row], width)
+			line = truncate(m.trackLine(m.Tracks[row], width), width)
 			if row == m.trackCursor {
 				line = selected.Render(line)
 			}
@@ -756,27 +761,30 @@ func (m Model) trackLine(t Track, width int) string {
 		durCol, formatDuration(t.Duration))
 }
 
-// statusLine is the one line above the bar.
+// statusLine is the one line above the bar. Everything on it is cut to the
+// width: a long track title would otherwise push the frame wider than the
+// terminal and take every other row with it.
 func (m Model) statusLine() string {
+	const pausedNote = "  paused"
 	switch {
 	case m.Searching:
-		return "/" + m.Query + "█"
+		return truncate("/"+m.Query+"█", m.width)
 	case m.Err != nil:
 		return failed.Render(truncate(m.Err.Error(), m.width))
 	case m.loading:
-		return m.spin.View() + " " + dim.Render("Loading…")
+		return m.spin.View() + " " + dim.Render(truncate("Loading…", max(0, m.width-2)))
+	case m.NowPlaying != "" && m.Paused:
+		return truncate(m.NowPlaying, max(0, m.width-len(pausedNote))) + dim.Render(pausedNote)
 	case m.NowPlaying != "":
-		if m.Paused {
-			return m.NowPlaying + dim.Render("  paused")
-		}
-		return m.NowPlaying
+		return truncate(m.NowPlaying, m.width)
 	default:
-		return dim.Render("Ready")
+		return dim.Render(truncate("Ready", m.width))
 	}
 }
 
 func (m Model) renderProgress() string {
-	return "\n" + m.statusLine() + "\n" + m.bar.ViewAs(m.fraction()) + "\n"
+	return "\n" + m.statusLine() + "\n" + m.bar.ViewAs(m.fraction()) + "\n" +
+		m.renderControls() + "\n"
 }
 
 // barRamp is the bar's gradient, as ANSI palette entries. Naming the

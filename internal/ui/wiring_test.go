@@ -349,15 +349,15 @@ func TestTrackEndPlaysTheNextOne(t *testing.T) {
 	au := newFakeAudio(player.Event{Name: "eof-reached", Data: true})
 	m := wired(t, lib, st, au)
 	m.Tracks = fromAPI(lib.tracks["LM"])
-	m.playingID = "a"
+	m.playing = m.Tracks[0]
 
 	m = drain(t, m, m.watchEvents())
 
 	if len(st.resolved) == 0 || st.resolved[0] != "b" {
 		t.Fatalf("resolved = %v, want the following track", st.resolved)
 	}
-	if m.playingID != "b" {
-		t.Errorf("playing = %q, want b", m.playingID)
+	if m.playing.VideoID != "b" {
+		t.Errorf("playing = %q, want b", m.playing.VideoID)
 	}
 }
 
@@ -367,7 +367,7 @@ func TestTrackEndAtTheEndOfTheListStops(t *testing.T) {
 	au := newFakeAudio(player.Event{Name: "eof-reached", Data: true})
 	m := wired(t, lib, st, au)
 	m.Tracks = fromAPI(lib.tracks["LM"])
-	m.playingID = "b"
+	m.playing = m.Tracks[1]
 
 	m = drain(t, m, m.watchEvents())
 
@@ -426,15 +426,34 @@ func TestTabMovementDoesNotPrefetch(t *testing.T) {
 	}
 }
 
-func TestSpaceTogglesPause(t *testing.T) {
-	au := newFakeAudio()
-	m := wired(t, library(), &fakeStreams{}, au)
+func TestSpaceTogglesPauseWhileSomethingPlays(t *testing.T) {
+	lib, au := library(), newFakeAudio()
+	m := wired(t, lib, &fakeStreams{}, au)
+	m.Tracks = fromAPI(lib.tracks["LM"])
+	m.playing = m.Tracks[0]
 
 	next, cmd := m.Update(keyPress(" "))
 	drain(t, next.(Model), cmd)
 
 	if au.toggles != 1 {
 		t.Fatalf("toggles = %d", au.toggles)
+	}
+}
+
+// With nothing playing there is nothing to pause, so it is a play button.
+func TestSpaceStartsTheHighlightedTrack(t *testing.T) {
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	m := wired(t, lib, st, au)
+	m.Tracks = fromAPI(lib.tracks["LM"])
+
+	next, cmd := m.Update(keyPress(" "))
+	m = drain(t, next.(Model), cmd)
+
+	if au.toggles != 0 {
+		t.Errorf("toggled pause with nothing playing")
+	}
+	if len(au.loaded) != 1 || m.playing.VideoID != "a" {
+		t.Fatalf("loaded %v, playing %q", au.loaded, m.playing.VideoID)
 	}
 }
 
@@ -535,7 +554,7 @@ func TestAFailureToUnpauseIsReported(t *testing.T) {
 	if m.Err == nil {
 		t.Fatal("no error reported")
 	}
-	if m.NowPlaying == "A — Alpha" && m.playingID != "" {
+	if m.NowPlaying == "A — Alpha" && m.playing.VideoID != "" {
 		t.Error("reported as playing despite failing to start")
 	}
 }

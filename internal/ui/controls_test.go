@@ -1,0 +1,363 @@
+package ui
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
+	"github.com/cllpse/youtuimusic/internal/player"
+	"github.com/cllpse/youtuimusic/internal/ytm"
+)
+
+// playingModel is wired up with a track already playing, which is the state
+// most of the controls only mean something in.
+func playingModel(t *testing.T) (Model, *fakeLibrary, *fakeStreams, *fakeAudio) {
+	t.Helper()
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	m := wired(t, lib, st, au)
+	m.Tracks = fromAPI(lib.tracks["LM"])
+	m.playing = m.Tracks[0]
+	m.Length = 3 * time.Minute
+	return m, lib, st, au
+}
+
+func controlsLine(m Model) string {
+	return strings.Split(m.View().Content, "\n")[m.controlsRow()]
+}
+
+// buttonAt finds a control in the laid-out row.
+func buttonAt(m Model, c control) (button, bool) {
+	for _, b := range m.controlButtons() {
+		if b.control == c {
+			return b, true
+		}
+	}
+	return button{}, false
+}
+
+func TestControlsSitLeftCentreAndRight(t *testing.T) {
+	m, _, _, _ := playingModel(t)
+	row := plain(controlsLine(m))
+
+	if got := lipgloss.Width(row); got != m.width {
+		t.Fatalf("the controls row is %d cells, want %d", got, m.width)
+	}
+
+	// Transport against the left edge, in order.
+	for i, c := range []control{controlPrevious, controlPlayPause, controlNext} {
+		b, ok := buttonAt(m, c)
+		if !ok {
+			t.Fatalf("control %v is missing", c)
+		}
+		if b.start != i*buttonWidth {
+			t.Errorf("control %v starts at %d, want %d", c, b.start, i*buttonWidth)
+		}
+	}
+
+	// Thumbs centred on the row.
+	up, _ := buttonAt(m, controlThumbUp)
+	down, _ := buttonAt(m, controlThumbDown)
+	span := down.end - up.start
+	if middle, want := up.start+span/2, m.width/2; middle != want {
+		t.Errorf("the thumbs are centred on %d, want %d", middle, want)
+	}
+
+	// Repeat against the right edge.
+	rep, _ := buttonAt(m, controlRepeat)
+	if rep.end != m.width {
+		t.Errorf("repeat ends at %d, want the right edge %d", rep.end, m.width)
+	}
+
+	// And they are where the row actually draws them.
+	for _, b := range m.controlButtons() {
+		if !strings.Contains(row[colToByte(row, b.start):colToByte(row, b.end)], b.icon) {
+			t.Errorf("control %v is not drawn in its own columns %d-%d", b.control, b.start, b.end)
+		}
+	}
+}
+
+// colToByte converts a column into a byte offset, since the icons are
+// multi-byte.
+func colToByte(s string, col int) int {
+	seen := 0
+	for i, r := range s {
+		if seen == col {
+			return i
+		}
+		seen += lipgloss.Width(string(r))
+	}
+	return len(s)
+}
+
+func TestPlayPauseIconFollowsTheState(t *testing.T) {
+	m, _, _, _ := playingModel(t)
+	if got := m.playPauseIcon(); got != iconPause {
+		t.Errorf("playing shows %q, want the pause bars", got)
+	}
+	m.Paused = true
+	if got := m.playPauseIcon(); got != iconPlay {
+		t.Errorf("paused shows %q, want the play triangle", got)
+	}
+	m.playing = Track{}
+	if got := m.playPauseIcon(); got != iconPlay {
+		t.Errorf("idle shows %q, want the play triangle", got)
+	}
+}
+
+func TestThumbIconsFollowTheRating(t *testing.T) {
+	m, _, _, _ := playingModel(t)
+
+	up, _ := buttonAt(m, controlThumbUp)
+	down, _ := buttonAt(m, controlThumbDown)
+	if up.icon != iconThumbUpOff || down.icon != iconThumbDownOff {
+		t.Errorf("unrated shows %q/%q, want the outlines", up.icon, down.icon)
+	}
+	if up.lit || down.lit {
+		t.Error("unrated thumbs should not be lit")
+	}
+
+	m.playing.Rating = RatingUp
+	up, _ = buttonAt(m, controlThumbUp)
+	down, _ = buttonAt(m, controlThumbDown)
+	if up.icon != iconThumbUp || !up.lit {
+		t.Errorf("rated up shows %q lit=%v", up.icon, up.lit)
+	}
+	if down.icon != iconThumbDownOff {
+		t.Errorf("the other thumb changed to %q", down.icon)
+	}
+
+	m.playing.Rating = RatingDown
+	down, _ = buttonAt(m, controlThumbDown)
+	if down.icon != iconThumbDown || !down.lit {
+		t.Errorf("rated down shows %q lit=%v", down.icon, down.lit)
+	}
+}
+
+func TestRepeatCyclesThroughItsThreeStates(t *testing.T) {
+	m, _, _, _ := playingModel(t)
+	want := []struct {
+		state Repeat
+		icon  string
+		lit   bool
+	}{
+		{RepeatAll, iconRepeatAll, true},
+		{RepeatOne, iconRepeatOne, true},
+		{RepeatOff, iconRepeatOff, false},
+	}
+	if b, _ := buttonAt(m, controlRepeat); b.icon != iconRepeatOff || b.lit {
+		t.Fatalf("starts at %q lit=%v, want repeat-off unlit", b.icon, b.lit)
+	}
+	for _, step := range want {
+		next, _ := m.Update(keyPress("r"))
+		m = next.(Model)
+		if m.repeat != step.state {
+			t.Fatalf("repeat = %v, want %v", m.repeat, step.state)
+		}
+		b, _ := buttonAt(m, controlRepeat)
+		if b.icon != step.icon || b.lit != step.lit {
+			t.Errorf("%v shows %q lit=%v, want %q lit=%v", step.state, b.icon, b.lit, step.icon, step.lit)
+		}
+	}
+}
+
+// Repeat decides what happens when mpv reports the end of a track.
+func TestRepeatDecidesWhatPlaysNext(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		repeat  Repeat
+		playing int // index in a two-track list
+		want    string
+	}{
+		{"off, mid-list", RepeatOff, 0, "b"},
+		{"off, at the end", RepeatOff, 1, ""},
+		{"all, at the end wraps", RepeatAll, 1, "a"},
+		{"one replays the same", RepeatOne, 0, "a"},
+		{"one at the end still replays", RepeatOne, 1, "b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lib, st := library(), &fakeStreams{}
+			au := newFakeAudio(player.Event{Name: "eof-reached", Data: true})
+			m := wired(t, lib, st, au)
+			m.Tracks = fromAPI(lib.tracks["LM"])
+			m.playing, m.repeat = m.Tracks[tc.playing], tc.repeat
+
+			m = drain(t, m, m.watchEvents())
+
+			if tc.want == "" {
+				if len(st.resolved) != 0 {
+					t.Fatalf("resolved %v, want nothing to follow", st.resolved)
+				}
+				return
+			}
+			if len(st.resolved) == 0 || st.resolved[0] != tc.want {
+				t.Fatalf("resolved %v, want %q", st.resolved, tc.want)
+			}
+		})
+	}
+}
+
+func TestPreviousGoesBackAndStopsAtTheStart(t *testing.T) {
+	m, _, st, _ := playingModel(t)
+	m.playing = m.Tracks[1]
+
+	next, cmd := m.Update(keyPress("p"))
+	m = drain(t, next.(Model), cmd)
+	if len(st.resolved) != 1 || st.resolved[0] != "a" {
+		t.Fatalf("resolved %v, want the earlier track", st.resolved)
+	}
+
+	// Already at the start, and not wrapping unless repeat says to.
+	next, cmd = m.Update(keyPress("p"))
+	m = drain(t, next.(Model), cmd)
+	if len(st.resolved) != 1 {
+		t.Errorf("resolved %v; there is nothing before the first track", st.resolved)
+	}
+
+	m.repeat = RepeatAll
+	next, cmd = m.Update(keyPress("p"))
+	drain(t, next.(Model), cmd)
+	if len(st.resolved) != 2 || st.resolved[1] != "b" {
+		t.Errorf("resolved %v, want a wrap to the last track", st.resolved)
+	}
+}
+
+func TestClickingTheControls(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		which control
+		check func(t *testing.T, m Model, st *fakeStreams, au *fakeAudio, lib *fakeLibrary)
+	}{
+		{"next", controlNext, func(t *testing.T, m Model, st *fakeStreams, _ *fakeAudio, _ *fakeLibrary) {
+			if len(st.resolved) != 1 || st.resolved[0] != "b" {
+				t.Errorf("resolved %v", st.resolved)
+			}
+		}},
+		{"play/pause", controlPlayPause, func(t *testing.T, _ Model, _ *fakeStreams, au *fakeAudio, _ *fakeLibrary) {
+			if au.toggles != 1 {
+				t.Errorf("toggles = %d", au.toggles)
+			}
+		}},
+		{"thumb up", controlThumbUp, func(t *testing.T, m Model, _ *fakeStreams, _ *fakeAudio, lib *fakeLibrary) {
+			if len(lib.rated) != 1 || lib.rated[0].videoID != "a" {
+				t.Errorf("rated %+v", lib.rated)
+			}
+			if m.playing.Rating != RatingUp {
+				t.Errorf("playing rating = %v", m.playing.Rating)
+			}
+		}},
+		{"repeat", controlRepeat, func(t *testing.T, m Model, _ *fakeStreams, _ *fakeAudio, _ *fakeLibrary) {
+			if m.repeat != RepeatAll {
+				t.Errorf("repeat = %v", m.repeat)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, lib, st, au := playingModel(t)
+			b, ok := buttonAt(m, tc.which)
+			if !ok {
+				t.Fatalf("control %v is not on the row", tc.which)
+			}
+			next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+			m = drain(t, next.(Model), cmd)
+			tc.check(t, m, st, au, lib)
+		})
+	}
+}
+
+// Every column of every button has to answer, or the edges are dead.
+func TestControlsHitTestingCoversEveryColumn(t *testing.T) {
+	m, _, _, _ := playingModel(t)
+	for _, b := range m.controlButtons() {
+		for x := b.start; x < b.end; x++ {
+			where, n := m.hit(x, m.controlsRow())
+			if where != regionControls || control(n) != b.control {
+				t.Errorf("column %d of %v gave %v, %d", x, b.control, where, n)
+			}
+		}
+	}
+	// And the space between groups is not a button.
+	if where, _ := m.hit(3*buttonWidth+1, m.controlsRow()); where != regionNone {
+		t.Errorf("the gap answered %v", where)
+	}
+}
+
+// The thumbs are beside the transport, so they rate what plays — not
+// whatever row the cursor happens to be on.
+func TestThumbsRateThePlayingTrackNotTheSelection(t *testing.T) {
+	m, lib, _, _ := playingModel(t)
+	m.trackCursor = 1 // highlight the other track
+
+	b, _ := buttonAt(m, controlThumbUp)
+	next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+	m = drain(t, next.(Model), cmd)
+
+	if len(lib.rated) != 1 || lib.rated[0].videoID != "a" {
+		t.Fatalf("rated %+v, want the playing track", lib.rated)
+	}
+	if m.Tracks[1].Rating != RatingNone {
+		t.Error("the highlighted row was rated instead")
+	}
+	// The key still rates the selection, which is the other half of the pair.
+	next, cmd = m.Update(keyPress("+"))
+	m = drain(t, next.(Model), cmd)
+	if len(lib.rated) != 2 || lib.rated[1].videoID != "b" {
+		t.Fatalf("rated %+v, want the highlighted row", lib.rated)
+	}
+}
+
+// A rating clears on a second press, through the controls as through the keys.
+func TestTheThumbControlTogglesOff(t *testing.T) {
+	m, lib, _, _ := playingModel(t)
+	b, _ := buttonAt(m, controlThumbUp)
+
+	for range 2 {
+		next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+		m = drain(t, next.(Model), cmd)
+	}
+	if len(lib.rated) != 2 || lib.rated[1].rating != ytm.RatingNone {
+		t.Fatalf("rated %+v", lib.rated)
+	}
+	if m.playing.Rating != RatingNone {
+		t.Errorf("rating = %v, want cleared", m.playing.Rating)
+	}
+}
+
+// Idle, the transport has nothing to act on and says so.
+func TestTransportIsUnlitWithNothingPlaying(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	for _, c := range []control{controlPrevious, controlPlayPause, controlNext} {
+		b, ok := buttonAt(m, c)
+		if !ok {
+			t.Fatalf("control %v is missing", c)
+		}
+		if b.lit {
+			t.Errorf("control %v is lit with nothing playing", c)
+		}
+	}
+}
+
+// A row too narrow for everything drops groups rather than overlapping them.
+func TestNarrowRowsDegradeCleanly(t *testing.T) {
+	for _, width := range []int{4, 8, 9, 12, 20, 40} {
+		m := New(Services{})
+		sized, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 20})
+		m = sized.(Model)
+
+		last := -1
+		for _, b := range m.controlButtons() {
+			if b.start < last {
+				t.Errorf("width %d: %v overlaps its neighbour", width, b.control)
+			}
+			if b.end > width {
+				t.Errorf("width %d: %v runs to %d, past the edge", width, b.control, b.end)
+			}
+			last = b.end
+		}
+		if got := lipgloss.Width(plain(controlsLine(m))); got != width {
+			t.Errorf("width %d: the row renders %d cells", width, got)
+		}
+	}
+}

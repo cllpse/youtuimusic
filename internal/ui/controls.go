@@ -1,0 +1,279 @@
+package ui
+
+import (
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// Material Design icons from Nerd Fonts, by the names glyphnames.json gives
+// them. The codepoints were checked against that file rather than typed from
+// memory, and against the installed fonts with fontconfig.
+const (
+	iconPrevious     = "\U000f04ae" // md-skip_previous
+	iconPlay         = "\U000f040a" // md-play
+	iconPause        = "\U000f03e4" // md-pause
+	iconNext         = "\U000f04ad" // md-skip_next
+	iconThumbUp      = "\U000f0513" // md-thumb_up
+	iconThumbUpOff   = "\U000f0514" // md-thumb_up_outline
+	iconThumbDown    = "\U000f0511" // md-thumb_down
+	iconThumbDownOff = "\U000f0512" // md-thumb_down_outline
+	iconRepeatOff    = "\U000f0457" // md-repeat_off
+	iconRepeatAll    = "\U000f0456" // md-repeat
+	iconRepeatOne    = "\U000f0458" // md-repeat_once
+)
+
+// Repeat is what happens when a track ends.
+type Repeat int
+
+const (
+	RepeatOff Repeat = iota
+	RepeatAll
+	RepeatOne
+)
+
+func (r Repeat) next() Repeat { return (r + 1) % 3 }
+
+func (r Repeat) icon() string {
+	switch r {
+	case RepeatAll:
+		return iconRepeatAll
+	case RepeatOne:
+		return iconRepeatOne
+	default:
+		return iconRepeatOff
+	}
+}
+
+// control identifies a button on the controls row.
+type control int
+
+const (
+	controlNone control = iota
+	controlPrevious
+	controlPlayPause
+	controlNext
+	controlThumbUp
+	controlThumbDown
+	controlRepeat
+)
+
+// button is one control as laid out on the row.
+type button struct {
+	control control
+	icon    string
+	// lit means drawn in the accent rather than grey: there is something for
+	// it to act on, or the thing it toggles is on.
+	lit        bool
+	start, end int // half-open columns
+}
+
+// buttonWidth gives every button a space either side, so a click does not
+// have to land on the glyph itself.
+const buttonWidth = 3
+
+// controlButtons lays the row out: transport against the left edge, the
+// thumbs centred on the row, repeat against the right. Rendering and
+// hit-testing share it, so a click lands on the button it looks like it
+// should.
+func (m Model) controlButtons() []button {
+	if m.width < 3*buttonWidth {
+		return nil
+	}
+	playing := m.playing.VideoID != ""
+
+	left := []button{
+		{control: controlPrevious, icon: iconPrevious, lit: playing},
+		{control: controlPlayPause, icon: m.playPauseIcon(), lit: playing},
+		{control: controlNext, icon: iconNext, lit: playing},
+	}
+	up, down := iconThumbUpOff, iconThumbDownOff
+	if m.playing.Rating == RatingUp {
+		up = iconThumbUp
+	}
+	if m.playing.Rating == RatingDown {
+		down = iconThumbDown
+	}
+	centre := []button{
+		{control: controlThumbUp, icon: up, lit: playing && m.playing.Rating == RatingUp},
+		{control: controlThumbDown, icon: down, lit: playing && m.playing.Rating == RatingDown},
+	}
+	right := []button{
+		{control: controlRepeat, icon: m.repeat.icon(), lit: m.repeat != RepeatOff},
+	}
+
+	at := lay(left, 0)
+
+	// Centred on the row, but never on top of the transport.
+	centreStart := max((m.width-len(centre)*buttonWidth)/2, at)
+	if centreStart+len(centre)*buttonWidth > m.width {
+		centre = nil
+	} else {
+		at = lay(centre, centreStart)
+	}
+
+	rightStart := m.width - len(right)*buttonWidth
+	if rightStart < at {
+		right = nil
+	} else {
+		lay(right, rightStart)
+	}
+
+	return append(append(left, centre...), right...)
+}
+
+// lay assigns columns to a group and returns where it ends.
+func lay(group []button, at int) int {
+	for i := range group {
+		group[i].start, group[i].end = at, at+buttonWidth
+		at += buttonWidth
+	}
+	return at
+}
+
+func (m Model) playPauseIcon() string {
+	// The icon is what pressing it does, which is the convention every other
+	// player follows: a pause bar while it plays.
+	if m.playing.VideoID != "" && !m.Paused {
+		return iconPause
+	}
+	return iconPlay
+}
+
+func (m Model) renderControls() string {
+	buttons := m.controlButtons()
+	if len(buttons) == 0 {
+		return strings.Repeat(" ", max(0, m.width))
+	}
+	var b strings.Builder
+	at := 0
+	for _, btn := range buttons {
+		if btn.start > at {
+			b.WriteString(strings.Repeat(" ", btn.start-at))
+		}
+		style := dim
+		if btn.lit {
+			style = active
+		}
+		b.WriteString(style.Render(" " + btn.icon + " "))
+		at = btn.end
+	}
+	if at < m.width {
+		b.WriteString(strings.Repeat(" ", m.width-at))
+	}
+	return b.String()
+}
+
+// press acts on a control.
+func (m Model) press(c control) (tea.Model, tea.Cmd) {
+	switch c {
+	case controlPrevious:
+		return m.skip(false)
+	case controlNext:
+		return m.skip(true)
+	case controlPlayPause:
+		if m.playing.VideoID == "" {
+			// Nothing has played yet, so this is a play button.
+			return m.skip(true)
+		}
+		return m, m.togglePause()
+	case controlThumbUp:
+		return m.ratePlaying(RatingUp)
+	case controlThumbDown:
+		return m.ratePlaying(RatingDown)
+	case controlRepeat:
+		m.repeat = m.repeat.next()
+		return m, nil
+	}
+	return m, nil
+}
+
+// ratePlaying rates the track that is playing. The thumbs sit beside the
+// transport, so they act on what is playing rather than on what happens to
+// be highlighted — which is what the + and - keys are for.
+func (m Model) ratePlaying(r Rating) (tea.Model, tea.Cmd) {
+	if m.playing.VideoID == "" {
+		return m, nil
+	}
+	previous := m.playing.Rating
+	if previous == r {
+		r = RatingNone
+	}
+	m.setRating(m.playing.VideoID, r)
+	return m, m.rate(m.playing.VideoID, r, previous)
+}
+
+// skip starts the next or previous track. With nothing playing yet there is
+// no "next", so it starts the highlighted row instead.
+func (m Model) skip(forward bool) (tea.Model, tea.Cmd) {
+	if m.playing.VideoID == "" {
+		if t, ok := m.SelectedTrack(); ok {
+			return m.start(t)
+		}
+		return m, nil
+	}
+	pick := m.preceding
+	if forward {
+		pick = m.following
+	}
+	if t, ok := pick(); ok {
+		return m.start(t)
+	}
+	return m, nil
+}
+
+// start plays a track, naming it at once because resolving takes a moment.
+func (m Model) start(t Track) (tea.Model, tea.Cmd) {
+	m.NowPlaying, m.Position, m.Length = nowPlaying(t), 0, t.Duration
+	return m, m.play(t)
+}
+
+// indexOfPlaying finds the playing track in the list on screen, which it is
+// not in once another tab is opened.
+func (m Model) indexOfPlaying() (int, bool) {
+	if m.playing.VideoID == "" {
+		return 0, false
+	}
+	for i, t := range m.Tracks {
+		if t.VideoID == m.playing.VideoID {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// following is the track that plays when this one ends, which is what the
+// repeat setting decides.
+func (m Model) following() (Track, bool) {
+	i, ok := m.indexOfPlaying()
+	if !ok {
+		return Track{}, false
+	}
+	switch m.repeat {
+	case RepeatOne:
+		return m.Tracks[i], true
+	case RepeatAll:
+		return m.Tracks[(i+1)%len(m.Tracks)], true
+	default:
+		if i+1 < len(m.Tracks) {
+			return m.Tracks[i+1], true
+		}
+		return Track{}, false
+	}
+}
+
+// preceding is where the previous button goes. Repeating one track is about
+// what happens at the end of it, not about refusing to go back.
+func (m Model) preceding() (Track, bool) {
+	i, ok := m.indexOfPlaying()
+	if !ok {
+		return Track{}, false
+	}
+	if i > 0 {
+		return m.Tracks[i-1], true
+	}
+	if m.repeat == RepeatAll {
+		return m.Tracks[len(m.Tracks)-1], true
+	}
+	return Track{}, false
+}

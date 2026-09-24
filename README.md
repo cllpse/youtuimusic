@@ -6,7 +6,9 @@ deliberately.
 
 ## Running
 
-Needs `mpv` and `yt-dlp` on `PATH`.
+Needs `mpv` and `yt-dlp` on `PATH`, and a terminal set to a [Nerd
+Font](https://www.nerdfonts.com/) — the transport controls are Material
+Design icons from the private use area, and without one they are blank boxes.
 
 ```bash
 go build ./cmd/youtuimusic && ./youtuimusic
@@ -55,13 +57,20 @@ the first page and fill in the rest behind it.
 | `pgup`/`pgdown`, `ctrl+u`/`ctrl+d` | a window at a time |
 | `g` / `G`, `home`/`end` | the top, the bottom |
 | `enter` | play the highlighted track |
-| `space` | pause and resume |
+| `space` | pause and resume, or start the highlighted track |
+| `n` / `p` | next and previous track |
+| `r` | repeat: off, all, one |
 | `/` | search, `enter` to run it, `esc` to cancel; results arrive as their own tab |
 | `+` / `-` | thumbs up or down; the same key again clears it |
 | `q`, `ctrl+c` | quit |
 
+Under the bar are the controls: transport on the left, thumbs in the middle,
+repeat on the right. The thumbs there act on what is playing, which is what
+sitting beside the transport means; `+` and `-` still act on the highlighted
+row.
+
 The mouse works too: click a tab to open it, click a track to select it and
-again to play it, and drag the progress bar to scrub. The wheel changes tab
+again to play it, click any control, and drag the progress bar to scrub. The wheel changes tab
 over the tab row; over the list it moves the view and leaves the selection
 where it is, so looking further down a playlist does not lose your place.
 Moving the cursor brings the view back to it.

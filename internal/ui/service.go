@@ -69,9 +69,9 @@ type (
 		err      error
 	}
 	playingMsg struct {
-		videoID string
-		title   string
-		length  time.Duration
+		track  Track
+		title  string
+		length time.Duration
 	}
 	eventMsg player.Event
 	errMsg   struct{ err error }
@@ -184,7 +184,7 @@ func (m Model) play(t Track) tea.Cmd {
 		if err := audio.SetPaused(false); err != nil {
 			return errMsg{fmt.Errorf("playing %s: %w", t.Title, err)}
 		}
-		return playingMsg{videoID: t.VideoID, title: nowPlaying(t), length: s.Duration}
+		return playingMsg{track: t, title: nowPlaying(t), length: s.Duration}
 	}
 }
 
