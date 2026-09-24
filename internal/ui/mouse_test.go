@@ -554,3 +554,55 @@ func TestNothingRendersOffPaletteColours(t *testing.T) {
 		}
 	}
 }
+
+// Paused, the bar keeps its shape but stops being the lit thing on screen.
+func TestThePausedBarIsGreyed(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	m.Length, m.Position = 100*time.Second, 50*time.Second
+
+	playing := strings.Split(m.View().Content, "\n")[m.barRow()]
+	accent := []string{"34", "44", "94", "104"}
+	if !anyCode(playing, accent) {
+		t.Fatalf("the playing bar is not in the accent at all; the test proves nothing:\n%q", playing)
+	}
+
+	m.Paused = true
+	paused := strings.Split(m.View().Content, "\n")[m.barRow()]
+	if anyCode(paused, accent) {
+		t.Errorf("the paused bar still uses the accent: %v", sgrCodes(paused))
+	}
+	if !sgrCodes(paused)["90"] {
+		t.Errorf("the paused bar is not grey: %v", sgrCodes(paused))
+	}
+	// It is still a bar, and the same length.
+	full := func(s string) int {
+		return strings.Count(s, string(progress.DefaultFullCharHalfBlock))
+	}
+	if full(paused) != full(playing) || full(paused) == 0 {
+		t.Errorf("the paused bar is %d cells, the playing one %d", full(paused), full(playing))
+	}
+}
+
+// sgrCodes pulls the parameters out of a line's escape sequences. Matching
+// whole sequences does not work: lipgloss combines them, writing a
+// foreground and a background as one "34;44".
+func sgrCodes(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, seq := range ansiSequence.FindAllString(s, -1) {
+		body := strings.TrimSuffix(strings.TrimPrefix(seq, "\x1b["), "m")
+		for _, p := range strings.Split(body, ";") {
+			out[p] = true
+		}
+	}
+	return out
+}
+
+func anyCode(s string, codes []string) bool {
+	present := sgrCodes(s)
+	for _, c := range codes {
+		if present[c] {
+			return true
+		}
+	}
+	return false
+}

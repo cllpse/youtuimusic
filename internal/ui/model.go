@@ -127,9 +127,11 @@ type Model struct {
 	now func() time.Time
 
 	// bar renders the playback position. It holds no animation state: the
-	// position is drawn where it is.
-	bar  progress.Model
-	spin spinner.Model
+	// position is drawn where it is. The paused one is the same bar in grey,
+	// built once rather than recoloured on every frame.
+	bar       progress.Model
+	pausedBar progress.Model
+	spin      spinner.Model
 
 	Err error
 }
@@ -138,12 +140,13 @@ type Model struct {
 // that talks to nothing, which is what the view tests use.
 func New(s Services) Model {
 	return Model{
-		services: s,
-		loading:  s.Library != nil,
-		now:      time.Now,
-		cache:    map[string][]Track{},
-		bar:      newBar(),
-		spin:     spinner.New(spinner.WithSpinner(spinner.Pulse), spinner.WithStyle(active)),
+		services:  s,
+		loading:   s.Library != nil,
+		now:       time.Now,
+		cache:     map[string][]Track{},
+		bar:       newBar(rampAt),
+		pausedBar: newBar(mutedRamp),
+		spin:      spinner.New(spinner.WithSpinner(spinner.Pulse), spinner.WithStyle(active)),
 	}
 }
 
@@ -307,6 +310,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		_, barWidth := m.barGeometry()
 		m.bar.SetWidth(barWidth)
+		m.pausedBar.SetWidth(barWidth)
 		m.scroll()
 		return m, nil
 
@@ -860,7 +864,7 @@ func (m Model) contentWidth() int { return max(0, m.width-2*contentLeft) }
 func (m Model) renderPlayer() string {
 	inner := lipgloss.JoinVertical(lipgloss.Left,
 		pad(m.statusLine(), m.contentWidth()),
-		m.bar.ViewAs(m.fraction()),
+		m.renderBar(),
 		m.renderControls(),
 	)
 	return playerBox.Render(inner)
@@ -892,14 +896,28 @@ func rampAt(_, position float64) color.Color {
 	return barRamp[min(max(i, 0), len(barRamp)-1)]
 }
 
-func newBar() progress.Model {
+// mutedRamp greys the played part out. It lands on the same colour as the
+// unplayed part, which is the point: paused, the bar keeps its shape but
+// stops being the one lit thing on the screen. The two halves stay legible
+// because the characters differ — a solid block against a light shade.
+func mutedRamp(_, _ float64) color.Color { return muted }
+
+func newBar(fill progress.ColorFunc) progress.Model {
 	bar := progress.New(
 		progress.WithoutPercentage(),
-		progress.WithColorFunc(rampAt),
+		progress.WithColorFunc(fill),
 	)
 	// The default is a fixed grey, which is off-scheme like the rest.
 	bar.EmptyColor = muted
 	return bar
+}
+
+// renderBar draws the position, greyed out while playback is paused.
+func (m Model) renderBar() string {
+	if m.Paused {
+		return m.pausedBar.ViewAs(m.fraction())
+	}
+	return m.bar.ViewAs(m.fraction())
 }
 
 func formatDuration(d time.Duration) string {
