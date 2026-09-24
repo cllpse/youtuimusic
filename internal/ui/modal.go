@@ -138,30 +138,15 @@ func (m Model) renderModal() string {
 		return modalBox.Render(strings.Join(lines, "\n"))
 	}
 
-	bar := scrollbarFor(len(m.detour.tracks), m.detour.offset, height)
-	listWidth := inner
-	if bar != nil {
-		listWidth -= scrollbarWidth
-	}
-	showRating := m.detour.tab.ID != likedPlaylistID
-
-	for i := range height {
-		row := i + m.detour.offset
-		line := ""
-		if row < len(m.detour.tracks) {
-			t := m.detour.tracks[row]
-			style, styled := rowStyle(m.isPlaying(t), row == m.detour.cursor)
-			line = m.trackLine(t, listWidth, showRating, styled)
-			if styled {
-				line = style.Render(line)
-			}
-		}
-		line = pad(line, listWidth)
-		if bar != nil {
-			line += bar[i]
-		}
-		lines = append(lines, line)
-	}
+	lines = append(lines, trackTable{
+		tracks:     m.detour.tracks,
+		cursor:     m.detour.cursor,
+		offset:     m.detour.offset,
+		width:      inner,
+		height:     height,
+		showRating: m.detour.tab.ID != likedPlaylistID,
+		playing:    m.playing.VideoID,
+	}.rows()...)
 	return modalBox.Render(strings.Join(lines, "\n"))
 }
 
@@ -197,9 +182,8 @@ func (m Model) modalHit(x, y int) (int, bool) {
 // scrollDetour moves the popover's window without moving its selection, the
 // way the wheel behaves on the list underneath.
 func (m *Model) scrollDetour(delta int) {
-	height := m.modalListHeight()
-	m.detour.offset = min(max(m.detour.offset+delta, 0),
-		max(0, len(m.detour.tracks)-height))
+	m.detour.offset = clampOffset(m.detour.offset+delta,
+		m.modalListHeight(), len(m.detour.tracks))
 }
 
 // handleModalKey runs the popover. It reports whether it took the key: the

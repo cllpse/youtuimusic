@@ -485,7 +485,7 @@ func TestTheScrollbarThumbFollowsTheWindow(t *testing.T) {
 	height := m.bodyHeight()
 
 	thumbTop := func(m Model) int {
-		for i, cell := range m.scrollbar(height) {
+		for i, cell := range scrollbarFor(len(m.Tracks), m.trackOffset, height) {
 			if strings.Contains(cell, "█") {
 				return i
 			}

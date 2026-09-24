@@ -118,7 +118,8 @@ cmd/youtuimusic     entry point
 internal/ytm        InnerTube client (auth, playlists, search, rating)
 internal/player     mpv over JSON IPC
 internal/stream     yt-dlp resolution + cache
-internal/ui         bubbletea model, tabs / table / progress
+internal/ui         bubbletea model, tabs / table / progress. One table
+                    component draws both the main list and the popover's
 ```
 
 ## Status

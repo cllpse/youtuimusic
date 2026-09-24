@@ -7,7 +7,6 @@
 package ui
 
 import (
-	"fmt"
 	"image/color"
 	"strings"
 	"time"
@@ -356,21 +355,12 @@ func (m *Model) moveCursor(delta int) {
 // scrollBy moves the window and leaves the selection where it is, so the
 // list can be looked through without losing the cursor's place.
 func (m *Model) scrollBy(delta int) {
-	height := m.bodyHeight()
-	m.trackOffset = min(max(m.trackOffset+delta, 0), max(0, len(m.Tracks)-height))
+	m.trackOffset = clampOffset(m.trackOffset+delta, m.bodyHeight(), len(m.Tracks))
 }
 
 // scroll moves the window only far enough to keep the cursor on screen.
 func (m *Model) scroll() {
-	height := m.bodyHeight()
-	if m.trackCursor < m.trackOffset {
-		m.trackOffset = m.trackCursor
-	}
-	if m.trackCursor >= m.trackOffset+height {
-		m.trackOffset = m.trackCursor - height + 1
-	}
-	m.trackOffset = min(m.trackOffset, max(0, len(m.Tracks)-height))
-	m.trackOffset = max(m.trackOffset, 0)
+	m.trackOffset = keepVisible(m.trackCursor, m.trackOffset, m.bodyHeight(), len(m.Tracks))
 }
 
 func clamp(v, length int) int {
@@ -720,31 +710,6 @@ var (
 	active = lipgloss.NewStyle().Foreground(accent)
 )
 
-// A row carries two independent things: whether it is the track playing,
-// and whether it is the one under the cursor. Colour says the first and a
-// filled background says the second, so a row can say both at once — which
-// it has to, since the cursor is usually on the track that is playing.
-var (
-	rowPlaying  = lipgloss.NewStyle().Bold(true).Foreground(accent)
-	rowSelected = lipgloss.NewStyle().Background(muted)
-	rowBoth     = lipgloss.NewStyle().Bold(true).Foreground(accent).Background(muted)
-)
-
-// rowStyle picks how a row is drawn, and reports whether it is styled at
-// all. An unstyled row mutes its own columns; a styled one must not, since
-// grey on a filled background is nothing.
-func rowStyle(playing, selected bool) (lipgloss.Style, bool) {
-	switch {
-	case playing && selected:
-		return rowBoth, true
-	case playing:
-		return rowPlaying, true
-	case selected:
-		return rowSelected, true
-	}
-	return lipgloss.Style{}, false
-}
-
 // isPlaying reports whether a row is the track mpv is on.
 func (m Model) isPlaying(t Track) bool {
 	return m.playing.VideoID != "" && t.VideoID == m.playing.VideoID
@@ -926,77 +891,31 @@ func (m Model) renderTracks(width, height int) string {
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
 			m.spin.View()+" "+dim.Render("Loading…"))
 	}
+	return m.table(width, height).render()
+}
 
-	bar := m.scrollbar(height)
-	if bar != nil {
-		width -= scrollbarWidth
+// table is the main list as the shared table sees it.
+func (m Model) table(width, height int) trackTable {
+	return trackTable{
+		tracks:     m.Tracks,
+		cursor:     m.trackCursor,
+		offset:     m.trackOffset,
+		width:      width,
+		height:     height,
+		showRating: m.showsRating(),
+		playing:    m.playing.VideoID,
 	}
-
-	var b strings.Builder
-	for i := 0; i < height; i++ {
-		row := i + m.trackOffset
-		line := ""
-		if row < len(m.Tracks) {
-			t := m.Tracks[row]
-			style, styled := rowStyle(m.isPlaying(t), row == m.trackCursor)
-			line = m.trackLine(t, width, m.showsRating(), styled)
-			if styled {
-				line = style.Render(line)
-			}
-		}
-		b.WriteString(pad(line, width))
-		if bar != nil {
-			b.WriteString(bar[i])
-		}
-		if i < height-1 {
-			b.WriteByte('\n')
-		}
-	}
-	return b.String()
 }
 
 // hasScrollbar reports whether the list is longer than the window. The
 // column only exists when it has something to say, so a list that fits is
 // not made narrower for nothing.
 func (m Model) hasScrollbar() bool {
-	return len(m.Tracks) > m.bodyHeight()
+	return needsScrollbar(len(m.Tracks), m.bodyHeight())
 }
-
-// scrollbarWidth is the bar itself plus a blank column to its right, so it
-// does not sit against the edge of the terminal.
-const scrollbarWidth = 2
 
 // scrollbarColumn is where it is drawn.
 func (m Model) scrollbarColumn() int { return m.width - scrollbarWidth }
-
-// scrollbar returns the column down the right of the list, or nil when
-// everything fits. The thumb is the same grey as the trough: the glyphs
-// carry the difference, as they do on the progress bar.
-func (m Model) scrollbar(height int) []string {
-	return scrollbarFor(len(m.Tracks), m.trackOffset, height)
-}
-
-// scrollbarFor draws a trough and thumb for any list.
-func scrollbarFor(total, offset, height int) []string {
-	if height <= 0 || total <= height {
-		return nil
-	}
-	thumb := max(1, height*height/total)
-	start := 0
-	if span, furthest := height-thumb, total-height; furthest > 0 {
-		start = min(offset*span/furthest, span)
-	}
-
-	out := make([]string, height)
-	for i := range out {
-		if i >= start && i < start+thumb {
-			out[i] = dim.Render("█") + " "
-			continue
-		}
-		out[i] = dim.Render("│") + " "
-	}
-	return out
-}
 
 // scrollTo puts the list where a point on the scrollbar says it should be.
 func (m *Model) scrollTo(y int) {
@@ -1008,34 +927,6 @@ func (m *Model) scrollTo(y int) {
 	row := min(max(y-tabsHeight, 0), height-1)
 	furthest := total - height
 	m.trackOffset = min(max(row*furthest/(height-1), 0), furthest)
-}
-
-// trackLine draws one row. The leading column is the same two cells whether
-// or not it holds a rating, so the titles line up across tabs.
-//
-// Everything but the title is muted, which leaves the eye one thing to read
-// down. A highlighted row is drawn plain and coloured whole by the caller —
-// dimming part of it would fight the highlight.
-func (m Model) trackLine(t Track, width int, showRating, highlighted bool) string {
-	const durCol, rateCol = 6, 2
-	prefix := "  "
-	if showRating {
-		prefix = t.Rating.glyph() + " "
-	}
-	rest := width - durCol - rateCol - 2
-	if rest < 4 {
-		// No room for columns; the title is the only thing worth keeping.
-		return pad(truncate(prefix+t.Title, width), width)
-	}
-	titleW := rest / 2
-	artistW := rest - titleW
-
-	artist := pad(truncate(t.Artist, artistW), artistW)
-	duration := pad(formatDuration(t.Duration), durCol)
-	if !highlighted {
-		artist, duration = dim.Render(artist), dim.Render(duration)
-	}
-	return prefix + pad(truncate(t.Title, titleW), titleW) + " " + artist + " " + duration
 }
 
 // showsRating is false on the liked playlist, where every row is liked and
@@ -1150,14 +1041,6 @@ func (m Model) renderBar() string {
 		return m.pausedBar.ViewAs(m.fraction())
 	}
 	return m.bar.ViewAs(m.fraction())
-}
-
-func formatDuration(d time.Duration) string {
-	if d <= 0 {
-		return " 0:00"
-	}
-	total := int(d.Seconds())
-	return fmt.Sprintf("%2d:%02d", total/60, total%60)
 }
 
 func truncate(s string, w int) string {
