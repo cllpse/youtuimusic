@@ -17,6 +17,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/cllpse/youtuimusic/internal/player"
+	"github.com/cllpse/youtuimusic/internal/ytm"
 )
 
 // Rating is a track's thumbs state.
@@ -127,6 +128,10 @@ type Model struct {
 	// showingID is the tab the visible list came from, which tells a refetch
 	// of the same tab from a move to another one.
 	showingID string
+	// more is where the visible list carries on, and loadingMore is whether
+	// the next page is already on its way. Only one list asks at a time.
+	more        ytm.Continuation
+	loadingMore bool
 	// lastRated is re-applied over a refreshed list. A like reaches Liked
 	// Music a moment after the call returns, so a list fetched straight
 	// after can still describe the track the old way.
@@ -220,6 +225,7 @@ type detour struct {
 	tracks []Track
 	cursor int
 	offset int
+	more   ytm.Continuation
 
 	// A search popover carries its own input. typing is whether keys go to
 	// it rather than to the list below.
@@ -271,18 +277,29 @@ func (m Model) selectedDetourTrack() (Track, bool) {
 	return m.detour.tracks[m.detour.cursor], true
 }
 
+// detourRowCount is the popover's tracks plus its offer of another page.
+func (m Model) detourRowCount() int {
+	if m.detour.more.More() {
+		return len(m.detour.tracks) + 1
+	}
+	return len(m.detour.tracks)
+}
+
 // moveDetour moves the popover's cursor and scrolls to keep it in view.
 func (m *Model) moveDetour(delta int) {
-	height := m.modalListHeight()
-	m.detour.cursor = clamp(m.detour.cursor+delta, len(m.detour.tracks))
-	if m.detour.cursor < m.detour.offset {
-		m.detour.offset = m.detour.cursor
+	m.detour.cursor = clamp(m.detour.cursor+delta, m.detourRowCount())
+	m.detour.offset = keepVisible(m.detour.cursor, m.detour.offset,
+		m.modalListHeight(), m.detourRowCount())
+}
+
+// afterDetourMove takes up the offer of another page when the cursor
+// reaches it, the same way the list underneath does.
+func (m Model) afterDetourMove() (tea.Model, tea.Cmd, bool) {
+	if m.detour.more.More() && m.detour.cursor == len(m.detour.tracks) {
+		next, cmd := m.fetchMore(true)
+		return next, cmd, true
 	}
-	if m.detour.cursor >= m.detour.offset+height {
-		m.detour.offset = m.detour.cursor - height + 1
-	}
-	m.detour.offset = min(m.detour.offset, max(0, len(m.detour.tracks)-height))
-	m.detour.offset = max(m.detour.offset, 0)
+	return m, nil, true
 }
 
 // tabCount is the playlists. Nothing else lives in the row: a search, an
@@ -321,13 +338,13 @@ func (m Model) showTab() (Model, tea.Cmd) {
 
 	if tracks, ok := m.cache[tab.ID]; ok {
 		m.Tracks, m.loading, m.Err = tracks, false, nil
-		m.showingID = tab.ID
+		m.showingID, m.more = tab.ID, ytm.Continuation{}
 		if len(tracks) > 0 {
 			return m, m.prefetch(tracks[0].VideoID)
 		}
 		return m, nil
 	}
-	m.Tracks, m.showingID = nil, ""
+	m.Tracks, m.showingID, m.more = nil, "", ytm.Continuation{}
 	return m, batch(m.startLoading(), m.scheduleTabLoad())
 }
 
@@ -361,21 +378,61 @@ func (m Model) SelectedTrack() (Track, bool) {
 // TrackCursor reports the highlighted track row.
 func (m Model) TrackCursor() int { return m.trackCursor }
 
+// rowCount is the tracks plus the row that offers the next page.
+func (m Model) rowCount() int {
+	if m.more.More() {
+		return len(m.Tracks) + 1
+	}
+	return len(m.Tracks)
+}
+
+// atMoreRow reports whether the cursor is sitting on the offer of another
+// page.
+func (m Model) atMoreRow() bool {
+	return m.more.More() && m.trackCursor == len(m.Tracks)
+}
+
+// afterCursorMove warms the row the cursor landed on — or, when that row is
+// the offer of another page, takes it up. Reaching the end of a list is the
+// same gesture as asking for more of it.
+func (m Model) afterCursorMove() (tea.Model, tea.Cmd) {
+	if m.atMoreRow() {
+		return m.fetchMore(false)
+	}
+	return m.schedulePrefetch()
+}
+
+// fetchMore asks for the next page of a list, unless one is already coming.
+func (m Model) fetchMore(inDetour bool) (tea.Model, tea.Cmd) {
+	if m.loadingMore {
+		return m, nil
+	}
+	from := m.more
+	if inDetour {
+		from = m.detour.more
+	}
+	if !from.More() {
+		return m, nil
+	}
+	m.loadingMore = true
+	return m, m.loadMore(from, inDetour)
+}
+
 // moveCursor moves the track cursor and scrolls to keep it in view.
 func (m *Model) moveCursor(delta int) {
-	m.trackCursor = clamp(m.trackCursor+delta, len(m.Tracks))
+	m.trackCursor = clamp(m.trackCursor+delta, m.rowCount())
 	m.scroll()
 }
 
 // scrollBy moves the window and leaves the selection where it is, so the
 // list can be looked through without losing the cursor's place.
 func (m *Model) scrollBy(delta int) {
-	m.trackOffset = clampOffset(m.trackOffset+delta, m.bodyHeight(), len(m.Tracks))
+	m.trackOffset = clampOffset(m.trackOffset+delta, m.bodyHeight(), m.rowCount())
 }
 
 // scroll moves the window only far enough to keep the cursor on screen.
 func (m *Model) scroll() {
-	m.trackOffset = keepVisible(m.trackCursor, m.trackOffset, m.bodyHeight(), len(m.Tracks))
+	m.trackOffset = keepVisible(m.trackCursor, m.trackOffset, m.bodyHeight(), m.rowCount())
 }
 
 func clamp(v, length int) int {
@@ -452,10 +509,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.showTab()
 
+	case moreMsg:
+		m.loadingMore = false
+		if msg.err != nil {
+			m.Err = msg.err
+			return m, nil
+		}
+		if msg.inDetour {
+			m.detour.tracks = append(m.detour.tracks, fromAPI(msg.page.Tracks)...)
+			m.detour.more = msg.page.Next
+			return m, nil
+		}
+		m.Tracks = append(m.Tracks, fromAPI(msg.page.Tracks)...)
+		m.more = msg.page.Next
+		if m.showingID != "" {
+			m.cache[m.showingID] = m.Tracks
+		}
+		return m, nil
+
 	case tracksMsg:
 		// A menu is anchored to a row of the list being replaced.
 		m.menu = trackMenu{}
-		tracks := fromAPI(msg.tracks)
+		tracks := fromAPI(msg.page.Tracks)
 		// The server can still describe a just-rated track the old way, so
 		// what this app did wins over what the list says.
 		if m.lastRated.videoID != "" {
@@ -468,6 +543,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cache[msg.id] = tracks
 		if m.detour.active && m.detour.tab.ID == msg.id {
 			m.detour.tracks = tracks
+			m.detour.more = msg.page.Next
 			m.detour.cursor, m.detour.offset = 0, 0
 			m.loading, m.Err = false, nil
 			if len(tracks) > 0 {
@@ -482,7 +558,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// in it; arriving at a new tab starts at the top.
 		refresh := m.showingID == msg.id
 		m.Tracks, m.loading, m.Err = tracks, false, nil
-		m.showingID = msg.id
+		m.showingID, m.more = msg.id, msg.page.Next
 		if refresh {
 			m.trackCursor = clamp(m.trackCursor, len(tracks))
 			m.scroll()
@@ -500,7 +576,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.detour.active || m.detour.tab.kind != tabSearch {
 			return m, nil
 		}
-		m.detour.tracks = fromAPI(msg.tracks)
+		m.detour.tracks = fromAPI(msg.page.Tracks)
+		m.detour.more = msg.page.Next
 		m.detour.cursor, m.detour.offset = 0, 0
 		m.loading, m.Err = false, nil
 		if len(m.detour.tracks) > 0 {
@@ -619,24 +696,24 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "up", "k":
 		m.moveCursor(-1)
-		return m.schedulePrefetch()
+		return m.afterCursorMove()
 	case "down", "j":
 		m.moveCursor(1)
-		return m.schedulePrefetch()
+		return m.afterCursorMove()
 
 	case "pgup", "ctrl+u":
 		m.moveCursor(-m.bodyHeight())
-		return m.schedulePrefetch()
+		return m.afterCursorMove()
 	case "pgdown", "ctrl+d":
 		m.moveCursor(m.bodyHeight())
-		return m.schedulePrefetch()
+		return m.afterCursorMove()
 
 	case "home", "g":
-		m.moveCursor(-len(m.Tracks))
-		return m.schedulePrefetch()
+		m.moveCursor(-m.rowCount())
+		return m.afterCursorMove()
 	case "end", "G":
-		m.moveCursor(len(m.Tracks))
-		return m.schedulePrefetch()
+		m.moveCursor(m.rowCount())
+		return m.afterCursorMove()
 
 	case "+", "=":
 		return m.applyRating(RatingUp)
@@ -944,13 +1021,16 @@ func (m Model) renderTracks(width, height int) string {
 // table is the main list as the shared table sees it.
 func (m Model) table(width, height int) trackTable {
 	return trackTable{
-		tracks:     m.Tracks,
-		cursor:     m.trackCursor,
-		offset:     m.trackOffset,
-		width:      width,
-		height:     height,
-		showRating: m.showsRating(),
-		playing:    m.playing.VideoID,
+		tracks:      m.Tracks,
+		cursor:      m.trackCursor,
+		offset:      m.trackOffset,
+		width:       width,
+		height:      height,
+		showRating:  m.showsRating(),
+		playing:     m.playing.VideoID,
+		more:        m.more.More(),
+		loadingMore: m.loadingMore,
+		spinner:     m.spin.View(),
 	}
 }
 
@@ -958,7 +1038,7 @@ func (m Model) table(width, height int) trackTable {
 // column only exists when it has something to say, so a list that fits is
 // not made narrower for nothing.
 func (m Model) hasScrollbar() bool {
-	return needsScrollbar(len(m.Tracks), m.bodyHeight())
+	return needsScrollbar(m.rowCount(), m.bodyHeight())
 }
 
 // scrollbarColumn is where it is drawn.
@@ -967,7 +1047,7 @@ func (m Model) scrollbarColumn() int { return m.width - scrollbarWidth }
 // scrollTo puts the list where a point on the scrollbar says it should be.
 func (m *Model) scrollTo(y int) {
 	height := m.bodyHeight()
-	total := len(m.Tracks)
+	total := m.rowCount()
 	if height <= 1 || total <= height {
 		return
 	}

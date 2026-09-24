@@ -44,14 +44,12 @@ won by community size, not by language.
 cache hit is ~600 ns. Resolving the highlighted row before the user presses
 play is worth more than any speedup to resolving itself.
 
-**Follow a search's continuations, but not a playlist's.** The server answers
-twenty results at a time behind a token, which is too few to find anything
-with, so search follows them up to a cap. A playlist is different: the first
-page is already a hundred tracks and the rest is latency nobody asked for.
-
-**Fetch the first page of a playlist, not all of it.** Playlist reads are
-paged at ~100 tracks server-side: 100 tracks ≈ 0.8 s, 529 tracks ≈ 2.7 s. Show
-the first page and fill in the rest behind it.
+**One page at a time, and the rest on request.** Listings are paged at the
+server — 100 tracks for a playlist, 20 results for a search — and reads cost
+what they page: 100 tracks ≈ 0.8 s, 529 tracks ≈ 2.7 s. So a page comes back
+with the token for the next rather than the requests being spent up front,
+and a list that has more ends with a row offering it. Reaching that row, by
+walking onto it or clicking it, is what asks.
 
 ## Using it
 
@@ -87,8 +85,8 @@ play, so opening one shows the album.
 
 Albums, artists and search all open the same popover over the list, inset so
 that what it covers is still visible around it and stopping short of the
-player, which stays usable. It carries its own table — same columns, same
-scrolling — and `esc` or a click outside closes it, leaving everything
+player, which stays usable. It says what it is showing, carries its own table — same columns, same
+scrolling, same paging — and `esc` or a click outside closes it, leaving everything
 underneath as it was. The search one puts its box on the top line.
 
 A list longer than the window gets a scrollbar down its right edge. It can

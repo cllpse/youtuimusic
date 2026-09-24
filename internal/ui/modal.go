@@ -55,6 +55,15 @@ func (m Model) modalIcon() string {
 	return iconAlbum
 }
 
+// modalKind names what the popover is showing. The icon alone leaves it to
+// be recognised; the word says it.
+func (m Model) modalKind() string {
+	if m.detour.tab.kind == tabArtist {
+		return "Artist"
+	}
+	return "Album"
+}
+
 // openSearch opens the popover on an empty query, with the input focused.
 func (m Model) openSearch() (tea.Model, tea.Cmd) {
 	m.menu = trackMenu{}
@@ -70,7 +79,10 @@ func (m Model) openSearch() (tea.Model, tea.Cmd) {
 // search box being typed into.
 func (m Model) modalHeader(inner int) string {
 	if m.detour.tab.kind != tabSearch {
-		return active.Render(pad(truncate(m.modalIcon()+" "+m.detour.tab.Title, inner), inner))
+		label := m.modalIcon() + menuGap + m.modalKind()
+		room := inner - lipgloss.Width(label) - len(menuGap)
+		return active.Render(label) + menuGap +
+			pad(truncate(m.detour.tab.Title, max(room, 0)), max(room, 0))
 	}
 	query := m.detour.query
 	if m.detour.typing {
@@ -139,13 +151,16 @@ func (m Model) renderModal() string {
 	}
 
 	lines = append(lines, trackTable{
-		tracks:     m.detour.tracks,
-		cursor:     m.detour.cursor,
-		offset:     m.detour.offset,
-		width:      inner,
-		height:     height,
-		showRating: m.detour.tab.ID != likedPlaylistID,
-		playing:    m.playing.VideoID,
+		tracks:      m.detour.tracks,
+		cursor:      m.detour.cursor,
+		offset:      m.detour.offset,
+		width:       inner,
+		height:      height,
+		showRating:  m.detour.tab.ID != likedPlaylistID,
+		playing:     m.playing.VideoID,
+		more:        m.detour.more.More(),
+		loadingMore: m.loadingMore,
+		spinner:     m.spin.View(),
 	}.rows()...)
 	return modalBox.Render(strings.Join(lines, "\n"))
 }
@@ -173,7 +188,7 @@ func (m Model) modalHit(x, y int) (int, bool) {
 		return 0, false
 	}
 	row := line + m.detour.offset
-	if row >= len(m.detour.tracks) {
+	if row >= m.detourRowCount() {
 		return 0, false
 	}
 	return row, true
@@ -183,7 +198,7 @@ func (m Model) modalHit(x, y int) (int, bool) {
 // way the wheel behaves on the list underneath.
 func (m *Model) scrollDetour(delta int) {
 	m.detour.offset = clampOffset(m.detour.offset+delta,
-		m.modalListHeight(), len(m.detour.tracks))
+		m.modalListHeight(), m.detourRowCount())
 }
 
 // handleModalKey runs the popover. It reports whether it took the key: the
@@ -205,16 +220,22 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
 
 	case "up", "k":
 		m.moveDetour(-1)
+		return m.afterDetourMove()
 	case "down", "j":
 		m.moveDetour(1)
+		return m.afterDetourMove()
 	case "pgup", "ctrl+u":
 		m.moveDetour(-m.modalListHeight())
+		return m.afterDetourMove()
 	case "pgdown", "ctrl+d":
 		m.moveDetour(m.modalListHeight())
+		return m.afterDetourMove()
 	case "home", "g":
-		m.moveDetour(-len(m.detour.tracks))
+		m.moveDetour(-m.detourRowCount())
+		return m.afterDetourMove()
 	case "end", "G":
-		m.moveDetour(len(m.detour.tracks))
+		m.moveDetour(m.detourRowCount())
+		return m.afterDetourMove()
 
 	case "enter":
 		if t, ok := m.selectedDetourTrack(); ok {
@@ -251,6 +272,11 @@ func (m Model) clickModal(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	row, ok := m.modalHit(mouse.X, mouse.Y)
 	if !ok {
 		return m, nil
+	}
+	if row == len(m.detour.tracks) {
+		// The row that offers the next page is not a track.
+		m.detour.cursor = row
+		return m.fetchMore(true)
 	}
 	again := m.isSecondClick(regionModal, row)
 	m.lastClickAt, m.lastClickRegion, m.lastClickRow = m.clock(), regionModal, row

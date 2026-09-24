@@ -23,10 +23,11 @@ const (
 // interfaces so the model can be exercised without a network or an mpv.
 type Library interface {
 	LibraryPlaylists(ctx context.Context) ([]ytm.Playlist, error)
-	PlaylistTracks(ctx context.Context, playlistID string) ([]ytm.Track, error)
-	AlbumTracks(ctx context.Context, browseID string) ([]ytm.Track, error)
-	ArtistPage(ctx context.Context, browseID string) ([]ytm.Track, error)
-	Search(ctx context.Context, query string) ([]ytm.Track, error)
+	PlaylistTracks(ctx context.Context, playlistID string) (ytm.Page, error)
+	AlbumTracks(ctx context.Context, browseID string) (ytm.Page, error)
+	ArtistPage(ctx context.Context, browseID string) (ytm.Page, error)
+	Search(ctx context.Context, query string) (ytm.Page, error)
+	More(ctx context.Context, from ytm.Continuation) (ytm.Page, error)
 	Rate(ctx context.Context, videoID string, r ytm.Rating) error
 }
 
@@ -58,12 +59,19 @@ type Services struct {
 type (
 	playlistsMsg []ytm.Playlist
 	tracksMsg    struct {
-		id     string // the tab these belong to
-		tracks []ytm.Track
+		id   string // the tab these belong to
+		page ytm.Page
 	}
 	searchMsg struct {
-		query  string
-		tracks []ytm.Track
+		query string
+		page  ytm.Page
+	}
+	// moreMsg is the next page of whichever list asked for it. Only one can
+	// be waiting at a time, so which is a flag rather than an identifier.
+	moreMsg struct {
+		page     ytm.Page
+		inDetour bool
+		err      error
 	}
 	ratedMsg struct {
 		videoID string
@@ -147,21 +155,21 @@ func (m Model) fetchTracks(p Playlist) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		var (
-			ts  []ytm.Track
-			err error
+			page ytm.Page
+			err  error
 		)
 		switch p.kind {
 		case tabAlbum:
-			ts, err = lib.AlbumTracks(ctx, p.ID)
+			page, err = lib.AlbumTracks(ctx, p.ID)
 		case tabArtist:
-			ts, err = lib.ArtistPage(ctx, p.ID)
+			page, err = lib.ArtistPage(ctx, p.ID)
 		default:
-			ts, err = lib.PlaylistTracks(ctx, p.ID)
+			page, err = lib.PlaylistTracks(ctx, p.ID)
 		}
 		if err != nil {
 			return errMsg{fmt.Errorf("%s: %w", p.Title, err)}
 		}
-		return tracksMsg{id: p.ID, tracks: ts}
+		return tracksMsg{id: p.ID, page: page}
 	}
 }
 
@@ -173,11 +181,25 @@ func (m Model) runSearch(query string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		ts, err := lib.Search(ctx, query)
+		page, err := lib.Search(ctx, query)
 		if err != nil {
 			return errMsg{fmt.Errorf("searching %q: %w", query, err)}
 		}
-		return searchMsg{query: query, tracks: ts}
+		return searchMsg{query: query, page: page}
+	}
+}
+
+// loadMore fetches the page after the one a list is showing.
+func (m Model) loadMore(from ytm.Continuation, inDetour bool) tea.Cmd {
+	lib := m.services.Library
+	if lib == nil || !from.More() {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		page, err := lib.More(ctx, from)
+		return moreMsg{page: page, inDetour: inDetour, err: err}
 	}
 }
 

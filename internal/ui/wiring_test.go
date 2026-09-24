@@ -23,6 +23,11 @@ type fakeLibrary struct {
 	tracks    map[string][]ytm.Track
 	results   []ytm.Track
 	err       error
+	// next is handed out with every listing, so a test can stage a second
+	// page; morePage is what More then returns.
+	next     ytm.Continuation
+	morePage []ytm.Track
+	moreErr  error
 
 	askedFor []string
 	rated    []struct {
@@ -36,27 +41,53 @@ func (f *fakeLibrary) LibraryPlaylists(context.Context) ([]ytm.Playlist, error) 
 	return f.playlists, f.err
 }
 
-func (f *fakeLibrary) PlaylistTracks(_ context.Context, id string) ([]ytm.Track, error) {
+func (f *fakeLibrary) PlaylistTracks(_ context.Context, id string) (ytm.Page, error) {
 	f.askedFor = append(f.askedFor, id)
 	if f.err != nil {
-		return nil, f.err
+		return ytm.Page{}, f.err
 	}
-	return f.tracks[id], nil
+	return f.pageFor(id), nil
 }
 
-func (f *fakeLibrary) AlbumTracks(_ context.Context, id string) ([]ytm.Track, error) {
+func (f *fakeLibrary) AlbumTracks(_ context.Context, id string) (ytm.Page, error) {
 	f.askedFor = append(f.askedFor, "album:"+id)
-	return f.tracks[id], f.err
+	if f.err != nil {
+		return ytm.Page{}, f.err
+	}
+	return f.pageFor(id), nil
 }
 
-func (f *fakeLibrary) ArtistPage(_ context.Context, id string) ([]ytm.Track, error) {
+func (f *fakeLibrary) ArtistPage(_ context.Context, id string) (ytm.Page, error) {
 	f.askedFor = append(f.askedFor, "artist:"+id)
-	return f.tracks[id], f.err
+	if f.err != nil {
+		return ytm.Page{}, f.err
+	}
+	return f.pageFor(id), nil
 }
 
-func (f *fakeLibrary) Search(_ context.Context, query string) ([]ytm.Track, error) {
+func (f *fakeLibrary) Search(_ context.Context, query string) (ytm.Page, error) {
 	f.askedFor = append(f.askedFor, "search:"+query)
-	return f.results, f.err
+	if f.err != nil {
+		return ytm.Page{}, f.err
+	}
+	return ytm.Page{Tracks: f.results, Next: f.next}, nil
+}
+
+// More hands back whatever was staged for the next page, once.
+func (f *fakeLibrary) More(context.Context, ytm.Continuation) (ytm.Page, error) {
+	f.askedFor = append(f.askedFor, "more")
+	if f.moreErr != nil {
+		return ytm.Page{}, f.moreErr
+	}
+	page := ytm.Page{Tracks: f.morePage}
+	f.morePage, f.next = nil, ytm.Continuation{}
+	return page, nil
+}
+
+// pageFor is a listing, carrying the staged continuation so that a test can
+// ask for a second page.
+func (f *fakeLibrary) pageFor(id string) ytm.Page {
+	return ytm.Page{Tracks: f.tracks[id], Next: f.next}
 }
 
 func (f *fakeLibrary) Rate(_ context.Context, videoID string, r ytm.Rating) error {
@@ -572,5 +603,119 @@ func TestAFailureToUnpauseIsReported(t *testing.T) {
 	}
 	if !strings.Contains(m.Err.Error(), "socket closed") {
 		t.Errorf("err = %v, want the failure to unpause", m.Err)
+	}
+}
+
+// Reaching the end of a list is the same gesture as asking for more of it.
+func TestWalkingOntoTheLastRowFetchesTheNextPage(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.tracks["LM"] = fromUI(rows(3))
+	lib.next = ytm.Continuation{Endpoint: "browse", Token: "more"}
+	lib.morePage = fromUI([]Track{{VideoID: "z", Title: "from page two"}})
+
+	m := wired(t, lib, st, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}}
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+
+	if !m.more.More() {
+		t.Fatal("the list does not know there is more")
+	}
+	if m.rowCount() != len(m.Tracks)+1 {
+		t.Fatalf("row count = %d, want one more than the tracks", m.rowCount())
+	}
+
+	// Walk down past the last track and onto the offer.
+	for range len(m.Tracks) {
+		next, cmd := m.Update(keyPress("j"))
+		m = drain(t, next.(Model), cmd)
+	}
+	// The page has arrived by now, so the cursor is on a track again — the
+	// row it landed on turned into one.
+	if len(m.Tracks) != 4 || m.Tracks[3].Title != "from page two" {
+		t.Fatalf("tracks = %+v", m.Tracks)
+	}
+	// That was the last page, so the offer is gone.
+	if m.more.More() {
+		t.Error("it still offers another page")
+	}
+	if m.loadingMore {
+		t.Error("still marked as loading")
+	}
+}
+
+// Clicking the offer does the same thing as walking onto it.
+func TestClickingTheOfferFetchesTheNextPage(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.tracks["LM"] = fromUI(rows(3))
+	lib.next = ytm.Continuation{Endpoint: "browse", Token: "more"}
+	lib.morePage = fromUI([]Track{{VideoID: "z", Title: "from page two"}})
+
+	m := wired(t, lib, st, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}}
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+
+	next, cmd := m.Update(click(trackX, trackRow(len(m.Tracks))))
+	m = drain(t, next.(Model), cmd)
+
+	if len(m.Tracks) != 4 {
+		t.Fatalf("tracks = %+v", m.Tracks)
+	}
+}
+
+// Two moves onto the offer must not send two requests.
+func TestTheNextPageIsOnlyAskedForOnce(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.tracks["LM"] = fromUI(rows(2))
+	lib.next = ytm.Continuation{Endpoint: "browse", Token: "more"}
+
+	m := wired(t, lib, st, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}}
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+
+	// Land on the offer without letting the reply arrive.
+	m.trackCursor = len(m.Tracks)
+	first, _ := m.fetchMore(false)
+	m = first.(Model)
+	if !m.loadingMore {
+		t.Fatal("the first ask did not start")
+	}
+	before := len(lib.askedFor)
+	second, cmd := m.fetchMore(false)
+	if cmd != nil {
+		t.Error("a second ask went out while the first was in flight")
+	}
+	_ = second
+	if len(lib.askedFor) != before {
+		t.Errorf("asked for %v", lib.askedFor)
+	}
+}
+
+// A page that fails to arrive says so and lets the offer be taken again.
+func TestAFailedPageIsReported(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.tracks["LM"] = fromUI(rows(2))
+	lib.next = ytm.Continuation{Endpoint: "browse", Token: "more"}
+	lib.moreErr = errors.New("no")
+
+	m := wired(t, lib, st, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}}
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+
+	m.trackCursor = len(m.Tracks)
+	next, cmd := m.fetchMore(false)
+	m = drain(t, next.(Model), cmd)
+
+	if m.Err == nil {
+		t.Fatal("no error reported")
+	}
+	if m.loadingMore {
+		t.Error("still marked as loading, so the offer can never be taken again")
+	}
+	if !m.more.More() {
+		t.Error("the offer was thrown away on a failure")
 	}
 }

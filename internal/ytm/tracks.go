@@ -52,16 +52,12 @@ func (r Rating) endpoint() string {
 //
 // The browse id is the playlist id with a VL prefix; callers pass the bare
 // playlist id and this adds it, so ids round-trip with LibraryPlaylists.
-func (c *Client) PlaylistTracks(ctx context.Context, playlistID string) ([]Track, error) {
+func (c *Client) PlaylistTracks(ctx context.Context, playlistID string) (Page, error) {
 	browseID := playlistID
 	if !strings.HasPrefix(browseID, "VL") {
 		browseID = "VL" + browseID
 	}
-	raw, err := c.post(ctx, "browse", map[string]any{"browseId": browseID})
-	if err != nil {
-		return nil, err
-	}
-	return parseTracks(raw)
+	return c.page(ctx, "browse", map[string]any{"browseId": browseID})
 }
 
 // songsFilter restricts search to songs. Without it the server answers with
@@ -72,46 +68,57 @@ const songsFilter = "EgWKAQIIAWoMEA4QChADEAQQCRAF"
 // Search returns songs matching a query.
 //
 // The server answers twenty at a time and hands back a token for the rest,
-// so this follows them: twenty is too few to find anything with.
-func (c *Client) Search(ctx context.Context, query string) ([]Track, error) {
-	return c.pages(ctx, "search", map[string]any{
+// which the caller asks for when it wants them.
+func (c *Client) Search(ctx context.Context, query string) (Page, error) {
+	return c.page(ctx, "search", map[string]any{
 		"query":  query,
 		"params": songsFilter,
 	})
 }
 
-// maxPages caps how far a listing is followed. Continuations run until the
-// server runs out, which for a common word is a long way.
-const maxPages = 5
+// Page is a chunk of a listing, and what is needed to ask for the next one.
+//
+// Listings are paged at the server and a page is all anyone looks at first,
+// so this hands one back with the means to go on rather than spending the
+// requests up front.
+type Page struct {
+	Tracks []Track
+	Next   Continuation
+}
 
-// pages walks a listing, following continuations. A failure part way
-// through gives back what did arrive: some results beat none.
-func (c *Client) pages(ctx context.Context, endpoint string, body map[string]any) ([]Track, error) {
-	var all []Track
-	for range maxPages {
-		raw, err := c.post(ctx, endpoint, body)
-		if err != nil {
-			if len(all) > 0 {
-				return all, nil
-			}
-			return nil, err
-		}
-		tracks, err := parseTracks(raw)
-		if err != nil {
-			if len(all) > 0 {
-				return all, nil
-			}
-			return nil, err
-		}
-		all = append(all, tracks...)
+// Continuation is a place in a listing. It carries the endpoint as well as
+// the token because the two are not interchangeable: a search continues at
+// search and a browse at browse.
+type Continuation struct {
+	Endpoint string
+	Token    string
+}
 
-		token := continuationToken(raw)
-		if token == "" {
-			break
-		}
-		body = map[string]any{"continuation": token}
+// More reports whether there is another page.
+func (c Continuation) More() bool { return c.Token != "" }
+
+// More fetches the page after one already read.
+func (c *Client) More(ctx context.Context, from Continuation) (Page, error) {
+	if !from.More() {
+		return Page{}, nil
 	}
-	return all, nil
+	return c.page(ctx, from.Endpoint, map[string]any{"continuation": from.Token})
+}
+
+// page reads one page of a listing.
+func (c *Client) page(ctx context.Context, endpoint string, body map[string]any) (Page, error) {
+	raw, err := c.post(ctx, endpoint, body)
+	if err != nil {
+		return Page{}, err
+	}
+	tracks, err := parseTracks(raw)
+	if err != nil {
+		return Page{}, err
+	}
+	return Page{
+		Tracks: tracks,
+		Next:   Continuation{Endpoint: endpoint, Token: continuationToken(raw)},
+	}, nil
 }
 
 // continuationToken finds the token for the next page. The newer shape came
@@ -139,8 +146,11 @@ func continuationToken(raw json.RawMessage) string {
 }
 
 // AlbumTracks returns the tracks on an album.
-func (c *Client) AlbumTracks(ctx context.Context, browseID string) ([]Track, error) {
-	return c.browseTracks(ctx, browseID)
+func (c *Client) AlbumTracks(ctx context.Context, browseID string) (Page, error) {
+	if browseID == "" {
+		return Page{}, fmt.Errorf("ytm: browse: no id")
+	}
+	return c.page(ctx, "browse", map[string]any{"browseId": browseID})
 }
 
 // ArtistPage returns what an artist's page leads with: their songs, and
@@ -149,19 +159,22 @@ func (c *Client) AlbumTracks(ctx context.Context, browseID string) ([]Track, err
 // A release comes back as a Track with no video id — there is nothing to
 // play — carrying the album's browse id instead, so that opening one is the
 // same operation as going to a track's album.
-func (c *Client) ArtistPage(ctx context.Context, browseID string) ([]Track, error) {
+func (c *Client) ArtistPage(ctx context.Context, browseID string) (Page, error) {
 	if browseID == "" {
-		return nil, fmt.Errorf("ytm: browse: no id")
+		return Page{}, fmt.Errorf("ytm: browse: no id")
 	}
 	raw, err := c.post(ctx, "browse", map[string]any{"browseId": browseID})
 	if err != nil {
-		return nil, err
+		return Page{}, err
 	}
 	songs, err := parseTracks(raw)
 	if err != nil {
-		return nil, err
+		return Page{}, err
 	}
-	return append(songs, parseReleases(raw)...), nil
+	return Page{
+		Tracks: append(songs, parseReleases(raw)...),
+		Next:   Continuation{Endpoint: "browse", Token: continuationToken(raw)},
+	}, nil
 }
 
 // parseReleases pulls the album tiles off a page. They are a different
@@ -202,20 +215,6 @@ func browseTile(item map[string]any) (id, pageType string) {
 	}
 	id, _ = endpoint["browseId"].(string)
 	return id, pageTypeOf(endpoint)
-}
-
-// browseTracks reads whatever track rows a browse id's page carries. Albums
-// and artist pages are laid out differently from each other and from a
-// playlist, but the rows themselves are the same renderer.
-func (c *Client) browseTracks(ctx context.Context, browseID string) ([]Track, error) {
-	if browseID == "" {
-		return nil, fmt.Errorf("ytm: browse: no id")
-	}
-	raw, err := c.post(ctx, "browse", map[string]any{"browseId": browseID})
-	if err != nil {
-		return nil, err
-	}
-	return parseTracks(raw)
 }
 
 // Rate sets the thumbs state of a track. Applying the rating a track already

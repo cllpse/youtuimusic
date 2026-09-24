@@ -46,7 +46,11 @@ func (m Model) hit(x, y int) (region, int) {
 		}
 		// The table is scrolled, so the row on screen is not the row in the
 		// list.
-		return regionTracks, y - tabsHeight + m.trackOffset
+		row := y - tabsHeight + m.trackOffset
+		if row >= m.rowCount() {
+			return regionNone, 0
+		}
+		return regionTracks, row
 
 	case y == m.barRow():
 		return regionBar, x
@@ -168,6 +172,12 @@ func (m Model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		return m.selectTab(n)
 
 	case regionTracks:
+		if m.more.More() && n == len(m.Tracks) {
+			// The row that offers the next page is not a track.
+			m.trackCursor = n
+			m.scroll()
+			return m.fetchMore(false)
+		}
 		if n >= len(m.Tracks) {
 			return m, nil
 		}
@@ -175,7 +185,7 @@ func (m Model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		m.scroll()
 		t := m.Tracks[n]
 		if again {
-			return m.start(t)
+			return m.open(t)
 		}
 		return m, m.prefetch(t.VideoID)
 

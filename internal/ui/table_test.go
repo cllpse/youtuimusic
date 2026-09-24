@@ -171,3 +171,50 @@ func TestAReleaseRowIsMarkedAndHasNoLength(t *testing.T) {
 		t.Error("a song lost its length")
 	}
 }
+
+// A listing with more to fetch offers it as the last row, centred, and that
+// row is not a track.
+func TestTheTableOffersTheNextPage(t *testing.T) {
+	tracks := tableTracks()
+	table := trackTable{tracks: tracks, width: 40, height: len(tracks) + 1, more: true}
+
+	if table.rowCount() != len(tracks)+1 {
+		t.Fatalf("row count = %d, want one more than the tracks", table.rowCount())
+	}
+	rows := table.rows()
+	last := plain(rows[len(tracks)])
+	if !strings.Contains(last, "load more") {
+		t.Fatalf("the last row is %q", last)
+	}
+	if lipgloss.Width(last) != 40 {
+		t.Errorf("the last row is %d cells", lipgloss.Width(last))
+	}
+	// Centred, which means space either side of it.
+	if strings.HasPrefix(last, "load") || strings.HasSuffix(last, "more") {
+		t.Errorf("the offer is not centred: %q", last)
+	}
+
+	// Waiting for it, the row becomes the spinner.
+	table.loadingMore, table.spinner = true, "▒"
+	waiting := plain(table.rows()[len(tracks)])
+	if !strings.Contains(waiting, "loading…") || !strings.Contains(waiting, "▒") {
+		t.Errorf("the row does not say it is waiting: %q", waiting)
+	}
+	if strings.Contains(waiting, "load more") {
+		t.Errorf("it still offers what it is already fetching: %q", waiting)
+	}
+}
+
+// Without more to fetch there is no extra row.
+func TestACompleteListingOffersNothing(t *testing.T) {
+	tracks := tableTracks()
+	table := trackTable{tracks: tracks, width: 40, height: len(tracks) + 1}
+	if table.rowCount() != len(tracks) {
+		t.Fatalf("row count = %d", table.rowCount())
+	}
+	for _, row := range table.rows() {
+		if strings.Contains(plain(row), "load more") {
+			t.Errorf("a complete listing offers more: %q", plain(row))
+		}
+	}
+}

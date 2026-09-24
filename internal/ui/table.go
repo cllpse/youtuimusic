@@ -26,6 +26,21 @@ type trackTable struct {
 	showRating bool
 	// playing is the video id to colour, and is empty when nothing is.
 	playing string
+
+	// more draws one extra row at the end, offering the next page. While
+	// that page is on its way it becomes the same spinner the rest of the
+	// interface waits with.
+	more        bool
+	loadingMore bool
+	spinner     string
+}
+
+// rowCount is the tracks plus the row that offers the next page.
+func (t trackTable) rowCount() int {
+	if t.more {
+		return len(t.tracks) + 1
+	}
+	return len(t.tracks)
 }
 
 // scrollbarWidth is the bar itself plus a blank column to its right, so it
@@ -37,13 +52,13 @@ const scrollbarWidth = 2
 // not made narrower for nothing.
 func needsScrollbar(total, height int) bool { return height > 0 && total > height }
 
-func (t trackTable) hasScrollbar() bool { return needsScrollbar(len(t.tracks), t.height) }
+func (t trackTable) hasScrollbar() bool { return needsScrollbar(t.rowCount(), t.height) }
 
 // rows renders the table one line at a time, so a caller can put something
 // above it without splitting a string apart again.
 func (t trackTable) rows() []string {
 	width := t.width
-	bar := scrollbarFor(len(t.tracks), t.offset, t.height)
+	bar := scrollbarFor(t.rowCount(), t.offset, t.height)
 	if bar != nil {
 		width -= scrollbarWidth
 	}
@@ -52,6 +67,10 @@ func (t trackTable) rows() []string {
 	for i := range t.height {
 		index := i + t.offset
 		line := ""
+		if t.more && index == len(t.tracks) {
+			out = append(out, t.moreRow(width))
+			continue
+		}
 		if index >= 0 && index < len(t.tracks) {
 			track := t.tracks[index]
 			playing := t.playing != "" && track.VideoID == t.playing
@@ -71,6 +90,19 @@ func (t trackTable) rows() []string {
 }
 
 func (t trackTable) render() string { return strings.Join(t.rows(), "\n") }
+
+// moreRow is the last line of a listing that has more to fetch.
+func (t trackTable) moreRow(width int) string {
+	if t.loadingMore {
+		return lipgloss.PlaceHorizontal(width, lipgloss.Center,
+			t.spinner+" "+dim.Render("loading…"))
+	}
+	centred := lipgloss.PlaceHorizontal(width, lipgloss.Center, "load more")
+	if t.cursor == len(t.tracks) {
+		return rowSelected.Render(centred)
+	}
+	return dim.Render(centred)
+}
 
 // A row carries two independent things: whether it is the track playing, and
 // whether it is the one under the cursor. Colour says the first and a filled

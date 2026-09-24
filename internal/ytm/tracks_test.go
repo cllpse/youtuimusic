@@ -34,7 +34,8 @@ func TestPlaylistTracks(t *testing.T) {
 				trackRow("Long One", "Someone", "Album", "1:02:03", "vid2", "set2"))))
 	})
 
-	got, err := c.PlaylistTracks(context.Background(), "PL123")
+	page, err := c.PlaylistTracks(context.Background(), "PL123")
+	got := page.Tracks
 	if err != nil {
 		t.Fatalf("PlaylistTracks: %v", err)
 	}
@@ -82,7 +83,8 @@ func TestRowsWithoutAVideoIDAreSkipped(t *testing.T) {
 			  {"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Top result"}]}}}]}},` +
 				trackRow("Real", "A", "B", "3:00", "vid1", "set1"))))
 	})
-	got, err := c.PlaylistTracks(context.Background(), "PL1")
+	page, err := c.PlaylistTracks(context.Background(), "PL1")
+	got := page.Tracks
 	if err != nil {
 		t.Fatalf("PlaylistTracks: %v", err)
 	}
@@ -109,7 +111,8 @@ func TestSearchFindsIDOutsidePlaylistItemData(t *testing.T) {
 		    {"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Aphex Twin"}]}}}],
 		  "overlay":{"watchEndpoint":{"videoId":"3qVRuKXYFFQ"}}}}`)))
 	})
-	got, err := c.Search(context.Background(), "xtal")
+	page, err := c.Search(context.Background(), "xtal")
+	got := page.Tracks
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -192,7 +195,8 @@ func TestRatingIsReadFromTheResponse(t *testing.T) {
 			row("liked", "LIKE") + "," + row("disliked", "DISLIKE") + "," +
 				row("neither", "INDIFFERENT"))))
 	})
-	got, err := c.PlaylistTracks(context.Background(), "PL1")
+	page, err := c.PlaylistTracks(context.Background(), "PL1")
+	got := page.Tracks
 	if err != nil {
 		t.Fatalf("PlaylistTracks: %v", err)
 	}
@@ -212,7 +216,8 @@ func TestARowWithNoLikeStatusIsUnrated(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(signedInBody(trackRow("t", "a", "b", "3:00", "v1", "s1"))))
 	})
-	got, _ := c.PlaylistTracks(context.Background(), "PL1")
+	page, _ := c.PlaylistTracks(context.Background(), "PL1")
+	got := page.Tracks
 	if len(got) != 1 || got[0].Rating != RatingNone {
 		t.Fatalf("got %+v", got)
 	}
@@ -236,7 +241,8 @@ func TestAlbumAndArtistIDsAreReadFromARow(t *testing.T) {
 			link("MPREbalbum", pageTypeAlbum) + `]}}}],
 		  "playlistItemData":{"videoId":"v1"}}}`)))
 	})
-	got, err := c.PlaylistTracks(context.Background(), "PL1")
+	page, err := c.PlaylistTracks(context.Background(), "PL1")
+	got := page.Tracks
 	if err != nil {
 		t.Fatalf("PlaylistTracks: %v", err)
 	}
@@ -256,7 +262,8 @@ func TestARowWithNoLinksHasNoIDs(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(signedInBody(trackRow("t", "a", "b", "3:00", "v1", "s1"))))
 	})
-	got, _ := c.PlaylistTracks(context.Background(), "PL1")
+	page, _ := c.PlaylistTracks(context.Background(), "PL1")
+	got := page.Tracks
 	if len(got) != 1 || got[0].AlbumID != "" || got[0].ArtistID != "" {
 		t.Fatalf("got %+v", got)
 	}
@@ -265,12 +272,12 @@ func TestARowWithNoLinksHasNoIDs(t *testing.T) {
 func TestAlbumAndArtistBrowseByID(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		call func(c *Client) ([]Track, error)
+		call func(c *Client) (Page, error)
 	}{
-		{"album", func(c *Client) ([]Track, error) {
+		{"album", func(c *Client) (Page, error) {
 			return c.AlbumTracks(context.Background(), "MPREbxyz")
 		}},
-		{"artist", func(c *Client) ([]Track, error) {
+		{"artist", func(c *Client) (Page, error) {
 			return c.ArtistPage(context.Background(), "UCxyz")
 		}},
 	} {
@@ -283,10 +290,11 @@ func TestAlbumAndArtistBrowseByID(t *testing.T) {
 				_, _ = w.Write([]byte(signedInBody(
 					trackRow("Track", "Artist", "Album", "3:00", "v1", ""))))
 			})
-			got, err := tc.call(c)
+			page, err := tc.call(c)
 			if err != nil {
 				t.Fatalf("%s: %v", tc.name, err)
 			}
+			got := page.Tracks
 			// No VL prefix: these are not playlists.
 			if gotID != "MPREbxyz" && gotID != "UCxyz" {
 				t.Errorf("browseId = %q", gotID)
@@ -320,7 +328,8 @@ func TestASearchRowIsUnpacked(t *testing.T) {
 		      {"text":"4:51"}]}}}],
 		  "playlistItemData":{"videoId":"v1"}}}`)))
 	})
-	got, err := c.Search(context.Background(), "xtal")
+	page, err := c.Search(context.Background(), "xtal")
+	got := page.Tracks
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -362,64 +371,106 @@ func TestLinkedRunsNameTheArtistAndAlbum(t *testing.T) {
 			link("Cherry", "MPREbC", pageTypeAlbum) + `]}}}],
 		  "playlistItemData":{"videoId":"v1"}}}`)))
 	})
-	got, _ := c.Search(context.Background(), "poly")
+	page, _ := c.Search(context.Background(), "poly")
+	got := page.Tracks
 	if len(got) != 1 || got[0].Artist != "DAPHNI" || got[0].Album != "Cherry" {
 		t.Fatalf("got %+v", got)
 	}
 }
 
-// Twenty is one page. The rest come back behind a token.
-func TestSearchFollowsContinuations(t *testing.T) {
+// Twenty is one page, and the token for the rest comes back with it rather
+// than being spent on the spot.
+func TestAPageCarriesItsContinuation(t *testing.T) {
 	var calls int
+	var gotToken string
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		calls++
+		gotToken, _ = body["continuation"].(string)
 		row := trackRow("page"+itoa(calls), "a", "b", "3:00", "v"+itoa(calls), "")
-		// Hand out a token twice, then stop.
-		if calls < 3 {
+		if calls == 1 {
 			_, _ = w.Write([]byte(`{"responseContext":{"serviceTrackingParams":
 			  [{"params":[{"key":"logged_in","value":"1"}]}]},
 			  "contents":{"gridRenderer":{"items":[` + row + `]}},
 			  "continuationItemRenderer":{"continuationEndpoint":
-			    {"continuationCommand":{"token":"more` + itoa(calls) + `"}}}}`))
+			    {"continuationCommand":{"token":"more"}}}}`))
 			return
 		}
 		_, _ = w.Write([]byte(signedInBody(row)))
 	})
 
-	got, err := c.Search(context.Background(), "x")
+	first, err := c.Search(context.Background(), "x")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if calls != 3 {
-		t.Errorf("made %d requests, want 3", calls)
+	if calls != 1 {
+		t.Fatalf("made %d requests for one page", calls)
 	}
-	if len(got) != 3 {
-		t.Fatalf("got %d results across the pages: %+v", len(got), got)
+	if !first.Next.More() {
+		t.Fatal("the page does not say there is more")
 	}
-	if got[2].Title != "page3" {
-		t.Errorf("the last page is %q", got[2].Title)
+	if len(first.Tracks) != 1 || first.Tracks[0].Title != "page1" {
+		t.Fatalf("first page = %+v", first.Tracks)
+	}
+
+	second, err := c.More(context.Background(), first.Next)
+	if err != nil {
+		t.Fatalf("More: %v", err)
+	}
+	if gotToken != "more" {
+		t.Errorf("continued with %q", gotToken)
+	}
+	if len(second.Tracks) != 1 || second.Tracks[0].Title != "page2" {
+		t.Fatalf("second page = %+v", second.Tracks)
+	}
+	if second.Next.More() {
+		t.Error("the last page still claims there is more")
 	}
 }
 
-// A listing that never stops handing out tokens has to be cut off.
-func TestContinuationsAreCapped(t *testing.T) {
+// A search continues at search and a browse at browse; the token alone does
+// not say which.
+func TestAContinuationRemembersItsEndpoint(t *testing.T) {
+	var paths []string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		_, _ = w.Write([]byte(`{"responseContext":{"serviceTrackingParams":
+		  [{"params":[{"key":"logged_in","value":"1"}]}]},
+		  "contents":{"gridRenderer":{"items":[]}},
+		  "continuationItemRenderer":{"continuationEndpoint":
+		    {"continuationCommand":{"token":"more"}}}}`))
+	})
+
+	search, _ := c.Search(context.Background(), "x")
+	_, _ = c.More(context.Background(), search.Next)
+	browse, _ := c.PlaylistTracks(context.Background(), "PL1")
+	_, _ = c.More(context.Background(), browse.Next)
+
+	want := []string{
+		"/youtubei/v1/search", "/youtubei/v1/search",
+		"/youtubei/v1/browse", "/youtubei/v1/browse",
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Errorf("request %d went to %s, want %s", i, paths[i], want[i])
+		}
+	}
+}
+
+// Asking to continue a finished listing is not a request.
+func TestContinuingTheEndDoesNothing(t *testing.T) {
 	var calls int
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		_, _ = w.Write([]byte(`{"responseContext":{"serviceTrackingParams":
-		  [{"params":[{"key":"logged_in","value":"1"}]}]},
-		  "contents":{"gridRenderer":{"items":[` +
-			trackRow("t", "a", "b", "3:00", "v"+itoa(calls), "") + `]}},
-		  "continuationItemRenderer":{"continuationEndpoint":
-		    {"continuationCommand":{"token":"endless"}}}}`))
+		_, _ = w.Write([]byte(signedInBody("")))
 	})
-	if _, err := c.Search(context.Background(), "x"); err != nil {
-		t.Fatalf("Search: %v", err)
+	page, err := c.More(context.Background(), Continuation{})
+	if err != nil {
+		t.Fatalf("More: %v", err)
 	}
-	if calls != maxPages {
-		t.Errorf("made %d requests, want the cap of %d", calls, maxPages)
+	if calls != 0 || len(page.Tracks) != 0 {
+		t.Errorf("made %d requests for %d tracks", calls, len(page.Tracks))
 	}
 }
 
@@ -442,7 +493,8 @@ func TestArtistPageIncludesReleases(t *testing.T) {
 				tile("Cherry", "MPREbCherry", "Album • 2017"))))
 	})
 
-	got, err := c.ArtistPage(context.Background(), "UCd")
+	page, err := c.ArtistPage(context.Background(), "UCd")
+	got := page.Tracks
 	if err != nil {
 		t.Fatalf("ArtistPage: %v", err)
 	}

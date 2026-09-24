@@ -543,3 +543,65 @@ func TestEnterOnAReleaseOpensTheAlbum(t *testing.T) {
 		t.Fatalf("album tracks = %+v", m.detour.tracks)
 	}
 }
+
+// The icon alone leaves what you are looking at to be recognised; the word
+// says it.
+func TestThePopoverNamesWhatItShows(t *testing.T) {
+	for _, tc := range []struct {
+		item  menuItem
+		icon  string
+		label string
+		title string
+	}{
+		{menuAlbum, iconAlbum, "Album", "Cherry"},
+		{menuArtist, iconArtist, "Artist", "DAPHNI"},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			m, _, _, _ := menuModel(t)
+			m = openVia(t, m, tc.item)
+
+			header := plain(strings.Split(m.renderModal(), "\n")[1])
+			if !strings.Contains(header, tc.icon) {
+				t.Errorf("no icon on %q", header)
+			}
+			if !strings.Contains(header, tc.label) {
+				t.Errorf("%q does not name what it is", header)
+			}
+			if column(header, tc.label) > column(header, tc.title) {
+				t.Errorf("the name comes before the label: %q", header)
+			}
+		})
+	}
+}
+
+// The popover pages the same way the list underneath does.
+func TestThePopoverOffersItsNextPage(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.next = ytm.Continuation{Endpoint: "browse", Token: "more"}
+	lib.morePage = []ytm.Track{{VideoID: "z", Title: "from page two"}}
+
+	m = openVia(t, m, menuAlbum)
+	if !m.detour.more.More() {
+		t.Fatal("the popover does not know there is more")
+	}
+	before := len(m.detour.tracks)
+	if m.detourRowCount() != before+1 {
+		t.Fatalf("row count = %d, want one more", m.detourRowCount())
+	}
+
+	// Walk onto the offer.
+	for range before {
+		next, cmd := m.Update(keyPress("j"))
+		m = drain(t, next.(Model), cmd)
+	}
+	if len(m.detour.tracks) != before+1 {
+		t.Fatalf("popover tracks = %+v", m.detour.tracks)
+	}
+	if m.detour.tracks[before].Title != "from page two" {
+		t.Errorf("the appended row is %q", m.detour.tracks[before].Title)
+	}
+	// And the list underneath was not the one that grew.
+	if m.more.More() {
+		t.Error("the popover's page landed on the list behind it")
+	}
+}

@@ -69,10 +69,11 @@ func TestLivePlaylistTracks(t *testing.T) {
 	}
 
 	start := time.Now()
-	tracks, err := c.PlaylistTracks(ctx, target)
+	page, err := c.PlaylistTracks(ctx, target)
 	if err != nil {
 		t.Fatalf("PlaylistTracks: %v", err)
 	}
+	tracks := page.Tracks
 	t.Logf("%d tracks in %v", len(tracks), time.Since(start))
 	for _, tr := range tracks {
 		t.Logf("   %-12s %-28s %-24s %v", tr.VideoID, trunc(tr.Title, 28), trunc(tr.Artist, 24), tr.Duration)
@@ -91,10 +92,11 @@ func TestLiveSearch(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	got, err := c.Search(ctx, "aphex twin xtal")
+	page, err := c.Search(ctx, "aphex twin xtal")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
+	got := page.Tracks
 	t.Logf("%d results in %v", len(got), time.Since(start))
 	for i, tr := range got {
 		if i == 5 {
