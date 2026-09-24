@@ -12,11 +12,12 @@
 // disk only ages, while the browser sharing the account keeps rolling the
 // session forward, and one day the copy is behind and stops working.
 //
-// Fixing that means rotating the cookie ourselves and writing the result
-// back, which is what Save is for. The rotation call itself is not written
-// yet: accounts.google.com/RotateCookies answers the widely published
-// request shape with HTTP 401 for this account, so the shape it does want
-// has still to be found.
+// So the session is read from the browser at launch instead. The browser
+// is the one client Google keeps rotating for, which makes its copy current
+// by definition, and reading it again on every run costs one file read. A
+// saved session remains as the fallback for when the browser cannot be
+// read at all — a locked keyring, a machine without one — and Load keeps it
+// up to date so the fallback is never the stale thing it used to be.
 package auth
 
 import (
@@ -26,7 +27,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/cllpse/youtuimusic/internal/chromium"
 	"github.com/cllpse/youtuimusic/internal/ytm"
 )
 
@@ -118,8 +121,59 @@ func sources() []string {
 	)
 }
 
-// Load reads the first session file that exists.
+// UserAgent is what requests identify as when the source did not say. The
+// cookie store does not record a user agent, so one is supplied.
+const UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+	"(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+
+// Host is the site whose cookies a session is built from.
+const Host = "music.youtube.com"
+
+// FromBrowser reads a live session out of the signed-in browser profile.
+func FromBrowser() (ytm.Session, error) {
+	cookies, _, err := chromium.Cookies(Host, time.Now())
+	if err != nil {
+		return ytm.Session{}, err
+	}
+	return ytm.Session{Cookie: chromium.Header(cookies), UserAgent: UserAgent}, nil
+}
+
+// Load returns the session to sign in with.
+//
+// The browser comes first and a saved file second, because a file only ages
+// while the browser's copy is current. What the browser cannot supply — the
+// user agent, the account index — is carried over from the saved session,
+// and the result is saved back, so the fallback stays fresh even on the
+// runs that never need it.
+//
+// Setting EnvPath is taken as meaning that file and no other, so a session
+// captured by hand can still be used deliberately.
 func Load() (ytm.Session, error) {
+	saved, savedErr := loadFile()
+	if os.Getenv(EnvPath) != "" {
+		return saved, savedErr
+	}
+
+	live, liveErr := FromBrowser()
+	if liveErr == nil {
+		session := saved // zero if there was none
+		session.Cookie = live.Cookie
+		if session.UserAgent == "" {
+			session.UserAgent = live.UserAgent
+		}
+		// Best effort: a session that works is worth having even if it
+		// cannot be cached.
+		_ = Save(session)
+		return session, nil
+	}
+	if savedErr == nil {
+		return saved, nil
+	}
+	return ytm.Session{}, fmt.Errorf("%w; and no saved session: %w", liveErr, savedErr)
+}
+
+// loadFile reads the first session file that exists.
+func loadFile() (ytm.Session, error) {
 	tried := sources()
 	for _, path := range tried {
 		raw, err := os.ReadFile(path)

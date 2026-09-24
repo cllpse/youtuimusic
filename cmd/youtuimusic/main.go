@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/cllpse/youtuimusic/internal/auth"
+	"github.com/cllpse/youtuimusic/internal/chromium"
 	"github.com/cllpse/youtuimusic/internal/player"
 	"github.com/cllpse/youtuimusic/internal/stream"
 	"github.com/cllpse/youtuimusic/internal/ui"
@@ -26,9 +27,15 @@ func main() {
 func run() error {
 	session, err := auth.Load()
 	if err != nil {
-		if errors.Is(err, auth.ErrNoSession) {
-			return fmt.Errorf("%w\n\nSign in with a Chromium-family browser and export "+
-				"the session, or point %s at a file of request headers", err, auth.EnvPath)
+		// Telling someone to export a session would be wrong now: the
+		// app reads the browser, so the fix is nearly always in the
+		// browser rather than in a file.
+		if errors.Is(err, chromium.ErrNoBrowser) || errors.Is(err, auth.ErrNoSession) {
+			return fmt.Errorf("%w\n\nSign in to %s in a Chromium-based browser and "+
+				"run this again — the session is read from there. If the browser's "+
+				"keyring is locked, unlock it first. To use a captured session "+
+				"instead, point %s at a file of request headers",
+				err, auth.Host, auth.EnvPath)
 		}
 		return err
 	}
