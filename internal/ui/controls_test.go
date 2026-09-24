@@ -583,7 +583,7 @@ func TestUnlikingRemovesTheRowFromLikedMusic(t *testing.T) {
 		m.Tracks[i].Rating = RatingUp
 	}
 	m.showingID = likedPlaylistID
-	m.cache[likedPlaylistID] = m.Tracks
+	m.cache[likedPlaylistID] = cached{tracks: m.Tracks}
 	before := len(m.Tracks)
 	m.playing = m.Tracks[0]
 

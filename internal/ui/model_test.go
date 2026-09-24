@@ -644,10 +644,10 @@ func TestAHighlightedRowDoesNotMuteItsColumns(t *testing.T) {
 // Clicking a column header orders by it; clicking again reverses.
 func TestClickingTheHeaderSorts(t *testing.T) {
 	m := sample()
-	m.Tracks = []Track{
+	m.setTracks([]Track{
 		{VideoID: "a", Title: "Zulu", Artist: "Zappa", Duration: 3 * time.Minute},
 		{VideoID: "b", Title: "Alpha", Artist: "abba", Duration: time.Minute},
-	}
+	})
 
 	spans := m.table(m.width, m.bodyHeight()).headerSpans()
 	var artist int
@@ -679,10 +679,10 @@ func TestClickingTheHeaderSorts(t *testing.T) {
 // s cycles the column and S reverses, without either needing the mouse.
 func TestSortKeys(t *testing.T) {
 	m := sample()
-	m.Tracks = []Track{
+	m.setTracks([]Track{
 		{VideoID: "a", Title: "Zulu", Artist: "Zappa"},
 		{VideoID: "b", Title: "Alpha", Artist: "abba"},
-	}
+	})
 
 	m = press(m, "s")
 	if m.sort.by != sortTitle {
@@ -705,10 +705,10 @@ func TestSortKeys(t *testing.T) {
 // Sorting moves the rows, so the cursor has to mean the row it points at.
 func TestSortingKeepsTheCursorMeaningful(t *testing.T) {
 	m := sample()
-	m.Tracks = []Track{
+	m.setTracks([]Track{
 		{VideoID: "a", Title: "Zulu"},
 		{VideoID: "b", Title: "Alpha"},
-	}
+	})
 	m.trackCursor = 1
 
 	m = press(m, "s")

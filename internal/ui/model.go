@@ -130,8 +130,16 @@ type Model struct {
 	repeat  Repeat
 	loading bool
 
-	// tracks already fetched, by tab id, so going back to a tab is instant.
-	cache map[string][]Track
+	// cache is what each tab has fetched, so going back to one is instant.
+	// It holds where the listing carries on as well as its rows: without
+	// that, revisiting a tab lost the thread and could not page further.
+	cache map[string]cached
+	// arrival is the visible listing in the order it came in. Tracks is
+	// that order sorted, so that clearing a sort puts it back.
+	arrival []Track
+	// autoPages counts what sorting has fetched on its own, so a server
+	// that never runs out cannot spin here forever.
+	autoPages int
 	// showingID is the tab the visible list came from, which tells a refetch
 	// of the same tab from a move to another one.
 	showingID string
@@ -184,7 +192,7 @@ func New(s Services) Model {
 		services:  s,
 		loading:   s.Library != nil,
 		now:       time.Now,
-		cache:     map[string][]Track{},
+		cache:     map[string]cached{},
 		bar:       newBar(rampAt),
 		pausedBar: newBar(mutedRamp),
 		spin:      spinner.New(spinner.WithSpinner(spinner.Pulse), spinner.WithStyle(active)),
@@ -227,16 +235,23 @@ func (m *Model) startLoading() tea.Cmd {
 
 // ---------------------------------------------------------------- tabs ---
 
+// cached is a listing as far as it has been read.
+type cached struct {
+	tracks []Track
+	next   ytm.Continuation
+}
+
 // detour is an album or an artist, shown in a popover over the main view.
 // It keeps its own list, because what is underneath is still there and must
 // not be disturbed.
 type detour struct {
-	active bool
-	tab    Playlist
-	tracks []Track
-	cursor int
-	offset int
-	more   ytm.Continuation
+	active  bool
+	tab     Playlist
+	tracks  []Track
+	arrival []Track
+	cursor  int
+	offset  int
+	more    ytm.Continuation
 
 	// A search popover carries its own input. typing is whether keys go to
 	// it rather than to the list below.
@@ -268,10 +283,11 @@ func (m Model) enterDetour(tab Playlist) (Model, tea.Cmd) {
 	}
 	m.detour = detour{active: true, tab: tab}
 
-	if tracks, ok := m.cache[tab.ID]; ok {
-		m.detour.tracks = tracks
-		if len(tracks) > 0 {
-			return m, m.prefetch(tracks[0].VideoID)
+	if entry, ok := m.cache[tab.ID]; ok {
+		m.detour.arrival, m.detour.more = entry.tracks, entry.next
+		m.detour.tracks = sorted(entry.tracks, m.sort)
+		if len(m.detour.tracks) > 0 {
+			return m, m.prefetch(m.detour.tracks[0].VideoID)
 		}
 		return m, nil
 	}
@@ -366,15 +382,17 @@ func (m Model) showTab() (Model, tea.Cmd) {
 	m.trackCursor, m.trackOffset = 0, 0
 	tab := m.tabAt(m.tabCursor)
 
-	if tracks, ok := m.cache[tab.ID]; ok {
-		m.Tracks, m.loading, m.Err = tracks, false, nil
-		m.showingID, m.more = tab.ID, ytm.Continuation{}
-		if len(tracks) > 0 {
-			return m, m.prefetch(tracks[0].VideoID)
+	if entry, ok := m.cache[tab.ID]; ok {
+		m.arrival, m.more = entry.tracks, entry.next
+		m.Tracks, m.loading, m.Err = sorted(entry.tracks, m.sort), false, nil
+		m.showingID = tab.ID
+		if len(m.Tracks) > 0 {
+			return m, m.prefetch(m.Tracks[0].VideoID)
 		}
 		return m, nil
 	}
-	m.Tracks, m.showingID, m.more = nil, "", ytm.Continuation{}
+	m.Tracks, m.arrival = nil, nil
+	m.showingID, m.more = "", ytm.Continuation{}
 	return m, batch(m.startLoading(), m.scheduleTabLoad())
 }
 
@@ -551,16 +569,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.inDetour {
-			m.detour.tracks = append(m.detour.tracks, fromAPI(msg.page.Tracks)...)
+			m.detour.arrival = append(m.detour.arrival, fromAPI(msg.page.Tracks)...)
 			m.detour.more = msg.page.Next
-			return m, nil
+			m.cache[m.detour.tab.ID] = cached{m.detour.arrival, m.detour.more}
+		} else {
+			m.arrival = append(m.arrival, fromAPI(msg.page.Tracks)...)
+			m.more = msg.page.Next
+			if m.showingID != "" {
+				m.cache[m.showingID] = cached{m.arrival, m.more}
+			}
 		}
-		m.Tracks = append(m.Tracks, fromAPI(msg.page.Tracks)...)
-		m.more = msg.page.Next
-		if m.showingID != "" {
-			m.cache[m.showingID] = m.Tracks
-		}
-		return m, nil
+		m.applySort()
+		// A sort over half a list is not the order, so it keeps going.
+		return m, m.continueSort()
 
 	case tracksMsg:
 		// A menu is anchored to a row of the list being replaced.
@@ -575,16 +596,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		m.cache[msg.id] = tracks
+		m.cache[msg.id] = cached{tracks, msg.page.Next}
 		if m.detour.active && m.detour.tab.ID == msg.id {
-			m.detour.tracks = tracks
-			m.detour.more = msg.page.Next
+			m.detour.arrival, m.detour.more = tracks, msg.page.Next
+			m.detour.tracks = sorted(tracks, m.sort)
 			m.detour.cursor, m.detour.offset = 0, 0
 			m.loading, m.Err = false, nil
-			if len(tracks) > 0 {
-				return m, m.prefetch(tracks[0].VideoID)
+			if len(m.detour.tracks) > 0 {
+				return m, batch(m.prefetch(m.detour.tracks[0].VideoID), m.continueSort())
 			}
-			return m, nil
+			return m, m.continueSort()
 		}
 		if m.currentTab().ID != msg.id {
 			return m, nil // the view moved on while this was in flight
@@ -592,18 +613,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A refetch of the list already on screen keeps the reader's place
 		// in it; arriving at a new tab starts at the top.
 		refresh := m.showingID == msg.id
-		m.Tracks, m.loading, m.Err = tracks, false, nil
+		m.arrival, m.loading, m.Err = tracks, false, nil
+		m.Tracks = sorted(tracks, m.sort)
 		m.showingID, m.more = msg.id, msg.page.Next
 		if refresh {
-			m.trackCursor = clamp(m.trackCursor, len(tracks))
+			m.trackCursor = clamp(m.trackCursor, len(m.Tracks))
 			m.scroll()
-			return m, nil
+			return m, m.continueSort()
 		}
 		m.trackCursor, m.trackOffset = 0, 0
 		if len(m.Tracks) > 0 {
-			return m, m.prefetch(m.Tracks[0].VideoID)
+			return m, batch(m.prefetch(m.Tracks[0].VideoID), m.continueSort())
 		}
-		return m, nil
+		return m, m.continueSort()
 
 	case searchMsg:
 		// The popover may have been closed, or replaced by an album, while
@@ -611,14 +633,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.detour.active || m.detour.tab.kind != tabSearch {
 			return m, nil
 		}
-		m.detour.tracks = fromAPI(msg.page.Tracks)
-		m.detour.more = msg.page.Next
+		m.detour.arrival, m.detour.more = fromAPI(msg.page.Tracks), msg.page.Next
+		m.detour.tracks = sorted(m.detour.arrival, m.sort)
 		m.detour.cursor, m.detour.offset = 0, 0
 		m.loading, m.Err = false, nil
 		if len(m.detour.tracks) > 0 {
-			return m, m.prefetch(m.detour.tracks[0].VideoID)
+			return m, batch(m.prefetch(m.detour.tracks[0].VideoID), m.continueSort())
 		}
-		return m, nil
+		return m, m.continueSort()
 
 	case ratedMsg:
 		if msg.err != nil {
@@ -789,8 +811,9 @@ func (m *Model) setRating(videoID string, r Rating) {
 	if m.playing.VideoID == videoID {
 		m.playing.Rating = r
 	}
-	// The same track can be in the list, in the popover over it, or both.
-	for _, rows := range [][]Track{m.Tracks, m.detour.tracks} {
+	// The same track can be in the list, in the popover over it, or both —
+	// and in the order each arrived in, which is what a sort rebuilds from.
+	for _, rows := range [][]Track{m.Tracks, m.arrival, m.detour.tracks, m.detour.arrival} {
 		for i := range rows {
 			if rows[i].VideoID == videoID {
 				rows[i].Rating = r
@@ -854,11 +877,13 @@ var (
 // screen, which is what unliking it means there.
 func (m *Model) dropFromLiked(videoID string) {
 	if m.showingID == likedPlaylistID {
+		m.arrival = without(m.arrival, videoID)
 		m.Tracks = without(m.Tracks, videoID)
 		m.trackCursor = clamp(m.trackCursor, len(m.Tracks))
 		m.scroll()
 	}
 	if m.detour.active && m.detour.tab.ID == likedPlaylistID {
+		m.detour.arrival = without(m.detour.arrival, videoID)
 		m.detour.tracks = without(m.detour.tracks, videoID)
 		m.detour.cursor = clamp(m.detour.cursor, len(m.detour.tracks))
 	}
@@ -877,14 +902,70 @@ func without(tracks []Track, videoID string) []Track {
 // sortBy reorders both lists. The slices themselves are sorted, not the
 // drawing of them, so that a cursor keeps meaning the same row.
 func (m Model) sortBy(spec sortSpec) (tea.Model, tea.Cmd) {
-	m.sort = spec
-	m.Tracks = slices.Clone(m.Tracks)
-	sortTracks(m.Tracks, spec)
-	m.detour.tracks = slices.Clone(m.detour.tracks)
-	sortTracks(m.detour.tracks, spec)
+	m.sort, m.autoPages = spec, 0
+	m.applySort()
 	m.trackCursor, m.trackOffset = 0, 0
 	m.detour.cursor, m.detour.offset = 0, 0
-	return m, nil
+	return m, m.continueSort()
+}
+
+// setTracks puts a listing on screen, keeping the order it came in so that
+// a sort can be cleared again.
+func (m *Model) setTracks(tracks []Track) {
+	m.arrival = tracks
+	m.Tracks = sorted(tracks, m.sort)
+}
+
+// setDetourTracks does the same for the popover.
+func (m *Model) setDetourTracks(tracks []Track) {
+	m.detour.arrival = tracks
+	m.detour.tracks = sorted(tracks, m.sort)
+}
+
+// applySort rebuilds both lists from the order they arrived in. Sorting the
+// arrival order rather than the last sorted one is what lets the sort be
+// cleared: otherwise the order a listing came in is gone after the first
+// sort, and there is nothing to put back.
+func (m *Model) applySort() {
+	// A list with no arrival order behind it has nothing to rebuild from,
+	// and rebuilding anyway would empty it.
+	if m.arrival != nil {
+		m.Tracks = sorted(m.arrival, m.sort)
+	}
+	if m.detour.arrival != nil {
+		m.detour.tracks = sorted(m.detour.arrival, m.sort)
+	}
+}
+
+// sorted is a copy of a listing in a given order.
+func sorted(tracks []Track, spec sortSpec) []Track {
+	out := slices.Clone(tracks)
+	sortTracks(out, spec)
+	return out
+}
+
+// maxAutoPages caps what a sort will fetch on its own. The server decides
+// when a listing ends, and this decides what happens if it never does.
+const maxAutoPages = 50
+
+// continueSort fetches the rest of a listing while it is being sorted.
+// Ordering half a list puts the wrong rows at the top, so an order is only
+// true once everything is in — and asking for it is the only way to know.
+func (m *Model) continueSort() tea.Cmd {
+	if m.sort.by == sortNone || m.loadingMore || m.autoPages >= maxAutoPages {
+		return nil
+	}
+	inDetour := m.detour.active
+	from := m.more
+	if inDetour {
+		from = m.detour.more
+	}
+	if !from.More() {
+		return nil
+	}
+	m.autoPages++
+	m.loadingMore = true
+	return m.loadMore(from, inDetour)
 }
 
 // isPlaying reports whether a row is the track mpv is on.

@@ -44,6 +44,13 @@ won by community size, not by language.
 cache hit is ~600 ns. Resolving the highlighted row before the user presses
 play is worth more than any speedup to resolving itself.
 
+**The API cannot sort anything this shows, so sorting is done here.** Order
+parameters exist, but only on the library browse endpoints — added songs,
+library albums, uploads — and only as `a_to_z`, `z_to_a` and
+`recently_added`. A playlist's contents take no order parameter, and the
+liked playlist is a playlist: `VLLM`. Checked against ytmusicapi's
+`get_playlist` and `get_library_songs` rather than assumed.
+
 **One page at a time, and the rest on request.** Listings are paged at the
 server — 100 tracks for a playlist, 20 results for a search — and reads cost
 what they page: 100 tracks ≈ 0.8 s, 529 tracks ≈ 2.7 s. So a page comes back
@@ -91,7 +98,9 @@ scrolling, same paging — and `esc` or a click outside closes it, leaving every
 underneath as it was. The search one puts its box on the top line.
 
 The table names its columns, and clicking one sorts by it — again to
-reverse. A listing that says when its tracks were added, which in practice
+reverse. Sorting an incomplete listing would put the wrong rows at the top,
+so asking for an order fetches the rest of it and re-sorts as the pages
+land. Clearing the sort puts the listing back in the order it arrived in. A listing that says when its tracks were added, which in practice
 means the liked playlist, gets a column for it; one that does not is not
 given a column of blanks.
 

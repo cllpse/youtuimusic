@@ -784,3 +784,121 @@ func TestScrollingThePopoverFetchesItsNextPage(t *testing.T) {
 		t.Errorf("the page landed on the list behind it: %d rows", len(m.Tracks))
 	}
 }
+
+// Sorting half a list puts the wrong rows at the top, so a sort fetches the
+// rest of the listing and stays sorted as it arrives.
+func TestSortingCompletesTheListing(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.tracks["LM"] = []ytm.Track{{VideoID: "m", Title: "Middle"}}
+	lib.next = ytm.Continuation{Endpoint: "browse", Token: "more"}
+	lib.morePage = []ytm.Track{{VideoID: "a", Title: "Aardvark"}}
+
+	m := wired(t, lib, st, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}}
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+	if len(m.Tracks) != 1 || !m.more.More() {
+		t.Fatalf("expected one row and more to come: %d rows", len(m.Tracks))
+	}
+
+	next, cmd := m.Update(keyPress("s")) // sort by title
+	m = drain(t, next.(Model), cmd)
+
+	if len(m.Tracks) != 2 {
+		t.Fatalf("the rest was not fetched: %+v", m.Tracks)
+	}
+	// And the row that arrived second sorts to the top.
+	if m.Tracks[0].Title != "Aardvark" {
+		t.Errorf("order is %q then %q", m.Tracks[0].Title, m.Tracks[1].Title)
+	}
+	if m.more.More() {
+		t.Error("it stopped before the end")
+	}
+}
+
+// Unsorted, it does not: the rest is fetched when it is reached.
+func TestAnUnsortedListingIsLeftAlone(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.tracks["LM"] = fromUI(rows(3))
+	lib.next = ytm.Continuation{Endpoint: "browse", Token: "more"}
+	lib.morePage = fromUI(rows(3))
+
+	m := wired(t, lib, st, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}}
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+
+	if len(m.Tracks) != 3 {
+		t.Fatalf("fetched ahead without being asked: %d rows", len(m.Tracks))
+	}
+	for _, asked := range lib.askedFor {
+		if asked == "more" {
+			t.Error("asked for another page unprompted")
+		}
+	}
+}
+
+// Clearing the sort puts the listing back in the order it arrived in, which
+// means that order has to be kept.
+func TestClearingTheSortRestoresTheArrivalOrder(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.tracks["LM"] = []ytm.Track{
+		{VideoID: "z", Title: "Zulu"},
+		{VideoID: "a", Title: "Alpha"},
+	}
+
+	m := wired(t, lib, st, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}}
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+	if m.Tracks[0].Title != "Zulu" {
+		t.Fatalf("arrived as %q first", m.Tracks[0].Title)
+	}
+
+	next, cmd := m.Update(keyPress("s"))
+	m = drain(t, next.(Model), cmd)
+	if m.Tracks[0].Title != "Alpha" {
+		t.Fatalf("sorting gave %q first", m.Tracks[0].Title)
+	}
+
+	// Round the cycle and back to unsorted.
+	for range 3 {
+		next, cmd = m.Update(keyPress("s"))
+		m = drain(t, next.(Model), cmd)
+	}
+	if m.sort.by != sortNone {
+		t.Fatalf("cycled to %v", m.sort.by)
+	}
+	if m.Tracks[0].Title != "Zulu" {
+		t.Errorf("the arrival order was not restored: %q first", m.Tracks[0].Title)
+	}
+}
+
+// Going back to a tab has to bring its thread with it, or the listing can
+// never be paged past what was read the first time.
+func TestACachedTabKeepsItsPlaceInTheListing(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.tracks["LM"] = fromUI(rows(2))
+	lib.tracks["PL1"] = fromUI(rows(2))
+	lib.next = ytm.Continuation{Endpoint: "browse", Token: "more"}
+
+	m := wired(t, lib, st, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked"}, {ID: "PL1", Title: "Favorites"}}
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+	if !m.more.More() {
+		t.Fatal("the first read has no thread to keep")
+	}
+
+	// Away and back again.
+	for _, key := range []string{"l", "h"} {
+		next, cmd := m.Update(keyPress(key))
+		m = drain(t, next.(Model), cmd)
+	}
+	if !m.more.More() {
+		t.Error("the thread was lost coming back, so the rest can never be read")
+	}
+	if m.rowCount() != len(m.Tracks)+1 {
+		t.Errorf("no offer of the rest: %d rows for %d tracks", m.rowCount(), len(m.Tracks))
+	}
+}
