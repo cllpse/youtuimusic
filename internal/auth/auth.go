@@ -1,9 +1,22 @@
-// Package auth loads the session youtuimusic signs in with.
+// Package auth loads and stores the session youtuimusic signs in with.
 //
-// This is the interim arrangement. The intent is for the app to read the
-// browser's cookies itself — internal/chromium is most of the way there —
-// so that signing in needs no steps at all. Until that lands, the session
-// comes from a file on disk.
+// A captured session goes stale on its own, which is why signing in keeps
+// having to be repeated. Measured against a live account: of the two dozen
+// cookies in a capture, __Secure-1PSIDTS is the one Google authenticates
+// with — remove it and a library request comes back signed out, while
+// removing __Secure-3PSIDTS or any of the SIDCC family changes nothing. It
+// is also the one Google rotates, roughly every ten minutes (the interval
+// it names in its own reply to /RotateCookies), and neither the InnerTube
+// endpoints nor music.youtube.com ever hand back a replacement: they
+// refresh the SIDCCs we do not need and never the one we do. So a file on
+// disk only ages, while the browser sharing the account keeps rolling the
+// session forward, and one day the copy is behind and stops working.
+//
+// Fixing that means rotating the cookie ourselves and writing the result
+// back, which is what Save is for. The rotation call itself is not written
+// yet: accounts.google.com/RotateCookies answers the widely published
+// request shape with HTTP 401 for this account, so the shape it does want
+// has still to be found.
 package auth
 
 import (
@@ -16,6 +29,71 @@ import (
 
 	"github.com/cllpse/youtuimusic/internal/ytm"
 )
+
+// Own is where youtuimusic keeps its own session. Reading the Python
+// player's file is a courtesy; writing to it is not ours to do, and a
+// refreshed session has to land somewhere we control.
+func Own() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "youtuimusic", "session.json"), nil
+}
+
+// Save writes a session to Own(). It writes to a temporary file and renames
+// it, so a session is never half-written: the rename is atomic, and a crash
+// mid-write leaves the previous session intact rather than a truncated one
+// that reads as signed out.
+//
+// The file keeps the header-map shape the other sources use, so a session
+// saved here can be handed to either app.
+func Save(s ytm.Session) error {
+	path, err := Own()
+	if err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+
+	headers := map[string]string{"cookie": s.Cookie}
+	for name, value := range map[string]string{
+		"user-agent":        s.UserAgent,
+		"x-goog-authuser":   s.AuthUser,
+		"x-goog-visitor-id": s.VisitorID,
+	} {
+		if value != "" {
+			headers[name] = value
+		}
+	}
+	blob, err := json.MarshalIndent(headers, "", "  ")
+	if err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+
+	// 0600 throughout: this is the whole account.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".session-*")
+	if err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("auth: %w", err)
+	}
+	if _, err := tmp.Write(blob); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("auth: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+	return nil
+}
 
 // ErrNoSession means no session file was found.
 var ErrNoSession = errors.New("auth: no session found")
