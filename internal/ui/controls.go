@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // Material Design icons from Nerd Fonts, by the names glyphnames.json gives
@@ -68,12 +69,20 @@ type button struct {
 	start, end int // half-open columns
 }
 
-// A button is drawn as a bracketed cell, [ icon ], so it reads as something
-// to press. All five columns answer to a click, and a gap keeps neighbours
-// from running into one another.
+// A button is a filled block with the icon in the middle of it — a cell of
+// background either side — so it reads as something to press without
+// drawing anything that has to be read. All three columns answer to a
+// click, and the gap is two so a row of them does not merge into one slab.
 const (
-	buttonWidth = 5
-	buttonGap   = 1
+	buttonWidth = 3
+	buttonGap   = 2
+)
+
+var (
+	buttonStyle = lipgloss.NewStyle().Background(muted)
+	// A button with something to act on, or something switched on, lights
+	// its icon. The fill stays the same: it is the button, not the state.
+	buttonLitStyle = lipgloss.NewStyle().Background(muted).Foreground(accent).Bold(true)
 )
 
 // groupWidth is what a run of buttons occupies, gaps between them included.
@@ -170,13 +179,11 @@ func (m Model) renderControls() string {
 		if btn.start > at {
 			b.WriteString(strings.Repeat(" ", btn.start-at))
 		}
-		// The brackets stay quiet whatever the button is doing; only the
-		// icon lights up.
-		style := dim
+		style := buttonStyle
 		if btn.lit {
-			style = active
+			style = buttonLitStyle
 		}
-		b.WriteString(dim.Render("[ ") + style.Render(btn.icon) + dim.Render(" ]"))
+		b.WriteString(style.Render(" " + btn.icon + " "))
 		at = btn.end
 	}
 	if end := contentLeft + width; at < end {

@@ -470,10 +470,10 @@ func fromUI(ts []Track) []ytm.Track {
 	return out
 }
 
-// The bracket is part of the button: pressing it has to do the same thing
-// as pressing the icon, or the target is smaller than it looks.
-func TestTheWholeBracketIsClickable(t *testing.T) {
-	for _, offset := range []int{0, 1, 2, 3, 4} {
+// The fill is part of the button: pressing it has to do the same thing as
+// pressing the icon, or the target is smaller than it looks.
+func TestTheWholeButtonIsClickable(t *testing.T) {
+	for _, offset := range []int{0, 1, 2} {
 		m, _, st, _ := playingModel(t)
 		b, ok := buttonAt(m, controlNext)
 		if !ok {
@@ -487,28 +487,41 @@ func TestTheWholeBracketIsClickable(t *testing.T) {
 	}
 }
 
-// And it is drawn as a bracket, with the brackets themselves left quiet.
-func TestButtonsAreDrawnBracketed(t *testing.T) {
+// It is drawn as a filled block, not as characters that have to be read.
+func TestButtonsAreDrawnAsFilledBlocks(t *testing.T) {
 	m, _, _, _ := playingModel(t)
 	row := plain(controlsLine(m))
 
-	if !strings.Contains(row, "[ "+iconPrevious+" ]") {
-		t.Errorf("the transport is not bracketed: %q", row)
+	if strings.ContainsAny(row, "[]") {
+		t.Errorf("brackets are still drawn: %q", row)
 	}
-	// Neighbours do not run into one another.
-	if strings.Contains(row, "][") {
+	// A cell of fill either side of the icon.
+	if !strings.Contains(row, " "+iconPrevious+" ") {
+		t.Errorf("the icon is not padded: %q", row)
+	}
+	// Neighbours do not merge into one block.
+	if strings.Contains(row, iconPrevious+"  "+iconPause) {
 		t.Errorf("buttons are touching: %q", row)
 	}
-	// The icon lights up but its brackets do not.
+
 	styled := controlsLine(m)
-	i := strings.Index(styled, iconPause)
-	if i < 0 {
-		t.Fatalf("no play/pause icon on %q", row)
+	codes := sgrCodes(styled)
+	if !codes["100"] {
+		t.Errorf("nothing on the row is filled: %v", codes)
 	}
-	if !sgrCodes(styled[:i])["90"] {
-		t.Error("the brackets are not muted")
+	if !codes["34"] {
+		t.Errorf("nothing on the row is lit: %v", codes)
 	}
-	if !sgrCodes(styled)["34"] {
-		t.Error("nothing on the row is lit")
+}
+
+// Idle, the buttons are still buttons — filled, just not lit.
+func TestIdleButtonsAreStillFilled(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	codes := sgrCodes(controlsLine(m))
+	if !codes["100"] {
+		t.Errorf("the idle row is not filled: %v", codes)
+	}
+	if codes["34"] {
+		t.Errorf("the idle row is lit: %v", codes)
 	}
 }
