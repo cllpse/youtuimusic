@@ -197,9 +197,9 @@ func TestTheTableOffersTheNextPage(t *testing.T) {
 	}
 
 	// Waiting for it, the row becomes the spinner.
-	table.loadingMore, table.spinner = true, "▒"
+	table.loadingMore, table.loader = true, "▒ Loading…"
 	waiting := plain(table.rows()[len(tracks)+headerRows])
-	if !strings.Contains(waiting, "loading…") || !strings.Contains(waiting, "▒") {
+	if !strings.Contains(waiting, loaderLabel) || !strings.Contains(waiting, "▒") {
 		t.Errorf("the row does not say it is waiting: %q", waiting)
 	}
 	if strings.Contains(waiting, "load more") {

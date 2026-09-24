@@ -159,7 +159,7 @@ func (m Model) renderModal() string {
 	}
 
 	if m.loading && len(m.detour.tracks) == 0 {
-		lines = append(lines, pad(m.spin.View()+" "+dim.Render("Loading…"), inner))
+		lines = append(lines, pad(m.loader(), inner))
 		for len(lines) < modalHeader+height {
 			lines = append(lines, strings.Repeat(" ", inner))
 		}
@@ -178,7 +178,7 @@ func (m Model) renderModal() string {
 		playing:     m.playing.VideoID,
 		more:        m.detour.more.More(),
 		loadingMore: m.loadingMore,
-		spinner:     m.spin.View(),
+		loader:      m.loader(),
 	}.rows()...)
 	return modalBox.Render(strings.Join(lines, "\n"))
 }

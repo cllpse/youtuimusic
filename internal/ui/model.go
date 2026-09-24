@@ -195,7 +195,7 @@ func New(s Services) Model {
 		cache:     map[string]cached{},
 		bar:       newBar(rampAt),
 		pausedBar: newBar(mutedRamp),
-		spin:      spinner.New(spinner.WithSpinner(spinner.Pulse), spinner.WithStyle(active)),
+		spin:      newLoader(),
 	}
 }
 
@@ -1156,10 +1156,9 @@ func (m Model) renderTabs() string {
 }
 
 func (m Model) renderTracks(width, height int) string {
-	// The wait belongs where it is happening, not down in the status line.
+	// The wait belongs where it is happening, not down in the status bar.
 	if m.loading && len(m.Tracks) == 0 {
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			m.spin.View()+" "+dim.Render("Loading…"))
+		return m.centredLoader(width, height)
 	}
 	return m.table(width, height).render()
 }
@@ -1178,7 +1177,7 @@ func (m Model) table(width, height int) trackTable {
 		playing:     m.playing.VideoID,
 		more:        m.more.More(),
 		loadingMore: m.loadingMore,
-		spinner:     m.spin.View(),
+		loader:      m.loader(),
 	}
 }
 
@@ -1221,6 +1220,17 @@ var (
 	statusTextStyle  = statusBarStyle.Padding(0, 1)
 )
 
+// statusSegment is a run of text on the bar with its own fill.
+//
+// Each carries it, rather than the row being wrapped in one style: a nested
+// style ends with a reset, and a reset clears the background as well as the
+// weight. A bold title inside a filled row therefore ended the fill at the
+// title — the bar simply stopped, mid-sentence, wherever the title did.
+type statusSegment struct {
+	text  string
+	style lipgloss.Style
+}
+
 // renderStatusBar draws the row under the player.
 func (m Model) renderStatusBar() string {
 	key, style := "READY", statusKeyStyle
@@ -1234,30 +1244,58 @@ func (m Model) renderStatusBar() string {
 	// On a narrow terminal the blocks give way rather than pushing the
 	// frame wider than the screen.
 	block := style.Render(truncate(key, max(m.width-2, 0)))
-	rest := max(m.width-lipgloss.Width(block), 0)
-	if rest == 0 {
-		return block
-	}
-	text := statusTextStyle
-	if rest < 3 {
-		text = statusBarStyle // no room for the padding, let alone words
-	}
-	return block + text.Width(rest).Render(truncate(m.statusText(), max(rest-2, 0)))
+	return block + fillRow(m.statusSegments(), max(m.width-lipgloss.Width(block), 0))
 }
 
-// statusText is what the wide block holds: the trouble, or the track.
-func (m Model) statusText() string {
+// statusSegments is what the wide block holds: the trouble, or the track.
+func (m Model) statusSegments() []statusSegment {
+	fill := statusBarStyle
 	switch {
 	case m.Err != nil:
-		return m.Err.Error()
+		return []statusSegment{{m.Err.Error(), fill}}
 	case m.playing.VideoID == "":
-		return "Nothing playing"
+		return []statusSegment{{"Nothing playing", fill}}
 	case m.playing.Album == "":
-		return m.playing.Title
+		return []statusSegment{{m.playing.Title, fill.Bold(true)}}
 	}
 	// Bold carries the title against the album, since both sit on the same
 	// fill and a second colour on it would be hard to read.
-	return lipgloss.NewStyle().Bold(true).Render(m.playing.Title) + ", " + m.playing.Album
+	return []statusSegment{
+		{m.playing.Title, fill.Bold(true)},
+		{", " + m.playing.Album, fill},
+	}
+}
+
+// fillRow lays segments across a width and pads to it with the same fill,
+// so the bar runs unbroken from one end of the row to the other.
+func fillRow(segments []statusSegment, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	const padding = 1
+
+	var b strings.Builder
+	used := 0
+	write := func(text string, style lipgloss.Style) {
+		if text == "" {
+			return
+		}
+		b.WriteString(style.Render(text))
+		used += lipgloss.Width(text)
+	}
+
+	write(strings.Repeat(" ", min(padding, width)), statusBarStyle)
+	for _, segment := range segments {
+		room := width - used - padding
+		if room <= 0 {
+			break
+		}
+		write(truncate(segment.text, room), segment.style)
+	}
+	if used < width {
+		write(strings.Repeat(" ", width-used), statusBarStyle)
+	}
+	return b.String()
 }
 
 // playerBox is the frame around the title, the bar and the controls. Its
@@ -1323,10 +1361,10 @@ func rampAt(_, position float64) color.Color {
 // because the characters differ — a solid block against a light shade.
 func mutedRamp(_, _ float64) color.Color { return muted }
 
-// emptyCell is what the bar has not reached yet: a cell of dots rather
-// than the component's hatching, which reads as texture beside the solid
-// half blocks instead of as a track waiting to be filled.
-const emptyCell = '⣿'
+// emptyCell is what the bar has not reached yet. A braille cell filled with
+// dots reads as another solid bar at a glance; a single small dot reads as
+// track. Alternatives, in order of weight: '⠿', '░', '⣿'.
+const emptyCell = '·'
 
 func newBar(fill progress.ColorFunc) progress.Model {
 	bar := progress.New(

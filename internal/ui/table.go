@@ -32,11 +32,11 @@ type trackTable struct {
 	now     time.Time
 
 	// more draws one extra row at the end, offering the next page. While
-	// that page is on its way it becomes the same spinner the rest of the
+	// that page is on its way it becomes the same loader the rest of the
 	// interface waits with.
 	more        bool
 	loadingMore bool
-	spinner     string
+	loader      string
 }
 
 const (
@@ -219,8 +219,7 @@ func (t trackTable) headerSpans() []struct {
 // moreRow is the last line of a listing that has more to fetch.
 func (t trackTable) moreRow(width int) string {
 	if t.loadingMore {
-		return lipgloss.PlaceHorizontal(width, lipgloss.Center,
-			t.spinner+" "+dim.Render("loading…"))
+		return lipgloss.PlaceHorizontal(width, lipgloss.Center, t.loader)
 	}
 	centred := lipgloss.PlaceHorizontal(width, lipgloss.Center, "load more")
 	if t.cursor == len(t.tracks) {

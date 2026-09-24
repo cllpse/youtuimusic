@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -770,5 +771,115 @@ func TestSortingKeepsTheCursorMeaningful(t *testing.T) {
 	// It goes back to the top, which is where a reordered list starts.
 	if m.trackCursor != 0 {
 		t.Errorf("cursor = %d", m.trackCursor)
+	}
+}
+
+// unfilled returns the printable text drawn with no background set, which
+// is what a stray reset in the middle of a filled row leaves behind.
+func unfilled(s string) string {
+	var out strings.Builder
+	filled := false
+	for len(s) > 0 {
+		if seq := ansiSequence.FindString(s); seq != "" && strings.HasPrefix(s, seq) {
+			body := strings.TrimSuffix(strings.TrimPrefix(seq, "\x1b["), "m")
+			for _, code := range strings.Split(body, ";") {
+				switch {
+				case code == "" || code == "0" || code == "49":
+					filled = false
+				case len(code) == 2 && code[0] == '4', len(code) == 3 && strings.HasPrefix(code, "10"):
+					filled = true
+				}
+			}
+			s = s[len(seq):]
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s)
+		if !filled && r != utf8.RuneError {
+			out.WriteRune(r)
+		}
+		s = s[size:]
+	}
+	return out.String()
+}
+
+// The bar is one unbroken block of colour across the row. It was not: the
+// title is bold, a nested style ends with a reset, and a reset clears the
+// background as well as the weight — so the fill stopped at the comma.
+func TestTheStatusBarFillIsUnbroken(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(m *Model)
+	}{
+		{"idle", func(m *Model) {}},
+		{"a title alone", func(m *Model) {
+			m.playing = Track{VideoID: "a", Title: "Xtal"}
+		}},
+		{"the one that broke it", func(m *Model) {
+			m.playing = Track{VideoID: "a", Title: "The Cambrian Explosion",
+				Album: "Phanerozoic I: Palaeozoic"}
+		}},
+		{"longer than the row", func(m *Model) {
+			m.playing = Track{VideoID: "a", Title: strings.Repeat("long ", 40),
+				Album: strings.Repeat("album ", 40)}
+		}},
+		{"an error", func(m *Model) { m.Err = errors.New("something went wrong") }},
+		{"loading", func(m *Model) { m.loading = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sample()
+			tc.setup(&m)
+			bar := strings.Split(m.View().Content, "\n")[m.statusRow()]
+
+			if gap := unfilled(bar); gap != "" {
+				t.Errorf("part of the bar has no fill: %q\nin %q", gap, bar)
+			}
+			if w := lipgloss.Width(plain(bar)); w != m.width {
+				t.Errorf("the bar is %d cells, want %d", w, m.width)
+			}
+		})
+	}
+}
+
+// The comma case, spelled out: everything after the title keeps the fill.
+func TestTheAlbumKeepsTheFill(t *testing.T) {
+	m := sample()
+	m.playing = Track{VideoID: "a", Title: "The Cambrian Explosion",
+		Album: "Phanerozoic I: Palaeozoic"}
+
+	bar := strings.Split(m.View().Content, "\n")[m.statusRow()]
+	if !strings.Contains(plain(bar), "Phanerozoic") {
+		t.Fatalf("the album is not on the bar: %q", plain(bar))
+	}
+	// Everything after the comma used to be drawn with no fill at all.
+	if gap := unfilled(bar); strings.Contains(gap, "Phanerozoic") || gap != "" {
+		t.Errorf("the fill stops at the comma; unfilled: %q", gap)
+	}
+}
+
+// One loader, spelled one way, wherever it appears.
+func TestEveryLoaderIsTheSame(t *testing.T) {
+	m := sample()
+	m.loading = true
+
+	m.setTracks(nil)
+	list := plain(m.View().Content)
+	if !strings.Contains(list, loaderLabel) {
+		t.Errorf("the list does not use it:\n%s", list)
+	}
+
+	// The row offering another page uses it too.
+	table := trackTable{
+		tracks: tableTracks(), width: 40, height: len(tableTracks()) + 1 + headerRows,
+		more: true, loadingMore: true, loader: m.loader(),
+	}
+	if got := plain(table.rows()[len(tableTracks())+headerRows]); !strings.Contains(got, loaderLabel) {
+		t.Errorf("the load-more row does not use it: %q", got)
+	}
+
+	// And nothing spells it any other way.
+	for _, wrong := range []string{"loading…", "Loading...", "loading..."} {
+		if strings.Contains(plain(m.View().Content), wrong) {
+			t.Errorf("found %q on the frame", wrong)
+		}
 	}
 }
