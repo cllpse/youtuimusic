@@ -117,7 +117,13 @@ func (m Model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleWheel scrolls whatever is under the pointer.
+// wheelStep is how many rows a notch moves, which is what a wheel does
+// everywhere else.
+const wheelStep = 3
+
+// handleWheel scrolls whatever is under the pointer. Over the list it moves
+// the view and not the selection: looking further down a playlist should not
+// lose your place in it, and nothing is resolved because nothing was chosen.
 func (m Model) handleWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	var delta int
 	switch mouse.Button {
@@ -134,8 +140,7 @@ func (m Model) handleWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	case regionTabs:
 		return m.selectTab(m.tabCursor + delta)
 	case regionTracks:
-		m.moveCursor(delta)
-		return m.schedulePrefetch()
+		m.scrollBy(delta * wheelStep)
 	}
 	return m, nil
 }

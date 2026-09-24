@@ -254,6 +254,13 @@ func (m *Model) moveCursor(delta int) {
 	m.scroll()
 }
 
+// scrollBy moves the window and leaves the selection where it is, so the
+// list can be looked through without losing the cursor's place.
+func (m *Model) scrollBy(delta int) {
+	height := m.bodyHeight()
+	m.trackOffset = min(max(m.trackOffset+delta, 0), max(0, len(m.Tracks)-height))
+}
+
 // scroll moves the window only far enough to keep the cursor on screen.
 func (m *Model) scroll() {
 	height := m.bodyHeight()

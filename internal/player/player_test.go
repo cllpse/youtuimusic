@@ -123,3 +123,41 @@ func TestCloseIsIdempotent(t *testing.T) {
 		t.Fatal("expected commands to fail after Close")
 	}
 }
+
+// silence is a generated audio source, so this needs no file and makes no
+// noise.
+const silence = "av://lavfi:anullsrc=r=44100:cl=mono"
+
+// mpv's pause flag belongs to the player, not to the file: loading another
+// one while paused leaves it paused. The UI relies on knowing this — it
+// clears pause after every load, or a track started while paused would sit
+// there silently.
+func TestPauseSurvivesALoad(t *testing.T) {
+	p := newPlayer(t)
+
+	if err := p.Load(silence); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := p.SetPaused(true); err != nil {
+		t.Fatalf("SetPaused: %v", err)
+	}
+	if err := p.Load(silence); err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+
+	paused, err := p.Paused()
+	if err != nil {
+		t.Fatalf("Paused: %v", err)
+	}
+	if !paused {
+		t.Skip("this mpv clears pause on load; the UI clearing it anyway is harmless")
+	}
+
+	// And clearing it afterwards is what actually gets the track going.
+	if err := p.SetPaused(false); err != nil {
+		t.Fatalf("SetPaused(false): %v", err)
+	}
+	if paused, err = p.Paused(); err != nil || paused {
+		t.Fatalf("still paused after clearing: %v, %v", paused, err)
+	}
+}

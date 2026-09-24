@@ -38,6 +38,7 @@ type Streams interface {
 type Audio interface {
 	Load(url string) error
 	TogglePause() error
+	SetPaused(paused bool) error
 	Seek(seconds float64) error
 	Events() <-chan player.Event
 }
@@ -175,6 +176,12 @@ func (m Model) play(t Track) tea.Cmd {
 			return errMsg{fmt.Errorf("resolving %s: %w", t.Title, err)}
 		}
 		if err := audio.Load(s.URL); err != nil {
+			return errMsg{fmt.Errorf("playing %s: %w", t.Title, err)}
+		}
+		// mpv keeps its pause flag across a load, so a track started while
+		// paused would sit there silently — the screen claiming it plays
+		// while nothing comes out.
+		if err := audio.SetPaused(false); err != nil {
 			return errMsg{fmt.Errorf("playing %s: %w", t.Title, err)}
 		}
 		return playingMsg{videoID: t.VideoID, title: nowPlaying(t), length: s.Duration}

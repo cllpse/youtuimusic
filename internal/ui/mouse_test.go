@@ -266,22 +266,100 @@ func TestClickingTheBarWithNothingLoadedDoesNothing(t *testing.T) {
 	}
 }
 
-func TestWheelScrollsTheListUnderThePointer(t *testing.T) {
+// The wheel moves the view and leaves the selection alone, so looking
+// further down a playlist does not lose your place in it.
+func TestWheelScrollsWithoutMovingTheSelection(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	m := wired(t, lib, st, newFakeAudio())
+	m.Tracks = rows(100)
+	m.trackCursor = 4
+
+	next, cmd := m.Update(wheel(trackX, trackRow(0), tea.MouseWheelDown))
+	m = drain(t, next.(Model), cmd)
+
+	if m.trackOffset != wheelStep {
+		t.Errorf("offset = %d, want %d", m.trackOffset, wheelStep)
+	}
+	if m.trackCursor != 4 {
+		t.Errorf("the selection moved to %d", m.trackCursor)
+	}
+	if len(st.prefetched) != 0 {
+		t.Errorf("prefetched %v; nothing was chosen", st.prefetched)
+	}
+	// The view really moved: the first row on screen is further down.
+	if !strings.Contains(m.View().Content, "track-"+itoa(wheelStep)) {
+		t.Error("the window did not move")
+	}
+
+	next, cmd = m.Update(wheel(trackX, trackRow(0), tea.MouseWheelUp))
+	m = drain(t, next.(Model), cmd)
+	if m.trackOffset != 0 {
+		t.Errorf("scrolling back left the offset at %d", m.trackOffset)
+	}
+}
+
+// It stops at both ends rather than running off them.
+func TestWheelStopsAtTheEnds(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	m.Tracks = rows(20)
+
+	for range 20 {
+		next, _ := m.Update(wheel(trackX, trackRow(0), tea.MouseWheelDown))
+		m = next.(Model)
+	}
+	if want := 20 - m.bodyHeight(); m.trackOffset != want {
+		t.Errorf("offset = %d, want %d — the last row should sit at the bottom", m.trackOffset, want)
+	}
+	for range 20 {
+		next, _ := m.Update(wheel(trackX, trackRow(0), tea.MouseWheelUp))
+		m = next.(Model)
+	}
+	if m.trackOffset != 0 {
+		t.Errorf("offset = %d at the top", m.trackOffset)
+	}
+}
+
+// A list that fits has nowhere to scroll to.
+func TestWheelDoesNothingWhenEverythingFits(t *testing.T) {
 	lib := library()
 	m := wired(t, lib, &fakeStreams{}, newFakeAudio())
-	m.Playlists = []Playlist{{ID: "LM"}, {ID: "PL1"}}
 	m.Tracks = fromAPI(lib.tracks["LM"])
 
 	next, _ := m.Update(wheel(trackX, trackRow(0), tea.MouseWheelDown))
-	m = next.(Model)
-	if m.trackCursor != 1 {
-		t.Errorf("track cursor = %d", m.trackCursor)
+	if got := next.(Model).trackOffset; got != 0 {
+		t.Errorf("offset = %d, want 0", got)
 	}
-	if m.tabCursor != 0 {
-		t.Errorf("the tabs moved too: %d", m.tabCursor)
+}
+
+// Moving the cursor brings the view back to it.
+func TestMovingTheCursorSnapsTheViewBack(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	m.Tracks = rows(100)
+	for range 10 {
+		next, _ := m.Update(wheel(trackX, trackRow(0), tea.MouseWheelDown))
+		m = next.(Model)
+	}
+	if m.trackOffset == 0 {
+		t.Fatal("the view did not move")
 	}
 
-	// Over the tabs the wheel changes tab instead.
+	next, _ := m.Update(keyPress("j"))
+	m = next.(Model)
+	if m.trackCursor != 1 {
+		t.Fatalf("cursor = %d", m.trackCursor)
+	}
+	if m.trackOffset != 1 {
+		t.Errorf("offset = %d, want the view back on the cursor", m.trackOffset)
+	}
+}
+
+// Over the tabs the wheel changes tab.
+func TestWheelOverTheTabsSwitchesThem(t *testing.T) {
+	lib := library()
+	lib.tracks["PL1"] = []ytm.Track{{VideoID: "c", Title: "Gamma"}}
+	m := wired(t, lib, &fakeStreams{}, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
+
 	next, cmd := m.Update(wheel(m.tabSpans()[0].start+1, 1, tea.MouseWheelDown))
 	m = drain(t, next.(Model), cmd)
 	if m.tabCursor != 1 {

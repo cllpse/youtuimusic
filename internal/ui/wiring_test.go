@@ -75,10 +75,12 @@ func (f *fakeStreams) Prefetch(_ context.Context, id string) {
 }
 
 type fakeAudio struct {
-	loaded  []string
-	toggles int
-	seeks   []float64
-	events  chan player.Event
+	loaded   []string
+	toggles  int
+	paused   []bool
+	pauseErr error
+	seeks    []float64
+	events   chan player.Event
 }
 
 func newFakeAudio(evs ...player.Event) *fakeAudio {
@@ -91,9 +93,13 @@ func newFakeAudio(evs ...player.Event) *fakeAudio {
 	return &fakeAudio{events: ch}
 }
 
-func (f *fakeAudio) Load(url string) error       { f.loaded = append(f.loaded, url); return nil }
-func (f *fakeAudio) TogglePause() error          { f.toggles++; return nil }
-func (f *fakeAudio) Seek(s float64) error        { f.seeks = append(f.seeks, s); return nil }
+func (f *fakeAudio) Load(url string) error { f.loaded = append(f.loaded, url); return nil }
+func (f *fakeAudio) TogglePause() error    { f.toggles++; return nil }
+func (f *fakeAudio) Seek(s float64) error  { f.seeks = append(f.seeks, s); return nil }
+func (f *fakeAudio) SetPaused(p bool) error {
+	f.paused = append(f.paused, p)
+	return f.pauseErr
+}
 func (f *fakeAudio) Events() <-chan player.Event { return f.events }
 
 func wired(t *testing.T, lib *fakeLibrary, st *fakeStreams, au *fakeAudio) Model {
@@ -481,5 +487,55 @@ func keyPress(k string) tea.KeyPressMsg {
 		return tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape})
 	default:
 		return tea.KeyPressMsg(tea.Key{Code: rune(k[0]), Text: k})
+	}
+}
+
+// mpv keeps its pause flag across a load. Starting a track while paused
+// left the screen claiming it played while nothing came out, and only
+// toggling pause twice got it going.
+func TestPlayingClearsPause(t *testing.T) {
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	m := wired(t, lib, st, au)
+	m.Tracks = fromAPI(lib.tracks["LM"])
+
+	// Play, pause, then pick the next track.
+	next, cmd := m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+	next, cmd = m.Update(keyPress(" "))
+	m = drain(t, next.(Model), cmd)
+	m.Paused = true
+
+	next, cmd = m.Update(keyPress("j"))
+	m = drain(t, next.(Model), cmd)
+	next, cmd = m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+
+	if len(au.loaded) != 2 {
+		t.Fatalf("loaded %v, want two tracks", au.loaded)
+	}
+	if len(au.paused) == 0 || au.paused[len(au.paused)-1] {
+		t.Errorf("SetPaused calls were %v; the new track was left paused", au.paused)
+	}
+	if m.Paused {
+		t.Error("the model still reports paused")
+	}
+}
+
+// If the player cannot be unpaused, that is a silent track, so say so.
+func TestAFailureToUnpauseIsReported(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	au := newFakeAudio()
+	au.pauseErr = errors.New("socket closed")
+	m := wired(t, lib, st, au)
+	m.Tracks = fromAPI(lib.tracks["LM"])
+
+	next, cmd := m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+
+	if m.Err == nil {
+		t.Fatal("no error reported")
+	}
+	if m.NowPlaying == "A — Alpha" && m.playingID != "" {
+		t.Error("reported as playing despite failing to start")
 	}
 }

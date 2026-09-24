@@ -61,8 +61,10 @@ the first page and fill in the rest behind it.
 | `q`, `ctrl+c` | quit |
 
 The mouse works too: click a tab to open it, click a track to select it and
-again to play it, use the wheel over the tabs or the list, and drag the
-progress bar to scrub.
+again to play it, and drag the progress bar to scrub. The wheel changes tab
+over the tab row; over the list it moves the view and leaves the selection
+where it is, so looking further down a playlist does not lose your place.
+Moving the cursor brings the view back to it.
 
 A tab already visited comes back from memory, so moving between them is
 instant after the first look. A move only reaches the server once the
