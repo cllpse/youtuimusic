@@ -64,7 +64,10 @@ type (
 		tracks []ytm.Track
 	}
 	ratedMsg struct {
-		videoID  string
+		videoID string
+		// applied is what was asked for, previous what to put back on a
+		// failure.
+		applied  Rating
 		previous Rating
 		err      error
 	}
@@ -98,9 +101,21 @@ func fromAPI(ts []ytm.Track) []Track {
 			Title:    t.Title,
 			Artist:   t.Artist,
 			Duration: t.Duration,
+			Rating:   fromAPIRating(t.Rating),
 		})
 	}
 	return out
+}
+
+func fromAPIRating(r ytm.Rating) Rating {
+	switch r {
+	case ytm.RatingUp:
+		return RatingUp
+	case ytm.RatingDown:
+		return RatingDown
+	default:
+		return RatingNone
+	}
 }
 
 func (m Model) fetchPlaylists() tea.Cmd {
@@ -159,7 +174,12 @@ func (m Model) rate(videoID string, r, previous Rating) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		return ratedMsg{videoID: videoID, previous: previous, err: lib.Rate(ctx, videoID, r.api())}
+		return ratedMsg{
+			videoID:  videoID,
+			applied:  r,
+			previous: previous,
+			err:      lib.Rate(ctx, videoID, r.api()),
+		}
 	}
 }
 

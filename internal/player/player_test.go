@@ -161,3 +161,61 @@ func TestPauseSurvivesALoad(t *testing.T) {
 		t.Fatalf("still paused after clearing: %v, %v", paused, err)
 	}
 }
+
+// The end of a track is reported by mpv's end-file event, not by the
+// eof-reached property. The property is unavailable by the time anyone could
+// read it — mpv unloads the file in the same breath — so an observer waiting
+// for it to be true waits forever, and playback stops at the end of the
+// first track.
+//
+// end-file also says why, which the caller has to respect: loading a
+// replacement ends the previous file too, and treating that as the end of a
+// track would run away through the playlist.
+func TestEndFileReportsWhyPlaybackStopped(t *testing.T) {
+	const oneSecond = "av://lavfi:anullsrc=r=8000:cl=mono:d=1"
+	const long = "av://lavfi:anullsrc=r=8000:cl=mono:d=30"
+
+	// reasonAfter runs setup and returns the first end-file reason it sees.
+	reasonAfter := func(t *testing.T, setup func(p *Player)) string {
+		t.Helper()
+		p := newPlayer(t)
+		setup(p)
+		deadline := time.After(10 * time.Second)
+		for {
+			select {
+			case ev, ok := <-p.Events():
+				if !ok {
+					t.Fatal("events ended before end-file")
+				}
+				if ev.Name == EndFile {
+					reason, _ := ev.Data.(string)
+					return reason
+				}
+				if ev.Name == "eof-reached" {
+					if b, ok := ev.Data.(bool); ok && b {
+						t.Error("eof-reached came through as true; " +
+							"if mpv has started doing that, the comment above is stale")
+					}
+				}
+			case <-deadline:
+				t.Fatal("no end-file event")
+			}
+		}
+	}
+
+	if got := reasonAfter(t, func(p *Player) { _ = p.Load(oneSecond) }); got != "eof" {
+		t.Errorf("a track running out gave %q, want eof", got)
+	}
+
+	got := reasonAfter(t, func(p *Player) {
+		_ = p.Load(long)
+		time.Sleep(500 * time.Millisecond)
+		_ = p.Load(long) // replace it
+	})
+	if got == "eof" {
+		t.Error("replacing a track reported eof; advancing on that runs away through the playlist")
+	}
+	if got != "stop" {
+		t.Errorf("replacing a track gave %q, want stop", got)
+	}
+}

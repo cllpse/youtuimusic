@@ -346,7 +346,7 @@ func TestSearchReplacesTheTable(t *testing.T) {
 // mpv reporting the end of a file is what advances a playlist.
 func TestTrackEndPlaysTheNextOne(t *testing.T) {
 	lib, st := library(), &fakeStreams{}
-	au := newFakeAudio(player.Event{Name: "eof-reached", Data: true})
+	au := newFakeAudio(player.Event{Name: player.EndFile, Data: "eof"})
 	m := wired(t, lib, st, au)
 	m.Tracks = fromAPI(lib.tracks["LM"])
 	m.playing = m.Tracks[0]
@@ -364,7 +364,7 @@ func TestTrackEndPlaysTheNextOne(t *testing.T) {
 // The last track ending is the end, not a crash.
 func TestTrackEndAtTheEndOfTheListStops(t *testing.T) {
 	lib, st := library(), &fakeStreams{}
-	au := newFakeAudio(player.Event{Name: "eof-reached", Data: true})
+	au := newFakeAudio(player.Event{Name: player.EndFile, Data: "eof"})
 	m := wired(t, lib, st, au)
 	m.Tracks = fromAPI(lib.tracks["LM"])
 	m.playing = m.Tracks[1]

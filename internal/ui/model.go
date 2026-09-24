@@ -59,6 +59,10 @@ type Track struct {
 // a playlist id, which is why it is not a plausible one.
 const searchTabID = "\x00search"
 
+// likedPlaylistID is YouTube's fixed id for the auto playlist a thumbs-up
+// adds to.
+const likedPlaylistID = "LM"
+
 // Model is the whole application state.
 type Model struct {
 	width, height int
@@ -94,6 +98,16 @@ type Model struct {
 
 	// tracks already fetched, by tab id, so going back to a tab is instant.
 	cache map[string][]Track
+	// showingID is the tab the visible list came from, which tells a refetch
+	// of the same tab from a move to another one.
+	showingID string
+	// lastRated is re-applied over a refreshed list. A like reaches Liked
+	// Music a moment after the call returns, so a list fetched straight
+	// after can still describe the track the old way.
+	lastRated struct {
+		videoID string
+		rating  Rating
+	}
 
 	// Mouse state: a drag on the progress bar, and enough of the last click
 	// to recognise the second one of a pair.
@@ -210,12 +224,13 @@ func (m Model) showTab() (Model, tea.Cmd) {
 
 	if tracks, ok := m.cache[tab.ID]; ok {
 		m.Tracks, m.loading, m.Err = tracks, false, nil
+		m.showingID = tab.ID
 		if len(tracks) > 0 {
 			return m, m.prefetch(tracks[0].VideoID)
 		}
 		return m, nil
 	}
-	m.Tracks = nil
+	m.Tracks, m.showingID = nil, ""
 	return m, batch(m.startLoading(), m.scheduleTabLoad())
 }
 
@@ -341,11 +356,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tracksMsg:
 		tracks := fromAPI(msg.tracks)
+		// The server can still describe a just-rated track the old way, so
+		// what this app did wins over what the list says.
+		if m.lastRated.videoID != "" {
+			for i := range tracks {
+				if tracks[i].VideoID == m.lastRated.videoID {
+					tracks[i].Rating = m.lastRated.rating
+				}
+			}
+		}
 		m.cache[msg.id] = tracks
 		if m.tabAt(m.tabCursor).ID != msg.id {
 			return m, nil // the tab moved on while this was in flight
 		}
+		// A refetch of the list already on screen keeps the reader's place
+		// in it; arriving at a new tab starts at the top.
+		refresh := m.showingID == msg.id
 		m.Tracks, m.loading, m.Err = tracks, false, nil
+		m.showingID = msg.id
+		if refresh {
+			m.trackCursor = clamp(m.trackCursor, len(tracks))
+			m.scroll()
+			return m, nil
+		}
 		m.trackCursor, m.trackOffset = 0, 0
 		if len(m.Tracks) > 0 {
 			return m, m.prefetch(m.Tracks[0].VideoID)
@@ -363,6 +396,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The row was changed before the call; put it back.
 			m.setRating(msg.videoID, msg.previous)
 			m.Err = msg.err
+			return m, nil
+		}
+		m.lastRated.videoID, m.lastRated.rating = msg.videoID, msg.applied
+		// A thumbs-up adds the track to Liked Music and clearing one takes
+		// it out again, so what is held for that tab no longer describes it.
+		delete(m.cache, likedPlaylistID)
+		if tab := m.tabAt(m.tabCursor); tab.ID == likedPlaylistID {
+			return m, m.fetchTracks(tab)
 		}
 		return m, nil
 
@@ -404,10 +445,15 @@ func (m Model) handleEvent(ev player.Event) (tea.Model, tea.Cmd) {
 		if b, ok := ev.Data.(bool); ok {
 			m.Paused = b
 		}
-	case "eof-reached":
-		// mpv reports this at the end of a file, which is where a playlist
-		// advances on its own.
-		if b, ok := ev.Data.(bool); ok && b {
+	case player.EndFile:
+		// Only a track running out advances the list. Loading a replacement
+		// ends the previous file too, and advancing on that would run away
+		// through the playlist.
+		//
+		// This is deliberately not the eof-reached property: mpv unloads the
+		// file at the same moment, so the property goes unavailable rather
+		// than true and nothing ever fires.
+		if reason, _ := ev.Data.(string); reason == "eof" {
 			if next, ok := m.following(); ok {
 				return m, batch(m.watchEvents(), m.play(next))
 			}

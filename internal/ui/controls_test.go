@@ -179,7 +179,7 @@ func TestRepeatDecidesWhatPlaysNext(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lib, st := library(), &fakeStreams{}
-			au := newFakeAudio(player.Event{Name: "eof-reached", Data: true})
+			au := newFakeAudio(player.Event{Name: player.EndFile, Data: "eof"})
 			m := wired(t, lib, st, au)
 			m.Tracks = fromAPI(lib.tracks["LM"])
 			m.playing, m.repeat = m.Tracks[tc.playing], tc.repeat
@@ -360,4 +360,90 @@ func TestNarrowRowsDegradeCleanly(t *testing.T) {
 			t.Errorf("width %d: the row renders %d cells", width, got)
 		}
 	}
+}
+
+// mpv ends the previous file whenever a replacement is loaded, reporting
+// "stop". Treating that as the end of a track would advance again, and
+// again, straight through the playlist.
+func TestOnlyARealEndAdvances(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	au := newFakeAudio(player.Event{Name: player.EndFile, Data: "stop"})
+	m := wired(t, lib, st, au)
+	m.Tracks = fromAPI(lib.tracks["LM"])
+	m.playing = m.Tracks[0]
+
+	m = drain(t, m, m.watchEvents())
+
+	if len(st.resolved) != 0 {
+		t.Fatalf("resolved %v after a stop; only eof should advance", st.resolved)
+	}
+}
+
+// Liking a track puts it in Liked Music, so what is held for that tab stops
+// describing it.
+func TestRatingRefreshesLikedMusic(t *testing.T) {
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	lib.tracks[likedPlaylistID] = []ytm.Track{{VideoID: "a", Title: "Alpha", Artist: "A"}}
+	m := wired(t, lib, st, au)
+	m.Playlists = []Playlist{{ID: "PL1", Title: "Favorites"}, {ID: likedPlaylistID, Title: "Liked Music"}}
+
+	// Visit Liked Music so it is cached, then go back to the other tab.
+	for _, key := range []string{"l", "h"} {
+		next, cmd := m.Update(keyPress(key))
+		m = drain(t, next.(Model), cmd)
+	}
+	if _, ok := m.cache[likedPlaylistID]; !ok {
+		t.Fatal("Liked Music was not cached by visiting it")
+	}
+
+	m.Tracks = fromAPI(lib.tracks["LM"])
+	m.playing = m.Tracks[0]
+	b, _ := buttonAt(m, controlThumbUp)
+	next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+	m = drain(t, next.(Model), cmd)
+
+	if _, ok := m.cache[likedPlaylistID]; ok {
+		t.Error("Liked Music is still cached from before the rating")
+	}
+}
+
+// Sitting on Liked Music, a rating reloads it in place rather than waiting
+// for the next visit — and does not throw away where the reader was.
+func TestRatingWhileOnLikedMusicReloadsIt(t *testing.T) {
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	lib.tracks[likedPlaylistID] = fromUI(rows(40))
+	m := wired(t, lib, st, au)
+	m.Playlists = []Playlist{{ID: likedPlaylistID, Title: "Liked Music"}}
+	opened, openCmd := m.showTab()
+	m = drain(t, opened, openCmd)
+
+	m.trackCursor = 25
+	m.scroll()
+	before := m.trackOffset
+	m.playing = m.Tracks[25]
+
+	requests := len(lib.askedFor)
+	b, _ := buttonAt(m, controlThumbUp)
+	next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+	m = drain(t, next.(Model), cmd)
+
+	if len(lib.askedFor) != requests+1 {
+		t.Errorf("asked for %v; want one more fetch of Liked Music", lib.askedFor)
+	}
+	if m.trackCursor != 25 || m.trackOffset != before {
+		t.Errorf("the reload jumped to cursor %d offset %d", m.trackCursor, m.trackOffset)
+	}
+	// The server can still describe the track the old way; ours wins.
+	if m.Tracks[25].Rating != RatingUp {
+		t.Errorf("the rating was lost in the reload: %v", m.Tracks[25].Rating)
+	}
+}
+
+// fromUI is the inverse of fromAPI, for building fixtures.
+func fromUI(ts []Track) []ytm.Track {
+	out := make([]ytm.Track, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, ytm.Track{VideoID: t.VideoID, Title: t.Title, Artist: t.Artist})
+	}
+	return out
 }

@@ -21,12 +21,23 @@ import (
 	"time"
 )
 
-// Event is a property change pushed by mpv. Playback state is observed rather
-// than polled, so nothing has to run on a timer.
+// Event is something mpv pushed: either an observed property changing, in
+// which case Name is the property, or one of mpv's own events, in which case
+// Name is the event. Playback state is observed rather than polled, so
+// nothing has to run on a timer.
 type Event struct {
 	Name string
 	Data any
 }
+
+// EndFile is mpv's end-file event. Data is the reason mpv gives — "eof" when
+// the track ran to its end, "stop" when something replaced it.
+//
+// This is the only dependable signal that a track finished. The eof-reached
+// property is not: mpv unloads the file at the same moment, so the property
+// goes unavailable rather than true, and an observer watching for true never
+// hears anything.
+const EndFile = "end-file"
 
 // Player is a running mpv process and the connection to it. It is safe for
 // concurrent use.
@@ -143,13 +154,17 @@ func (p *Player) readLoop() {
 		}
 
 		if probe.Event != "" {
-			if probe.Event == "property-change" {
+			switch probe.Event {
+			case "property-change":
 				var v any
 				_ = json.Unmarshal(probe.Data, &v)
-				select {
-				case p.events <- Event{Name: probe.Name, Data: v}:
-				default: // never block mpv's reader on a slow consumer
+				p.publish(Event{Name: probe.Name, Data: v})
+			case EndFile:
+				var end struct {
+					Reason string `json:"reason"`
 				}
+				_ = json.Unmarshal(line, &end)
+				p.publish(Event{Name: EndFile, Data: end.Reason})
 			}
 			continue
 		}
@@ -165,6 +180,15 @@ func (p *Player) readLoop() {
 		if ok {
 			ch <- resp
 		}
+	}
+}
+
+// publish hands an event to the consumer, dropping it rather than letting a
+// slow one block mpv's reader.
+func (p *Player) publish(ev Event) {
+	select {
+	case p.events <- ev:
+	default:
 	}
 }
 

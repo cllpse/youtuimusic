@@ -173,3 +173,45 @@ func TestParseDuration(t *testing.T) {
 		}
 	}
 }
+
+// A track already liked has to come back that way, or the controls show an
+// empty thumb for a song sitting in Liked Music.
+func TestRatingIsReadFromTheResponse(t *testing.T) {
+	row := func(title, status string) string {
+		return `{"musicResponsiveListItemRenderer":{
+		  "flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":
+		    {"text":{"runs":[{"text":"` + title + `"}]}}}],
+		  "menu":{"menuRenderer":{"topLevelButtons":[
+		    {"likeButtonRenderer":{"likeStatus":"` + status + `"}}]}},
+		  "playlistItemData":{"videoId":"` + title + `"}}}`
+	}
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(signedInBody(
+			row("liked", "LIKE") + "," + row("disliked", "DISLIKE") + "," +
+				row("neither", "INDIFFERENT"))))
+	})
+	got, err := c.PlaylistTracks(context.Background(), "PL1")
+	if err != nil {
+		t.Fatalf("PlaylistTracks: %v", err)
+	}
+	want := []Rating{RatingUp, RatingDown, RatingNone}
+	if len(got) != len(want) {
+		t.Fatalf("got %d tracks", len(got))
+	}
+	for i := range want {
+		if got[i].Rating != want[i] {
+			t.Errorf("%s came back %v, want %v", got[i].Title, got[i].Rating, want[i])
+		}
+	}
+}
+
+// A row with no like button at all is simply unrated, not an error.
+func TestARowWithNoLikeStatusIsUnrated(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(signedInBody(trackRow("t", "a", "b", "3:00", "v1", "s1"))))
+	})
+	got, _ := c.PlaylistTracks(context.Background(), "PL1")
+	if len(got) != 1 || got[0].Rating != RatingNone {
+		t.Fatalf("got %+v", got)
+	}
+}

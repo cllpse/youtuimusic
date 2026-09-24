@@ -16,6 +16,8 @@ type Track struct {
 	Artist   string
 	Album    string
 	Duration time.Duration
+	// Rating is the thumbs state the server already has for this track.
+	Rating Rating
 	// SetVideoID identifies this track's occurrence within a playlist, which
 	// is what a removal has to target — the same song can appear twice.
 	SetVideoID string
@@ -105,6 +107,7 @@ func parseTracks(raw json.RawMessage) ([]Track, error) {
 			Artist:   flexColumn(item, 1),
 			Album:    flexColumn(item, 2),
 			Duration: parseDuration(fixedColumn(item, 0)),
+			Rating:   ratingOf(item),
 		}
 		if pid, ok := item["playlistItemData"].(map[string]any); ok {
 			t.VideoID, _ = pid["videoId"].(string)
@@ -142,6 +145,26 @@ func fixedColumn(item map[string]any, n int) string {
 	col, _ := cols[n].(map[string]any)
 	r, _ := col["musicResponsiveListItemFixedColumnRenderer"].(map[string]any)
 	return runsText(r["text"])
+}
+
+// ratingOf reads the thumbs state the server reports. Without it a track
+// already liked comes back looking unrated, and the controls show an empty
+// thumb for a song in Liked Music.
+//
+// It is searched for rather than reached: the like button hangs off the row's
+// menu at a depth that differs between a playlist and a search result.
+func ratingOf(item map[string]any) Rating {
+	for _, v := range findAll(item, "likeStatus") {
+		switch s, _ := v.(string); s {
+		case "LIKE":
+			return RatingUp
+		case "DISLIKE":
+			return RatingDown
+		case "INDIFFERENT":
+			return RatingNone
+		}
+	}
+	return RatingNone
 }
 
 func firstVideoID(item map[string]any) string {
