@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Track is a song in a playlist or a search result.
@@ -22,6 +23,9 @@ type Track struct {
 	ArtistID string
 	// Rating is the thumbs state the server already has for this track.
 	Rating Rating
+	// Added is when the track joined the listing, and is the zero time
+	// where the listing does not say.
+	Added time.Time
 	// SetVideoID identifies this track's occurrence within a playlist, which
 	// is what a removal has to target — the same song can appear twice.
 	SetVideoID string
@@ -111,7 +115,7 @@ func (c *Client) page(ctx context.Context, endpoint string, body map[string]any)
 	if err != nil {
 		return Page{}, err
 	}
-	tracks, err := parseTracks(raw)
+	tracks, err := c.parseTracks(raw)
 	if err != nil {
 		return Page{}, err
 	}
@@ -167,7 +171,7 @@ func (c *Client) ArtistPage(ctx context.Context, browseID string) (Page, error) 
 	if err != nil {
 		return Page{}, err
 	}
-	songs, err := parseTracks(raw)
+	songs, err := c.parseTracks(raw)
 	if err != nil {
 		return Page{}, err
 	}
@@ -230,7 +234,7 @@ func (c *Client) Rate(ctx context.Context, videoID string, r Rating) error {
 }
 
 // parseTracks pulls every track row out of a browse or search response.
-func parseTracks(raw json.RawMessage) ([]Track, error) {
+func (c *Client) parseTracks(raw json.RawMessage) ([]Track, error) {
 	var tree any
 	if err := json.Unmarshal(raw, &tree); err != nil {
 		return nil, fmt.Errorf("ytm: parse: %w", err)
@@ -248,6 +252,7 @@ func parseTracks(raw json.RawMessage) ([]Track, error) {
 			AlbumID:  browseTarget(item, pageTypeAlbum),
 			ArtistID: browseTarget(item, pageTypeArtist),
 			Rating:   ratingOf(item),
+			Added:    addedOn(item, c.Now),
 		}
 		t.Title = tidy(t.Title)
 		t.Artist, t.Album = artistAndAlbum(item)
@@ -323,12 +328,40 @@ func linkedText(item map[string]any, pageType string) string {
 	return ""
 }
 
-// tidy replaces the bullet YouTube draws between the parts of a field with
-// a separator that reads as text. A release's subtitle is "Album • 2017",
-// and a bullet in the middle of a line reads as a glyph that went wrong.
+// tidy makes a field fit to draw in a column.
+//
+// It replaces the bullet YouTube separates parts of a field with — "Album •
+// 2017" reads, mid-line, as a glyph that went wrong — and then strips what a
+// terminal cannot lay out. Fields come back with zero-width joiners,
+// direction marks and the occasional control character: they take no width,
+// and then a column that was counted in runes does not line up with one
+// counted in cells.
+//
+// Whitespace is collapsed for the same reason. A newline inside a title
+// would otherwise break the row in half.
 func tidy(s string) string {
 	s = strings.ReplaceAll(s, " • ", ", ")
-	return strings.TrimSpace(strings.ReplaceAll(s, "•", ", "))
+	s = strings.ReplaceAll(s, "•", ", ")
+
+	var b strings.Builder
+	b.Grow(len(s))
+	pendingSpace := false
+	for _, r := range s {
+		switch {
+		case unicode.IsSpace(r):
+			pendingSpace = b.Len() > 0
+		case !unicode.IsGraphic(r):
+			// Control, format, surrogate, private use, unassigned: nothing
+			// a terminal can draw.
+		default:
+			if pendingSpace {
+				b.WriteByte(' ')
+				pendingSpace = false
+			}
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // rowTypes are the words a search result leads with, which name the kind of

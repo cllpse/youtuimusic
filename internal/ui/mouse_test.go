@@ -38,7 +38,7 @@ func frozen(m Model, at *time.Time) Model {
 }
 
 // trackRow is the screen row of the nth track, which sits under the tabs.
-func trackRow(n int) int { return tabsHeight + n }
+func trackRow(n int) int { return tabsHeight + headerRows + n }
 
 // trackX is a column inside the track table.
 const trackX = 10
@@ -307,7 +307,7 @@ func TestWheelStopsAtTheEnds(t *testing.T) {
 		next, _ := m.Update(wheel(trackX, trackRow(0), tea.MouseWheelDown))
 		m = next.(Model)
 	}
-	if want := 20 - m.bodyHeight(); m.trackOffset != want {
+	if want := 20 - m.listHeight(); m.trackOffset != want {
 		t.Errorf("offset = %d, want %d — the last row should sit at the bottom", m.trackOffset, want)
 	}
 	for range 20 {

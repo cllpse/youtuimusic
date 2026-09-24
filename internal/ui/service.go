@@ -111,6 +111,7 @@ func fromAPI(ts []ytm.Track) []Track {
 			Artist:   t.Artist,
 			Duration: t.Duration,
 			Rating:   fromAPIRating(t.Rating),
+			Added:    t.Added,
 			Album:    t.Album,
 			AlbumID:  t.AlbumID,
 			ArtistID: t.ArtistID,

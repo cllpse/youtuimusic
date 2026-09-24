@@ -2,15 +2,16 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
 )
 
-// trackTable draws a list of tracks: one row each, the cursor highlighted,
-// the playing track coloured, and a scrollbar down the side when there is
-// more than fits.
+// trackTable draws a list of tracks: a header naming the columns, one row
+// each, the cursor highlighted, the playing track coloured, and a scrollbar
+// down the side when there is more than fits.
 //
 // The main view and the popover are the same table at different sizes.
 // Having one of these is what keeps them from drifting apart — a column
@@ -20,12 +21,15 @@ type trackTable struct {
 	cursor int
 	offset int
 	width  int
+	// height is the whole block, the header included.
 	height int
 	// showRating is false where every row would carry the same mark, as in
 	// the liked playlist.
 	showRating bool
 	// playing is the video id to colour, and is empty when nothing is.
 	playing string
+	sort    sortSpec
+	now     time.Time
 
 	// more draws one extra row at the end, offering the next page. While
 	// that page is on its way it becomes the same spinner the rest of the
@@ -35,6 +39,24 @@ type trackTable struct {
 	spinner     string
 }
 
+const (
+	// headerRows is the one line naming the columns.
+	headerRows = 1
+	// scrollbarWidth is the bar itself plus a blank column to its right, so
+	// it does not sit against whatever is beside it.
+	scrollbarWidth = 2
+
+	markWidth = 2
+	// lengthWidth fits "Length" and the arrow that marks it as the column
+	// in use. Six would cut the arrow off, and then the header says which
+	// column is sorted but not which way.
+	lengthWidth = 7
+	addedWidth  = 12
+)
+
+// rowsHeight is how many tracks the block has room for.
+func (t trackTable) rowsHeight() int { return max(t.height-headerRows, 0) }
+
 // rowCount is the tracks plus the row that offers the next page.
 func (t trackTable) rowCount() int {
 	if t.more {
@@ -43,39 +65,66 @@ func (t trackTable) rowCount() int {
 	return len(t.tracks)
 }
 
-// scrollbarWidth is the bar itself plus a blank column to its right, so it
-// does not sit against whatever is beside it.
-const scrollbarWidth = 2
-
 // needsScrollbar reports whether a list is longer than its window. The
 // column only exists when it has something to say, so a list that fits is
 // not made narrower for nothing.
 func needsScrollbar(total, height int) bool { return height > 0 && total > height }
 
-func (t trackTable) hasScrollbar() bool { return needsScrollbar(t.rowCount(), t.height) }
+func (t trackTable) hasScrollbar() bool {
+	return needsScrollbar(t.rowCount(), t.rowsHeight())
+}
 
-// rows renders the table one line at a time, so a caller can put something
+// showsAdded reports whether any row knows when it was added. Most listings
+// do not say, and a column of blanks is worse than no column.
+func (t trackTable) showsAdded() bool {
+	for _, track := range t.tracks {
+		if !track.Added.IsZero() {
+			return true
+		}
+	}
+	return false
+}
+
+// layout is the width of each column, given what the table has to work with.
+type layout struct {
+	title, artist, added int
+}
+
+func (t trackTable) layout(width int) layout {
+	spare := width - markWidth - lengthWidth - 2
+	added := 0
+	if t.showsAdded() {
+		added = addedWidth
+		spare -= added + 1
+	}
+	title := max(spare, 0) / 2
+	return layout{title: title, artist: max(spare, 0) - title, added: added}
+}
+
+// rows renders the block one line at a time, so a caller can put something
 // above it without splitting a string apart again.
 func (t trackTable) rows() []string {
 	width := t.width
-	bar := scrollbarFor(t.rowCount(), t.offset, t.height)
+	bar := scrollbarFor(t.rowCount(), t.offset, t.rowsHeight())
 	if bar != nil {
 		width -= scrollbarWidth
 	}
+	cols := t.layout(width)
 
 	out := make([]string, 0, t.height)
-	for i := range t.height {
+	out = append(out, pad(t.header(cols), t.width))
+
+	for i := range t.rowsHeight() {
 		index := i + t.offset
-		line := ""
-		if t.more && index == len(t.tracks) {
-			out = append(out, t.moreRow(width))
-			continue
-		}
-		if index >= 0 && index < len(t.tracks) {
+		var line string
+		switch {
+		case t.more && index == len(t.tracks):
+			line = t.moreRow(width)
+		case index >= 0 && index < len(t.tracks):
 			track := t.tracks[index]
 			playing := t.playing != "" && track.VideoID == t.playing
 			style, styled := rowStyle(playing, index == t.cursor)
-			line = trackLine(track, width, t.showRating, styled)
+			line = t.trackLine(track, cols, styled)
 			if styled {
 				line = style.Render(line)
 			}
@@ -90,6 +139,82 @@ func (t trackTable) rows() []string {
 }
 
 func (t trackTable) render() string { return strings.Join(t.rows(), "\n") }
+
+// header names the columns and marks the one the table is ordered by.
+func (t trackTable) header(cols layout) string {
+	if cols.title+cols.artist < 4 {
+		// Too narrow for columns, so naming them would run past the edge.
+		return strings.Repeat(" ", max(t.width, 0))
+	}
+	cells := []struct {
+		by    sortColumn
+		label string
+		width int
+	}{
+		{sortTitle, "Title", cols.title},
+		{sortArtist, "Artist", cols.artist},
+		{sortLength, "Length", lengthWidth},
+	}
+	if cols.added > 0 {
+		cells = append(cells, struct {
+			by    sortColumn
+			label string
+			width int
+		}{sortAdded, "Added", cols.added})
+	}
+
+	out := strings.Repeat(" ", markWidth)
+	for i, cell := range cells {
+		if i > 0 {
+			out += " "
+		}
+		label := cell.label
+		style := dim
+		if t.sort.by == cell.by {
+			label += t.sort.arrow()
+			style = active
+		}
+		out += style.Render(pad(truncate(label, cell.width), cell.width))
+	}
+	return out
+}
+
+// headerSpans is where each column sits on the header row, so that clicking
+// one can sort by it.
+func (t trackTable) headerSpans() []struct {
+	by         sortColumn
+	start, end int
+} {
+	width := t.width
+	if t.hasScrollbar() {
+		width -= scrollbarWidth
+	}
+	cols := t.layout(width)
+
+	type span = struct {
+		by         sortColumn
+		start, end int
+	}
+	widths := []span{
+		{sortTitle, 0, cols.title},
+		{sortArtist, 0, cols.artist},
+		{sortLength, 0, lengthWidth},
+	}
+	if cols.added > 0 {
+		widths = append(widths, span{sortAdded, 0, cols.added})
+	}
+
+	at := markWidth
+	out := make([]span, 0, len(widths))
+	for i, w := range widths {
+		if i > 0 {
+			at++
+		}
+		out = append(out, span{by: w.by, start: at, end: at + w.end})
+		at += w.end
+	}
+	return out
+}
 
 // moreRow is the last line of a listing that has more to fetch.
 func (t trackTable) moreRow(width int) string {
@@ -130,34 +255,59 @@ func rowStyle(playing, selected bool) (lipgloss.Style, bool) {
 }
 
 // trackLine draws one row. The leading column is the same two cells whether
-// or not it holds a rating, so the titles line up across tabs.
+// or not it holds a mark, so the titles line up across tabs.
 //
 // Everything but the title is muted, which leaves the eye one thing to read
 // down. A highlighted row is drawn plain and coloured whole by the caller —
 // dimming part of it would fight the highlight.
-func trackLine(t Track, width int, showRating, highlighted bool) string {
-	const durCol, rateCol = 6, 2
-	prefix := "  "
-	if showRating || t.isRelease() {
-		prefix = t.glyph() + " "
+func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string {
+	prefix := strings.Repeat(" ", markWidth)
+	if t.showRating || track.isRelease() {
+		prefix = track.glyph() + " "
 	}
-	rest := width - durCol - rateCol - 2
-	if rest < 4 {
+	if cols.title+cols.artist < 4 {
 		// No room for columns; the title is the only thing worth keeping.
-		return pad(truncate(prefix+t.Title, width), width)
+		return truncate(prefix+track.Title, t.width)
 	}
-	titleW := rest / 2
-	artistW := rest - titleW
 
-	artist := pad(truncate(t.Artist, artistW), artistW)
-	duration := strings.Repeat(" ", durCol)
-	if !t.isRelease() {
-		duration = pad(formatDuration(t.Duration), durCol)
+	artist := pad(truncate(track.Artist, cols.artist), cols.artist)
+	length := strings.Repeat(" ", lengthWidth)
+	if !track.isRelease() {
+		length = pad(formatDuration(track.Duration), lengthWidth)
+	}
+	added := ""
+	if cols.added > 0 {
+		added = " " + pad(truncate(humanDate(track.Added, t.now), cols.added), cols.added)
 	}
 	if !highlighted {
-		artist, duration = dim.Render(artist), dim.Render(duration)
+		artist, length, added = dim.Render(artist), dim.Render(length), dim.Render(added)
 	}
-	return prefix + pad(truncate(t.Title, titleW), titleW) + " " + artist + " " + duration
+	return prefix + pad(truncate(track.Title, cols.title), cols.title) +
+		" " + artist + " " + length + added
+}
+
+// humanDate says how long ago something was in the way a person would:
+// recently, in days; beyond that, by its date.
+func humanDate(when, now time.Time) string {
+	if when.IsZero() {
+		return ""
+	}
+	switch days := int(now.Sub(when).Hours() / 24); {
+	case days < 0:
+		return when.Format("2 Jan 2006")
+	case days == 0:
+		return "today"
+	case days == 1:
+		return "yesterday"
+	case days < 7:
+		return fmt.Sprintf("%d days ago", days)
+	case days < 14:
+		return "last week"
+	case days < 60:
+		return fmt.Sprintf("%d weeks ago", days/7)
+	default:
+		return when.Format("2 Jan 2006")
+	}
 }
 
 // scrollbarFor draws a trough and thumb for a list. The thumb is the same
@@ -199,6 +349,88 @@ func keepVisible(cursor, offset, height, total int) int {
 // clampOffset holds a window inside a list.
 func clampOffset(offset, height, total int) int {
 	return max(min(offset, total-height), 0)
+}
+
+// sortColumn names what a table is ordered by.
+type sortColumn int
+
+const (
+	sortNone sortColumn = iota
+	sortTitle
+	sortArtist
+	sortLength
+	sortAdded
+)
+
+// sortSpec is an order: a column and a direction.
+type sortSpec struct {
+	by   sortColumn
+	desc bool
+}
+
+func (s sortSpec) arrow() string {
+	if s.desc {
+		return "↓"
+	}
+	return "↑"
+}
+
+// next moves to the following column, wrapping back through unsorted so
+// that the list can always be put back the way it arrived.
+func (s sortSpec) next(hasAdded bool) sortSpec {
+	last := sortLength
+	if hasAdded {
+		last = sortAdded
+	}
+	if s.by >= last {
+		return sortSpec{}
+	}
+	return sortSpec{by: s.by + 1}
+}
+
+// on is what clicking a column header means: order by it, or reverse it if
+// it is already the one in use.
+func (s sortSpec) on(by sortColumn) sortSpec {
+	if s.by == by {
+		return sortSpec{by: by, desc: !s.desc}
+	}
+	return sortSpec{by: by}
+}
+
+// sortTracks orders a list in place. It is stable, so the order a listing
+// arrived in survives wherever the key is equal — which for a column of
+// blank dates is everywhere.
+func sortTracks(tracks []Track, spec sortSpec) {
+	if spec.by == sortNone {
+		return
+	}
+	slices.SortStableFunc(tracks, func(a, b Track) int {
+		n := compareBy(a, b, spec.by)
+		if spec.desc {
+			return -n
+		}
+		return n
+	})
+}
+
+func compareBy(a, b Track, by sortColumn) int {
+	switch by {
+	case sortTitle:
+		return compareText(a.Title, b.Title)
+	case sortArtist:
+		return compareText(a.Artist, b.Artist)
+	case sortLength:
+		return int(a.Duration - b.Duration)
+	case sortAdded:
+		return a.Added.Compare(b.Added)
+	}
+	return 0
+}
+
+// compareText orders the way a person reading a list would, which is not
+// how bytes order: "abba" belongs beside "ABBA", not after "Zappa".
+func compareText(a, b string) int {
+	return strings.Compare(strings.ToLower(a), strings.ToLower(b))
 }
 
 func formatDuration(d time.Duration) string {

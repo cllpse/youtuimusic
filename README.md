@@ -65,6 +65,7 @@ walking onto it, scrolling to it, or clicking it — is what asks.
 | `r` | repeat: off, all, one |
 | `/` | search in a popover, `enter` to run it, `esc` to close |
 | `+` / `-` | thumbs up or down; the same key again clears it |
+| `s` / `S` | sort by the next column, and reverse it |
 | `ctrl+c` | quit |
 
 With the track menu or the popover open, `j`/`k` and `enter` work it and
@@ -88,6 +89,11 @@ that what it covers is still visible around it and stopping short of the
 player, which stays usable. It says what it is showing, carries its own table — same columns, same
 scrolling, same paging — and `esc` or a click outside closes it, leaving everything
 underneath as it was. The search one puts its box on the top line.
+
+The table names its columns, and clicking one sorts by it — again to
+reverse. A listing that says when its tracks were added, which in practice
+means the liked playlist, gets a column for it; one that does not is not
+given a column of blanks.
 
 A list longer than the window gets a scrollbar down its right edge. It can
 be clicked and dragged, and it is only there when there is something to

@@ -36,11 +36,14 @@ func (m Model) modalContentWidth() int {
 	return max(width-modalChrome, 1)
 }
 
-// modalListHeight is how many tracks it shows at once.
+// modalListHeight is the table's whole block, its header included.
 func (m Model) modalListHeight() int {
 	_, _, _, height := m.modalBounds()
-	return max(height-2-modalHeader, 1)
+	return max(height-2-modalHeader, 2)
 }
+
+// modalRowsHeight is how many tracks it shows at once.
+func (m Model) modalRowsHeight() int { return max(m.modalListHeight()-headerRows, 1) }
 
 const (
 	// iconSearch heads the search popover's input.
@@ -160,6 +163,8 @@ func (m Model) renderModal() string {
 	}
 
 	lines = append(lines, trackTable{
+		sort:        m.sort,
+		now:         m.clock(),
 		tracks:      m.detour.tracks,
 		cursor:      m.detour.cursor,
 		offset:      m.detour.offset,
@@ -192,8 +197,8 @@ func (m Model) modalHit(x, y int) (int, bool) {
 	if x < mx+2 || x >= mx+width-2 { // border and padding
 		return 0, false
 	}
-	line := y - my - 1 - modalHeader
-	if line < 0 || line >= m.modalListHeight() {
+	line := y - my - 1 - modalHeader - headerRows
+	if line < 0 || line >= m.modalRowsHeight() {
 		return 0, false
 	}
 	row := line + m.detour.offset
@@ -207,14 +212,14 @@ func (m Model) modalHit(x, y int) (int, bool) {
 // another page.
 func (m Model) viewingDetourMoreRow() bool {
 	return m.detour.more.More() &&
-		m.detour.offset+m.modalListHeight() > len(m.detour.tracks)
+		m.detour.offset+m.modalRowsHeight() > len(m.detour.tracks)
 }
 
 // scrollDetour moves the popover's window without moving its selection, the
 // way the wheel behaves on the list underneath.
 func (m *Model) scrollDetour(delta int) {
 	m.detour.offset = clampOffset(m.detour.offset+delta,
-		m.modalListHeight(), m.detourRowCount())
+		m.modalRowsHeight(), m.detourRowCount())
 }
 
 // handleModalKey runs the popover. It reports whether it took the key: the
@@ -245,10 +250,10 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
 		m.moveDetour(1)
 		return m.afterDetourMove()
 	case "pgup", "ctrl+u":
-		m.moveDetour(-m.modalListHeight())
+		m.moveDetour(-m.modalRowsHeight())
 		return m.afterDetourMove()
 	case "pgdown", "ctrl+d":
-		m.moveDetour(m.modalListHeight())
+		m.moveDetour(m.modalRowsHeight())
 		return m.afterDetourMove()
 	case "home", "g":
 		m.moveDetour(-m.detourRowCount())

@@ -98,7 +98,7 @@ func TestLongListScrollsToItsEnd(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	m = sized.(Model)
 	m.Tracks = rows(100)
-	height := m.bodyHeight()
+	height := m.listHeight()
 
 	// Walking down past the window edge moves it, one row at a time.
 	for i := 0; i < height; i++ {
@@ -137,7 +137,7 @@ func TestPageKeysMoveAWindowAtATime(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	m = sized.(Model)
 	m.Tracks = rows(100)
-	height := m.bodyHeight()
+	height := m.listHeight()
 
 	m = press(m, "pgdown")
 	if m.trackCursor != height {
@@ -239,7 +239,7 @@ func TestLoadingShowsTheSpinnerInTheList(t *testing.T) {
 	m.loading = true
 
 	lines := strings.Split(plain(m.View().Content), "\n")
-	list := strings.Join(lines[tabsHeight:tabsHeight+m.bodyHeight()], "\n")
+	list := strings.Join(lines[tabsHeight+headerRows:tabsHeight+m.bodyHeight()], "\n")
 	if !strings.Contains(list, "Loading…") {
 		t.Fatalf("nothing loading in the list:\n%s", list)
 	}
@@ -347,12 +347,12 @@ func TestTabRowIsThreeLines(t *testing.T) {
 	if !strings.Contains(lines[1], "One") {
 		t.Errorf("the tab label is not on the middle line: %q", plain(lines[1]))
 	}
-	if strings.Contains(plain(lines[tabsHeight]), "One") {
+	if strings.Contains(plain(lines[tabsHeight+headerRows]), "One") {
 		t.Errorf("the tab row spills onto row %d", tabsHeight)
 	}
 	// The first track sits directly under the tabs.
-	if !strings.Contains(lines[tabsHeight], "Alpha") {
-		t.Errorf("row %d is %q, want the first track", tabsHeight, plain(lines[tabsHeight]))
+	if !strings.Contains(lines[tabsHeight+headerRows], "Alpha") {
+		t.Errorf("row %d is %q, want the first track", tabsHeight, plain(lines[tabsHeight+headerRows]))
 	}
 }
 
@@ -392,13 +392,13 @@ func TestALikedRowIsMarkedWithTheThumb(t *testing.T) {
 	m.Tracks[1].Rating = RatingDown
 
 	lines := strings.Split(m.View().Content, "\n")
-	if !strings.Contains(lines[tabsHeight], iconThumbUp) {
-		t.Errorf("no thumbs-up on the liked row: %q", plain(lines[tabsHeight]))
+	if !strings.Contains(lines[tabsHeight+headerRows], iconThumbUp) {
+		t.Errorf("no thumbs-up on the liked row: %q", plain(lines[tabsHeight+headerRows]))
 	}
-	if !strings.Contains(lines[tabsHeight+1], iconThumbDown) {
-		t.Errorf("no thumbs-down on the disliked row: %q", plain(lines[tabsHeight+1]))
+	if !strings.Contains(lines[tabsHeight+headerRows+1], iconThumbDown) {
+		t.Errorf("no thumbs-down on the disliked row: %q", plain(lines[tabsHeight+headerRows+1]))
 	}
-	if strings.ContainsAny(plain(lines[tabsHeight]), "+-") {
+	if strings.ContainsAny(plain(lines[tabsHeight+headerRows]), "+-") {
 		t.Error("the old plus/minus is still there")
 	}
 }
@@ -409,10 +409,10 @@ func TestTheLikedPlaylistDropsTheRatingColumn(t *testing.T) {
 	m := sample()
 	m.Tracks[0].Rating = RatingUp
 
-	elsewhere := plain(strings.Split(m.View().Content, "\n")[tabsHeight])
+	elsewhere := plain(strings.Split(m.View().Content, "\n")[tabsHeight+headerRows])
 
 	m.showingID = likedPlaylistID
-	liked := plain(strings.Split(m.View().Content, "\n")[tabsHeight])
+	liked := plain(strings.Split(m.View().Content, "\n")[tabsHeight+headerRows])
 
 	if strings.Contains(liked, iconThumbUp) {
 		t.Errorf("the thumb is still drawn in the liked playlist: %q", liked)
@@ -447,20 +447,20 @@ func TestScrollbarAppearsOnlyWhenItOverflows(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	m = sized.(Model)
 
-	m.Tracks = rows(m.bodyHeight())
+	m.Tracks = rows(m.listHeight())
 	if m.hasScrollbar() {
 		t.Error("a list that fits has a scrollbar")
 	}
-	if line := plain(strings.Split(m.View().Content, "\n")[tabsHeight]); strings.ContainsAny(line, "█│") {
+	if line := plain(strings.Split(m.View().Content, "\n")[tabsHeight+headerRows]); strings.ContainsAny(line, "█│") {
 		t.Errorf("a bar is drawn anyway: %q", line)
 	}
 
-	m.Tracks = rows(m.bodyHeight() + 1)
+	m.Tracks = rows(m.listHeight() + 1)
 	if !m.hasScrollbar() {
 		t.Fatal("an overflowing list has no scrollbar")
 	}
-	for i := range m.bodyHeight() {
-		line := plain(strings.Split(m.View().Content, "\n")[tabsHeight+i])
+	for i := range m.listHeight() {
+		line := plain(strings.Split(m.View().Content, "\n")[tabsHeight+headerRows+i])
 		if lipgloss.Width(line) != m.width {
 			t.Fatalf("row %d is %d cells, want %d", i, lipgloss.Width(line), m.width)
 		}
@@ -482,7 +482,7 @@ func TestTheScrollbarThumbFollowsTheWindow(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	m = sized.(Model)
 	m.Tracks = rows(100)
-	height := m.bodyHeight()
+	height := m.listHeight()
 
 	thumbTop := func(m Model) int {
 		for i, cell := range scrollbarFor(len(m.Tracks), m.trackOffset, height) {
@@ -513,20 +513,20 @@ func TestClickingTheScrollbarScrolls(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
 	m = sized.(Model)
 	m.Tracks = rows(200)
-	height := m.bodyHeight()
+	height := m.listHeight()
 	column := m.scrollbarColumn()
 
 	furthest := 200 - height
 
 	// The top of the trough is the top of the list.
-	next, _ := m.Update(click(column, tabsHeight))
+	next, _ := m.Update(click(column, tabsHeight+headerRows))
 	if got := next.(Model).trackOffset; got != 0 {
 		t.Errorf("clicking the top gave offset %d", got)
 	}
 
 	// Halfway down is roughly halfway through. Not exactly: the trough's
 	// last cell has to mean the end, so a cell maps to row/(height-1).
-	next, _ = m.Update(click(column, tabsHeight+height/2))
+	next, _ = m.Update(click(column, tabsHeight+headerRows+height/2))
 	m = next.(Model)
 	if got, want := m.trackOffset, furthest/2; got < want-furthest/10 || got > want+furthest/10 {
 		t.Errorf("offset = %d, want near %d", got, want)
@@ -539,13 +539,13 @@ func TestClickingTheScrollbarScrolls(t *testing.T) {
 	}
 
 	// Dragging to the bottom takes the window to the end.
-	next, _ = m.Update(motion(column, tabsHeight+height-1))
+	next, _ = m.Update(motion(column, tabsHeight+headerRows+height-1))
 	m = next.(Model)
 	if m.trackOffset != furthest {
 		t.Errorf("offset = %d, want the end at %d", m.trackOffset, furthest)
 	}
 
-	next, _ = m.Update(release(column, tabsHeight+height-1))
+	next, _ = m.Update(release(column, tabsHeight+headerRows+height-1))
 	if next.(Model).draggingScroll {
 		t.Error("still dragging after release")
 	}
@@ -558,7 +558,7 @@ func TestTheLastColumnIsATrackWhenThereIsNoBar(t *testing.T) {
 	m = sized.(Model)
 	m.Tracks = rows(2)
 
-	if where, n := m.hit(m.width-1, tabsHeight+1); where != regionTracks || n != 1 {
+	if where, n := m.hit(m.width-1, tabsHeight+headerRows+1); where != regionTracks || n != 1 {
 		t.Errorf("hit = %v, %d; want the track row", where, n)
 	}
 }
@@ -576,7 +576,7 @@ func TestPlayingAndSelectedAreSeparate(t *testing.T) {
 	m.trackCursor = 0       // the cursor is on Alpha
 
 	lines := strings.Split(m.View().Content, "\n")
-	alpha, beta, gamma := lines[tabsHeight], lines[tabsHeight+1], lines[tabsHeight+2]
+	alpha, beta, gamma := lines[tabsHeight+headerRows], lines[tabsHeight+headerRows+1], lines[tabsHeight+headerRows+2]
 
 	// The cursor is a filled background and nothing else.
 	if !sgrCodes(alpha)["100"] {
@@ -601,7 +601,7 @@ func TestPlayingAndSelectedAreSeparate(t *testing.T) {
 
 	// And a row that is both says both.
 	m.trackCursor = 1
-	both := strings.Split(m.View().Content, "\n")[tabsHeight+1]
+	both := strings.Split(m.View().Content, "\n")[tabsHeight+headerRows+1]
 	if !sgrCodes(both)["34"] || !sgrCodes(both)["100"] {
 		t.Errorf("the playing row under the cursor says %v, want both", sgrCodes(both))
 	}
@@ -614,7 +614,7 @@ func TestTheSelectionHighlightFillsTheRow(t *testing.T) {
 	m.Tracks = []Track{{VideoID: "a", Title: "Alpha", Artist: "A"}}
 	m.trackCursor = 0
 
-	row := strings.Split(m.View().Content, "\n")[tabsHeight]
+	row := strings.Split(m.View().Content, "\n")[tabsHeight+headerRows]
 	if lipgloss.Width(plain(row)) != m.width {
 		t.Fatalf("the row is %d cells, want %d", lipgloss.Width(plain(row)), m.width)
 	}
@@ -631,12 +631,96 @@ func TestAHighlightedRowDoesNotMuteItsColumns(t *testing.T) {
 	m.Tracks = []Track{{VideoID: "a", Title: "Alpha", Artist: "DAPHNI"}}
 	m.trackCursor = 0
 
-	row := strings.Split(m.View().Content, "\n")[tabsHeight]
+	row := strings.Split(m.View().Content, "\n")[tabsHeight+headerRows]
 	artist := row[strings.Index(row, "DAPHNI"):]
 	if strings.Contains(artist[:len("DAPHNI")], "\x1b[") {
 		t.Errorf("the artist is styled separately on a highlighted row: %q", row)
 	}
 	if !sgrCodes(row)["100"] {
 		t.Fatalf("the row is not highlighted at all: %v", sgrCodes(row))
+	}
+}
+
+// Clicking a column header orders by it; clicking again reverses.
+func TestClickingTheHeaderSorts(t *testing.T) {
+	m := sample()
+	m.Tracks = []Track{
+		{VideoID: "a", Title: "Zulu", Artist: "Zappa", Duration: 3 * time.Minute},
+		{VideoID: "b", Title: "Alpha", Artist: "abba", Duration: time.Minute},
+	}
+
+	spans := m.table(m.width, m.bodyHeight()).headerSpans()
+	var artist int
+	for _, span := range spans {
+		if span.by == sortArtist {
+			artist = span.start + 1
+		}
+	}
+	if artist == 0 {
+		t.Fatal("no artist column on the header")
+	}
+
+	next, _ := m.Update(click(artist, tabsHeight))
+	m = next.(Model)
+	if m.sort.by != sortArtist || m.sort.desc {
+		t.Fatalf("sort = %+v", m.sort)
+	}
+	if m.Tracks[0].Title != "Alpha" {
+		t.Errorf("the list was not reordered: %q first", m.Tracks[0].Title)
+	}
+
+	next, _ = m.Update(click(artist, tabsHeight))
+	m = next.(Model)
+	if !m.sort.desc || m.Tracks[0].Title != "Zulu" {
+		t.Errorf("the second click did not reverse: %+v, %q", m.sort, m.Tracks[0].Title)
+	}
+}
+
+// s cycles the column and S reverses, without either needing the mouse.
+func TestSortKeys(t *testing.T) {
+	m := sample()
+	m.Tracks = []Track{
+		{VideoID: "a", Title: "Zulu", Artist: "Zappa"},
+		{VideoID: "b", Title: "Alpha", Artist: "abba"},
+	}
+
+	m = press(m, "s")
+	if m.sort.by != sortTitle {
+		t.Fatalf("s sorted by %v", m.sort.by)
+	}
+	if m.Tracks[0].Title != "Alpha" {
+		t.Errorf("the list was not reordered: %q first", m.Tracks[0].Title)
+	}
+	m = press(m, "S")
+	if !m.sort.desc || m.Tracks[0].Title != "Zulu" {
+		t.Errorf("S did not reverse: %+v, %q", m.sort, m.Tracks[0].Title)
+	}
+	// Cycling all the way round puts it back to the order it arrived in.
+	m = press(m, "s", "s", "s")
+	if m.sort.by != sortNone {
+		t.Errorf("cycling ended on %v", m.sort.by)
+	}
+}
+
+// Sorting moves the rows, so the cursor has to mean the row it points at.
+func TestSortingKeepsTheCursorMeaningful(t *testing.T) {
+	m := sample()
+	m.Tracks = []Track{
+		{VideoID: "a", Title: "Zulu"},
+		{VideoID: "b", Title: "Alpha"},
+	}
+	m.trackCursor = 1
+
+	m = press(m, "s")
+	got, ok := m.SelectedTrack()
+	if !ok {
+		t.Fatal("nothing selected after sorting")
+	}
+	if got.Title != m.Tracks[m.trackCursor].Title {
+		t.Errorf("the cursor points at %q but the row is %q", got.Title, m.Tracks[m.trackCursor].Title)
+	}
+	// It goes back to the top, which is where a reordered list starts.
+	if m.trackCursor != 0 {
+		t.Errorf("cursor = %d", m.trackCursor)
 	}
 }

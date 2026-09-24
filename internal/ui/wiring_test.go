@@ -773,7 +773,7 @@ func TestScrollingThePopoverFetchesItsNextPage(t *testing.T) {
 		if len(m.detour.tracks) != before {
 			break
 		}
-		next, cmd := m.Update(wheel(inside, my+modalHeader+1, tea.MouseWheelDown))
+		next, cmd := m.Update(wheel(inside, my+modalHeader+headerRows+1, tea.MouseWheelDown))
 		m = drain(t, next.(Model), cmd)
 	}
 

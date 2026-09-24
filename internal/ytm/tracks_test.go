@@ -562,3 +562,47 @@ func TestTidy(t *testing.T) {
 		}
 	}
 }
+
+// Fields arrive with characters a terminal cannot lay out. They take no
+// width, so a column counted in runes stops lining up with one counted in
+// cells.
+func TestTidyStripsWhatCannotBeDrawn(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"zero width joiner", "Bo‍wie", "Bowie"},
+		{"zero width space", "A​B", "AB"},
+		{"direction mark", "‏Hebrew‎", "Hebrew"},
+		{"soft hyphen", "co­operate", "cooperate"},
+		{"control character", "Track\x07Name", "TrackName"},
+		{"newline", "Two\nLines", "Two Lines"},
+		{"tabs", "A\t\tB", "A B"},
+		{"collapsed spaces", "  too   much   space  ", "too much space"},
+		{"private use", "junkhere", "junkhere"},
+		{"kept: accents", "Björk", "Björk"},
+		{"kept: combining", "éclair", "éclair"},
+		{"kept: cjk", "宇多田ヒカル", "宇多田ヒカル"},
+		{"kept: punctuation", "Don't Stop (Remix) [2024]", "Don't Stop (Remix) [2024]"},
+		{"kept: emoji", "party 🎉", "party 🎉"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tidy(tc.in); got != tc.want {
+				t.Errorf("tidy(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// And it runs on every field that gets drawn.
+func TestEveryFieldIsTidied(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(signedInBody(trackRow(
+			"Ti‍tle", "Ar​tist", "Al­bum", "3:00", "v1", "s1"))))
+	})
+	page, err := c.PlaylistTracks(context.Background(), "PL1")
+	if err != nil {
+		t.Fatalf("PlaylistTracks: %v", err)
+	}
+	got := page.Tracks[0]
+	if got.Title != "Title" || got.Artist != "Artist" || got.Album != "Album" {
+		t.Errorf("got %q / %q / %q", got.Title, got.Artist, got.Album)
+	}
+}

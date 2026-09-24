@@ -253,7 +253,7 @@ func TestASecondGoToReplacesThePopover(t *testing.T) {
 
 	// Right-click a row inside the popover and follow its artist.
 	_, my, _, _ := m.modalBounds()
-	inside := my + 1 + modalHeader
+	inside := my + 1 + modalHeader + headerRows
 	next, cmd := m.Update(rightClick(m.width/2, inside))
 	m = drain(t, next.(Model), cmd)
 	if !m.menu.open {
@@ -303,7 +303,7 @@ func TestClickingInsidethePopover(t *testing.T) {
 	m = openVia(t, m, menuAlbum)
 
 	_, my, _, _ := m.modalBounds()
-	row := my + 1 + modalHeader + 2 // the third track
+	row := my + 1 + modalHeader + headerRows + 2 // the third track
 
 	next, cmd := m.Update(click(m.width/2, row))
 	m = drain(t, next.(Model), cmd)
@@ -444,7 +444,7 @@ func TestTheMenuIsNudgedOnScreen(t *testing.T) {
 // The popover must not cover the tabs or the player: the transport has to
 // stay reachable while it is open.
 func TestThePopoverStaysInsideTheList(t *testing.T) {
-	for _, size := range []struct{ w, h int }{{100, 20}, {80, 14}, {60, 10}, {120, 40}} {
+	for _, size := range []struct{ w, h int }{{100, 20}, {80, 16}, {60, 15}, {120, 40}} {
 		m, _, _, _ := menuModel(t)
 		sized, _ := m.Update(tea.WindowSizeMsg{Width: size.w, Height: size.h})
 		m = sized.(Model)

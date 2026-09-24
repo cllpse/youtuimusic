@@ -8,6 +8,7 @@ package ui
 
 import (
 	"image/color"
+	"slices"
 	"strings"
 	"time"
 
@@ -70,6 +71,9 @@ type Track struct {
 	Artist   string
 	Duration time.Duration
 	Rating   Rating
+	// Added is when the track joined the listing it came from, and is the
+	// zero time where the listing does not say.
+	Added time.Time
 	// Album names the tab the menu opens; AlbumID and ArtistID are where
 	// its "go to" rows lead, and are empty when a row leads nowhere.
 	Album    string
@@ -135,6 +139,10 @@ type Model struct {
 	// the next page is already on its way. Only one list asks at a time.
 	more        ytm.Continuation
 	loadingMore bool
+	// sort is the order both lists are in. Sorting is applied to the slice
+	// rather than to the drawing, so that a cursor means the same row
+	// everywhere.
+	sort sortSpec
 	// lastRated is re-applied over a refreshed list. A like reaches Liked
 	// Music a moment after the call returns, so a list fetched straight
 	// after can still describe the track the old way.
@@ -311,7 +319,7 @@ func (m Model) detourRowCount() int {
 func (m *Model) moveDetour(delta int) {
 	m.detour.cursor = clamp(m.detour.cursor+delta, m.detourRowCount())
 	m.detour.offset = keepVisible(m.detour.cursor, m.detour.offset,
-		m.modalListHeight(), m.detourRowCount())
+		m.modalRowsHeight(), m.detourRowCount())
 }
 
 // afterDetourMove takes up the offer of another page when the cursor
@@ -416,7 +424,7 @@ func (m Model) atMoreRow() bool {
 
 // viewingMoreRow reports whether the offer of another page is on screen.
 func (m Model) viewingMoreRow() bool {
-	return m.more.More() && m.trackOffset+m.bodyHeight() > len(m.Tracks)
+	return m.more.More() && m.trackOffset+m.listHeight() > len(m.Tracks)
 }
 
 // afterCursorMove warms the row the cursor landed on — or, when that row is
@@ -454,12 +462,12 @@ func (m *Model) moveCursor(delta int) {
 // scrollBy moves the window and leaves the selection where it is, so the
 // list can be looked through without losing the cursor's place.
 func (m *Model) scrollBy(delta int) {
-	m.trackOffset = clampOffset(m.trackOffset+delta, m.bodyHeight(), m.rowCount())
+	m.trackOffset = clampOffset(m.trackOffset+delta, m.listHeight(), m.rowCount())
 }
 
 // scroll moves the window only far enough to keep the cursor on screen.
 func (m *Model) scroll() {
-	m.trackOffset = keepVisible(m.trackCursor, m.trackOffset, m.bodyHeight(), m.rowCount())
+	m.trackOffset = keepVisible(m.trackCursor, m.trackOffset, m.listHeight(), m.rowCount())
 }
 
 func clamp(v, length int) int {
@@ -709,6 +717,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case " ", "space":
 		return m.press(controlPlayPause)
 
+	case "s":
+		return m.sortBy(m.sort.next(m.table(m.width, m.bodyHeight()).showsAdded()))
+	case "S":
+		return m.sortBy(sortSpec{by: max(m.sort.by, sortTitle), desc: !m.sort.desc})
+
 	case "n":
 		return m.press(controlNext)
 	case "p":
@@ -729,10 +742,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.afterCursorMove()
 
 	case "pgup", "ctrl+u":
-		m.moveCursor(-m.bodyHeight())
+		m.moveCursor(-m.listHeight())
 		return m.afterCursorMove()
 	case "pgdown", "ctrl+d":
-		m.moveCursor(m.bodyHeight())
+		m.moveCursor(m.listHeight())
 		return m.afterCursorMove()
 
 	case "home", "g":
@@ -861,6 +874,19 @@ func without(tracks []Track, videoID string) []Track {
 	return out
 }
 
+// sortBy reorders both lists. The slices themselves are sorted, not the
+// drawing of them, so that a cursor keeps meaning the same row.
+func (m Model) sortBy(spec sortSpec) (tea.Model, tea.Cmd) {
+	m.sort = spec
+	m.Tracks = slices.Clone(m.Tracks)
+	sortTracks(m.Tracks, spec)
+	m.detour.tracks = slices.Clone(m.detour.tracks)
+	sortTracks(m.detour.tracks, spec)
+	m.trackCursor, m.trackOffset = 0, 0
+	m.detour.cursor, m.detour.offset = 0, 0
+	return m, nil
+}
+
 // isPlaying reports whether a row is the track mpv is on.
 func (m Model) isPlaying(t Track) bool {
 	return m.playing.VideoID != "" && t.VideoID == m.playing.VideoID
@@ -900,7 +926,10 @@ const (
 	tabFurniture = 4 // a border and a space either side
 )
 
-// bodyHeight is how many rows the track table gets.
+// listHeight is how many tracks fit under the table's header.
+func (m Model) listHeight() int { return max(m.bodyHeight()-headerRows, 1) }
+
+// bodyHeight is how many rows the track table gets, its header included.
 func (m Model) bodyHeight() int {
 	if h := m.height - tabsHeight - progressRows; h > 1 {
 		return h
@@ -1048,6 +1077,8 @@ func (m Model) renderTracks(width, height int) string {
 // table is the main list as the shared table sees it.
 func (m Model) table(width, height int) trackTable {
 	return trackTable{
+		sort:        m.sort,
+		now:         m.clock(),
 		tracks:      m.Tracks,
 		cursor:      m.trackCursor,
 		offset:      m.trackOffset,
@@ -1065,7 +1096,7 @@ func (m Model) table(width, height int) trackTable {
 // column only exists when it has something to say, so a list that fits is
 // not made narrower for nothing.
 func (m Model) hasScrollbar() bool {
-	return needsScrollbar(m.rowCount(), m.bodyHeight())
+	return needsScrollbar(m.rowCount(), m.listHeight())
 }
 
 // scrollbarColumn is where it is drawn.
@@ -1073,12 +1104,12 @@ func (m Model) scrollbarColumn() int { return m.width - scrollbarWidth }
 
 // scrollTo puts the list where a point on the scrollbar says it should be.
 func (m *Model) scrollTo(y int) {
-	height := m.bodyHeight()
+	height := m.listHeight()
 	total := m.rowCount()
 	if height <= 1 || total <= height {
 		return
 	}
-	row := min(max(y-tabsHeight, 0), height-1)
+	row := min(max(y-tabsHeight-headerRows, 0), height-1)
 	furthest := total - height
 	m.trackOffset = min(max(row*furthest/(height-1), 0), furthest)
 }

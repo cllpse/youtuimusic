@@ -214,8 +214,8 @@ func (c *Client) LibraryPlaylists(ctx context.Context) ([]Playlist, error) {
 		}
 		out = append(out, Playlist{
 			ID:       strings.TrimPrefix(id, "VL"),
-			Title:    runsText(item["title"]),
-			Subtitle: runsText(item["subtitle"]),
+			Title:    tidy(runsText(item["title"])),
+			Subtitle: tidy(runsText(item["subtitle"])),
 		})
 	}
 	return out, nil

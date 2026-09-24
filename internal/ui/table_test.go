@@ -36,7 +36,7 @@ func TestTheMainViewAndThePopoverShareOneTable(t *testing.T) {
 	}
 
 	// The main list, against the table built by hand.
-	width, height := 60, len(tracks)
+	width, height := 60, len(tracks)+headerRows
 	want := trackTable{
 		tracks: tracks, cursor: 1, width: width, height: height,
 		showRating: true, playing: "c",
@@ -64,7 +64,7 @@ func TestTheMainViewAndThePopoverShareOneTable(t *testing.T) {
 // A table exactly as tall as its list has nothing to scroll.
 func TestTheTableOnlyDrawsABarWhenItMustScroll(t *testing.T) {
 	tracks := tableTracks()
-	fits := trackTable{tracks: tracks, width: 40, height: len(tracks)}
+	fits := trackTable{tracks: tracks, width: 40, height: len(tracks) + headerRows}
 	if fits.hasScrollbar() {
 		t.Error("a list that exactly fits has a bar")
 	}
@@ -74,7 +74,7 @@ func TestTheTableOnlyDrawsABarWhenItMustScroll(t *testing.T) {
 		}
 	}
 
-	tight := trackTable{tracks: tracks, width: 40, height: len(tracks) - 1}
+	tight := trackTable{tracks: tracks, width: 40, height: len(tracks) - 1 + headerRows}
 	if !tight.hasScrollbar() {
 		t.Fatal("an overflowing list has no bar")
 	}
@@ -154,7 +154,8 @@ func TestAReleaseRowIsMarkedAndHasNoLength(t *testing.T) {
 	if !release.isRelease() {
 		t.Fatal("not recognised as a release")
 	}
-	line := plain(trackLine(release, 60, true, false))
+	table := trackTable{tracks: []Track{release}, width: 60, height: 3, showRating: true}
+	line := plain(table.trackLine(release, table.layout(60), false))
 	if !strings.HasPrefix(line, iconAlbum) {
 		t.Errorf("no album mark: %q", line)
 	}
@@ -167,7 +168,8 @@ func TestAReleaseRowIsMarkedAndHasNoLength(t *testing.T) {
 	if song.isRelease() {
 		t.Fatal("a song with a video id is not a release")
 	}
-	if !strings.Contains(plain(trackLine(song, 60, true, false)), "1:00") {
+	songs := trackTable{tracks: []Track{song}, width: 60, height: 3, showRating: true}
+	if !strings.Contains(plain(songs.trackLine(song, songs.layout(60), false)), "1:00") {
 		t.Error("a song lost its length")
 	}
 }
@@ -176,13 +178,13 @@ func TestAReleaseRowIsMarkedAndHasNoLength(t *testing.T) {
 // row is not a track.
 func TestTheTableOffersTheNextPage(t *testing.T) {
 	tracks := tableTracks()
-	table := trackTable{tracks: tracks, width: 40, height: len(tracks) + 1, more: true}
+	table := trackTable{tracks: tracks, width: 40, height: len(tracks) + 1 + headerRows, more: true}
 
 	if table.rowCount() != len(tracks)+1 {
 		t.Fatalf("row count = %d, want one more than the tracks", table.rowCount())
 	}
 	rows := table.rows()
-	last := plain(rows[len(tracks)])
+	last := plain(rows[len(tracks)+headerRows])
 	if !strings.Contains(last, "load more") {
 		t.Fatalf("the last row is %q", last)
 	}
@@ -196,7 +198,7 @@ func TestTheTableOffersTheNextPage(t *testing.T) {
 
 	// Waiting for it, the row becomes the spinner.
 	table.loadingMore, table.spinner = true, "▒"
-	waiting := plain(table.rows()[len(tracks)])
+	waiting := plain(table.rows()[len(tracks)+headerRows])
 	if !strings.Contains(waiting, "loading…") || !strings.Contains(waiting, "▒") {
 		t.Errorf("the row does not say it is waiting: %q", waiting)
 	}
@@ -208,13 +210,189 @@ func TestTheTableOffersTheNextPage(t *testing.T) {
 // Without more to fetch there is no extra row.
 func TestACompleteListingOffersNothing(t *testing.T) {
 	tracks := tableTracks()
-	table := trackTable{tracks: tracks, width: 40, height: len(tracks) + 1}
+	table := trackTable{tracks: tracks, width: 40, height: len(tracks) + 1 + headerRows}
 	if table.rowCount() != len(tracks) {
 		t.Fatalf("row count = %d", table.rowCount())
 	}
 	for _, row := range table.rows() {
 		if strings.Contains(plain(row), "load more") {
 			t.Errorf("a complete listing offers more: %q", plain(row))
+		}
+	}
+}
+
+// The header names the columns and marks the one in use.
+func TestTheHeaderNamesTheColumns(t *testing.T) {
+	table := trackTable{tracks: tableTracks(), width: 70, height: 6, showRating: true}
+	header := plain(table.rows()[0])
+
+	for _, want := range []string{"Title", "Artist", "Length"} {
+		if !strings.Contains(header, want) {
+			t.Errorf("header is missing %q: %q", want, header)
+		}
+	}
+	if strings.Contains(header, "Added") {
+		t.Errorf("an undated list has an Added column: %q", header)
+	}
+	if lipgloss.Width(header) != 70 {
+		t.Errorf("header is %d cells, want 70", lipgloss.Width(header))
+	}
+	if strings.ContainsAny(header, "↑↓") {
+		t.Errorf("an unsorted table marks a column: %q", header)
+	}
+
+	table.sort = sortSpec{by: sortArtist}
+	if got := plain(table.rows()[0]); !strings.Contains(got, "Artist↑") {
+		t.Errorf("the sorted column is not marked: %q", got)
+	}
+	table.sort = sortSpec{by: sortArtist, desc: true}
+	if got := plain(table.rows()[0]); !strings.Contains(got, "Artist↓") {
+		t.Errorf("the direction is not shown: %q", got)
+	}
+}
+
+// A dated listing gets the extra column; an undated one does not, because a
+// column of blanks is worse than no column.
+func TestTheAddedColumnAppearsOnlyWhenThereAreDates(t *testing.T) {
+	tracks := tableTracks()
+	plainTable := trackTable{tracks: tracks, width: 80, height: 6}
+	if plainTable.showsAdded() {
+		t.Error("an undated list shows the column")
+	}
+
+	tracks[1].Added = time.Date(2024, 8, 2, 0, 0, 0, 0, time.UTC)
+	dated := trackTable{tracks: tracks, width: 80, height: 6,
+		now: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}
+	if !dated.showsAdded() {
+		t.Fatal("a dated list does not show the column")
+	}
+	header := plain(dated.rows()[0])
+	if !strings.Contains(header, "Added") {
+		t.Errorf("header is missing the column: %q", header)
+	}
+	if got := plain(dated.rows()[1+1]); !strings.Contains(got, "2 Aug 2024") {
+		t.Errorf("the date is not on its row: %q", got)
+	}
+	// Every row is still exactly the width.
+	for i, row := range dated.rows() {
+		if w := lipgloss.Width(plain(row)); w != 80 {
+			t.Errorf("row %d is %d cells", i, w)
+		}
+	}
+}
+
+func TestHumanDate(t *testing.T) {
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		in   time.Time
+		want string
+	}{
+		{time.Time{}, ""},
+		{now, "today"},
+		{now.Add(-25 * time.Hour), "yesterday"},
+		{now.Add(-3 * 24 * time.Hour), "3 days ago"},
+		{now.Add(-9 * 24 * time.Hour), "last week"},
+		{now.Add(-21 * 24 * time.Hour), "3 weeks ago"},
+		{now.Add(-200 * 24 * time.Hour), "8 Mar 2026"},
+		{time.Date(2024, 8, 2, 0, 0, 0, 0, time.UTC), "2 Aug 2024"},
+	} {
+		if got := humanDate(tc.in, now); got != tc.want {
+			t.Errorf("humanDate(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestSortTracks(t *testing.T) {
+	jan := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	feb := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+	tracks := []Track{
+		{Title: "beta", Artist: "Zappa", Duration: 3 * time.Minute, Added: feb},
+		{Title: "Alpha", Artist: "abba", Duration: time.Minute, Added: jan},
+		{Title: "Gamma", Artist: "Móna", Duration: 2 * time.Minute},
+	}
+	titles := func(ts []Track) []string {
+		out := make([]string, len(ts))
+		for i, t := range ts {
+			out[i] = t.Title
+		}
+		return out
+	}
+
+	for _, tc := range []struct {
+		name string
+		spec sortSpec
+		want []string
+	}{
+		{"unsorted", sortSpec{}, []string{"beta", "Alpha", "Gamma"}},
+		{"title", sortSpec{by: sortTitle}, []string{"Alpha", "beta", "Gamma"}},
+		{"title reversed", sortSpec{by: sortTitle, desc: true}, []string{"Gamma", "beta", "Alpha"}},
+		{"artist ignores case", sortSpec{by: sortArtist}, []string{"Alpha", "Gamma", "beta"}},
+		{"length", sortSpec{by: sortLength}, []string{"Alpha", "Gamma", "beta"}},
+		{"added, undated first", sortSpec{by: sortAdded}, []string{"Gamma", "Alpha", "beta"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := append([]Track(nil), tracks...)
+			sortTracks(got, tc.spec)
+			if strings.Join(titles(got), ",") != strings.Join(tc.want, ",") {
+				t.Errorf("got %v, want %v", titles(got), tc.want)
+			}
+		})
+	}
+}
+
+// Cycling stops at the last column there is, and comes back to unsorted so
+// a list can be put back the way it arrived.
+func TestSortCycles(t *testing.T) {
+	var spec sortSpec
+	for _, want := range []sortColumn{sortTitle, sortArtist, sortLength, sortNone} {
+		spec = spec.next(false)
+		if spec.by != want {
+			t.Fatalf("cycled to %v, want %v", spec.by, want)
+		}
+	}
+	// With dates there is one more stop.
+	spec = sortSpec{by: sortLength}
+	if spec = spec.next(true); spec.by != sortAdded {
+		t.Errorf("a dated list skips Added: %v", spec.by)
+	}
+}
+
+// Clicking a column orders by it, and clicking it again reverses.
+func TestSortOnAColumn(t *testing.T) {
+	spec := sortSpec{}.on(sortArtist)
+	if spec.by != sortArtist || spec.desc {
+		t.Fatalf("first click gave %+v", spec)
+	}
+	if spec = spec.on(sortArtist); !spec.desc {
+		t.Errorf("the second click did not reverse: %+v", spec)
+	}
+	if spec = spec.on(sortTitle); spec.by != sortTitle || spec.desc {
+		t.Errorf("moving to another column kept the direction: %+v", spec)
+	}
+}
+
+// A column's label has to fit with its arrow, or the header says which
+// column is sorted but not which way.
+func TestEveryHeaderLabelFitsWithItsArrow(t *testing.T) {
+	tracks := tableTracks()
+	tracks[0].Added = time.Now()
+	for _, by := range []sortColumn{sortTitle, sortArtist, sortLength, sortAdded} {
+		for _, desc := range []bool{false, true} {
+			table := trackTable{
+				tracks: tracks, width: 80, height: 6,
+				sort: sortSpec{by: by, desc: desc}, now: time.Now(),
+			}
+			header := plain(table.rows()[0])
+			if strings.Contains(header, "…") {
+				t.Errorf("sorting by %v cut a label short: %q", by, header)
+			}
+			arrow := "↑"
+			if desc {
+				arrow = "↓"
+			}
+			if !strings.Contains(header, arrow) {
+				t.Errorf("sorting by %v lost its arrow: %q", by, header)
+			}
 		}
 	}
 }
