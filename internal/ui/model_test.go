@@ -282,10 +282,10 @@ func TestTheStatusBarSaysWhatIsPlaying(t *testing.T) {
 
 	bar := strings.Split(m.View().Content, "\n")[m.statusRow()]
 	bare := plain(bar)
-	if !strings.Contains(bare, "READY") {
+	if !strings.Contains(bare, "PLAYING") {
 		t.Errorf("no state block: %q", bare)
 	}
-	if column(bare, "READY") > column(bare, "Poly") {
+	if column(bare, "PLAYING") > column(bare, "Poly") {
 		t.Errorf("the state block is not first: %q", bare)
 	}
 	if column(bare, "Poly") > column(bare, "Cherry") {
@@ -347,17 +347,68 @@ func TestTheStatusBarShowsErrors(t *testing.T) {
 	}
 }
 
-// Paused is said by the bar going grey and the control becoming a play
-// triangle; a word as well would be a third.
-func TestNothingSaysPaused(t *testing.T) {
+// The state block says what the player is doing, in the order that
+// matters: trouble before a wait, a wait before the player, and ready only
+// when there is nothing else to say.
+func TestTheStateBlockSaysWhatThePlayerIsDoing(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(m *Model)
+		want  string
+	}{
+		{"nothing at all", func(m *Model) {}, "READY"},
+		{"playing", func(m *Model) {
+			m.playing = Track{VideoID: "a", Title: "Poly"}
+		}, "PLAYING"},
+		{"paused", func(m *Model) {
+			m.playing = Track{VideoID: "a", Title: "Poly"}
+			m.Paused = true
+		}, "PAUSED"},
+		{"loading beats the player", func(m *Model) {
+			m.playing = Track{VideoID: "a", Title: "Poly"}
+			m.loading = true
+		}, "LOADING"},
+		{"trouble beats everything", func(m *Model) {
+			m.playing = Track{VideoID: "a", Title: "Poly"}
+			m.loading = true
+			m.Err = errors.New("no")
+		}, "ERROR"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sample()
+			tc.setup(&m)
+			if got := m.statusKey(); got != tc.want {
+				t.Errorf("state = %q, want %q", got, tc.want)
+			}
+			bar := plain(strings.Split(m.View().Content, "\n")[m.statusRow()])
+			if !strings.Contains(bar, tc.want) {
+				t.Errorf("the bar reads %q", bar)
+			}
+		})
+	}
+}
+
+// Paused is said once, in the block. The bar going grey and the control
+// becoming a play triangle say it again without words.
+func TestPausedIsSaidOnce(t *testing.T) {
 	m := sample()
 	m.playing = Track{VideoID: "a", Title: "Poly"}
+	m.Length, m.Position = time.Minute, 30*time.Second
 	m.Paused = true
-	if out := plain(m.View().Content); strings.Contains(strings.ToLower(out), "paused") {
-		t.Errorf("the frame says paused:\n%s", out)
+
+	lines := strings.Split(m.View().Content, "\n")
+	if got := plain(lines[m.statusRow()]); !strings.Contains(got, "PAUSED") {
+		t.Errorf("the block does not say it: %q", got)
+	}
+	// Not a second time beside the track.
+	if got := plain(lines[m.statusRow()]); strings.Count(strings.ToLower(got), "paused") != 1 {
+		t.Errorf("said more than once: %q", got)
 	}
 	if m.playPauseIcon() != iconPlay {
 		t.Error("the control is not a play triangle")
+	}
+	if anyCode(lines[m.barRow()], []string{"34", "44", "94", "104"}) {
+		t.Error("the bar is still lit")
 	}
 }
 

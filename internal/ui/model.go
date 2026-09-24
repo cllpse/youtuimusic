@@ -1233,18 +1233,33 @@ type statusSegment struct {
 
 // renderStatusBar draws the row under the player.
 func (m Model) renderStatusBar() string {
-	key, style := "READY", statusKeyStyle
-	switch {
-	case m.Err != nil:
-		key, style = "ERROR", statusAlertStyle
-	case m.loading || m.loadingMore:
-		key = "LOADING"
+	key, style := m.statusKey(), statusKeyStyle
+	if m.Err != nil {
+		style = statusAlertStyle
 	}
 
 	// On a narrow terminal the blocks give way rather than pushing the
 	// frame wider than the screen.
 	block := style.Render(truncate(key, max(m.width-2, 0)))
 	return block + fillRow(m.statusSegments(), max(m.width-lipgloss.Width(block), 0))
+}
+
+// statusKey is the word in the small block: what the app is doing, in the
+// order that matters. Trouble first, then a wait, then the player — and
+// ready only when there is nothing else to say.
+func (m Model) statusKey() string {
+	switch {
+	case m.Err != nil:
+		return "ERROR"
+	case m.loading || m.loadingMore:
+		return "LOADING"
+	case m.playing.VideoID != "" && m.Paused:
+		return "PAUSED"
+	case m.playing.VideoID != "":
+		return "PLAYING"
+	default:
+		return "READY"
+	}
 }
 
 // statusSegments is what the wide block holds: the trouble, or the track.
@@ -1361,18 +1376,15 @@ func rampAt(_, position float64) color.Color {
 // because the characters differ — a solid block against a light shade.
 func mutedRamp(_, _ float64) color.Color { return muted }
 
-// emptyCell is what the bar has not reached yet: the medium shade, which
-// fonts draw as a checkerboard dither — solid and hole in equal measure,
-// which is what perforated looks like.
+// emptyCell is what the bar has not reached yet: a solid block in the
+// muted colour, so the track reads as a filled groove rather than as
+// texture. The played part is told apart by its colour, not by its weight.
 //
-// The glyph that would be exactly right is U+1FB95 CHECKER BOARD FILL, and
-// the crosshatched squares U+25A6..U+25A9 would do as well. None of them
-// are in the Nerd Fonts installed here, checked with fontconfig, so they
-// would be drawn from a fallback font at whatever width it happens to use
-// and the bar would stop lining up. Only the shade blocks are safe.
-//
-// Lighter and heavier, both present: '░' and '▓'.
-const emptyCell = '▒'
+// A perforated glyph would have been closer to the idea, but the ones that
+// exist — U+1FB95 CHECKER BOARD FILL, the crosshatched squares at
+// U+25A6..U+25A9 — are in none of the fonts here, and a fallback font draws
+// at whatever width it likes. Only the shade and block characters are safe.
+const emptyCell = '█'
 
 func newBar(fill progress.ColorFunc) progress.Model {
 	bar := progress.New(
