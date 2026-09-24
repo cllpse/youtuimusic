@@ -776,7 +776,7 @@ var (
 
 const (
 	tabsHeight   = 3 // border, label, border
-	progressRows = 5 // blank, title, bar, controls, blank
+	progressRows = 7 // border, title, blank, bar, blank, controls, border
 	maxTabTitle  = 18
 	tabFurniture = 4 // a border and a space either side
 )
@@ -789,11 +789,12 @@ func (m Model) bodyHeight() int {
 	return 1
 }
 
-// barRow is the line the progress bar is drawn on.
-func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 2 }
+// barRow is the line the progress bar is drawn on: past the list, the box's
+// own border, the title and the blank line under it.
+func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 3 }
 
-// controlsRow is the line of buttons under the bar.
-func (m Model) controlsRow() int { return m.barRow() + 1 }
+// controlsRow is the line of buttons, a blank line below the bar.
+func (m Model) controlsRow() int { return m.barRow() + 2 }
 
 // barGeometry is the column the progress bar starts at and how wide it is.
 // Rendering and hit-testing both go through this, so a click lands where the
@@ -1086,9 +1087,14 @@ const (
 func (m Model) contentWidth() int { return max(0, m.width-2*contentLeft) }
 
 func (m Model) renderPlayer() string {
+	// The bar is given air either side rather than being wedged between the
+	// title and the buttons.
+	blank := strings.Repeat(" ", m.contentWidth())
 	inner := lipgloss.JoinVertical(lipgloss.Left,
 		pad(m.statusLine(), m.contentWidth()),
+		blank,
 		m.renderBar(),
+		blank,
 		m.renderControls(),
 	)
 	return playerBox.Render(inner)

@@ -53,7 +53,7 @@ func TestControlsSitLeftCentreAndRight(t *testing.T) {
 		if !ok {
 			t.Fatalf("control %v is missing", c)
 		}
-		if want := contentLeft + i*buttonWidth; b.start != want {
+		if want := contentLeft + i*(buttonWidth+buttonGap); b.start != want {
 			t.Errorf("control %v starts at %d, want %d", c, b.start, want)
 		}
 	}
@@ -61,8 +61,10 @@ func TestControlsSitLeftCentreAndRight(t *testing.T) {
 	// Thumbs centred on the row.
 	up, _ := buttonAt(m, controlThumbUp)
 	down, _ := buttonAt(m, controlThumbDown)
+	// Within a cell: a group an odd number of columns wide cannot straddle
+	// the middle exactly.
 	span := down.end - up.start
-	if middle, want := up.start+span/2, contentLeft+m.contentWidth()/2; middle != want {
+	if middle, want := up.start+span/2, contentLeft+m.contentWidth()/2; middle < want-1 || middle > want+1 {
 		t.Errorf("the thumbs are centred on %d, want %d", middle, want)
 	}
 
@@ -466,4 +468,47 @@ func fromUI(ts []Track) []ytm.Track {
 		out = append(out, ytm.Track{VideoID: t.VideoID, Title: t.Title, Artist: t.Artist})
 	}
 	return out
+}
+
+// The bracket is part of the button: pressing it has to do the same thing
+// as pressing the icon, or the target is smaller than it looks.
+func TestTheWholeBracketIsClickable(t *testing.T) {
+	for _, offset := range []int{0, 1, 2, 3, 4} {
+		m, _, st, _ := playingModel(t)
+		b, ok := buttonAt(m, controlNext)
+		if !ok {
+			t.Fatal("no next button")
+		}
+		next, cmd := m.Update(click(b.start+offset, m.controlsRow()))
+		drain(t, next.(Model), cmd)
+		if len(st.resolved) != 1 {
+			t.Errorf("column %d of the button did nothing", b.start+offset)
+		}
+	}
+}
+
+// And it is drawn as a bracket, with the brackets themselves left quiet.
+func TestButtonsAreDrawnBracketed(t *testing.T) {
+	m, _, _, _ := playingModel(t)
+	row := plain(controlsLine(m))
+
+	if !strings.Contains(row, "[ "+iconPrevious+" ]") {
+		t.Errorf("the transport is not bracketed: %q", row)
+	}
+	// Neighbours do not run into one another.
+	if strings.Contains(row, "][") {
+		t.Errorf("buttons are touching: %q", row)
+	}
+	// The icon lights up but its brackets do not.
+	styled := controlsLine(m)
+	i := strings.Index(styled, iconPause)
+	if i < 0 {
+		t.Fatalf("no play/pause icon on %q", row)
+	}
+	if !sgrCodes(styled[:i])["90"] {
+		t.Error("the brackets are not muted")
+	}
+	if !sgrCodes(styled)["34"] {
+		t.Error("nothing on the row is lit")
+	}
 }

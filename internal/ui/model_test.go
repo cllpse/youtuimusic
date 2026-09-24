@@ -246,8 +246,8 @@ func TestLoadingShowsTheSpinnerInTheList(t *testing.T) {
 		t.Errorf("no spinner frame, want one of %q", m.spin.Spinner.Frames)
 	}
 	// And not in the status line, which says what is playing.
-	if strings.Contains(lines[m.barRow()-1], "Loading…") {
-		t.Errorf("the status line still says it: %q", lines[m.barRow()-1])
+	if strings.Contains(lines[m.barRow()-2], "Loading…") {
+		t.Errorf("the status line still says it: %q", lines[m.barRow()-2])
 	}
 }
 
@@ -285,7 +285,7 @@ func TestTheStatusLineIsTitleThenAlbum(t *testing.T) {
 		t.Errorf("the title is styled as well: %q", before)
 	}
 	// It is on the frame too, where it belongs.
-	if !strings.Contains(plain(strings.Split(m.View().Content, "\n")[m.barRow()-1]), "Poly") {
+	if !strings.Contains(plain(strings.Split(m.View().Content, "\n")[m.barRow()-2]), "Poly") {
 		t.Error("the status line is not above the bar")
 	}
 }
@@ -358,15 +358,16 @@ func TestThePlayerIsBoxed(t *testing.T) {
 		t.Fatalf("view is %d lines, want 20", len(lines))
 	}
 
-	top, bottom := lines[m.barRow()-2], lines[m.barRow()+2]
+	top, bottom := lines[m.barRow()-3], lines[m.barRow()+3]
 	if !strings.HasPrefix(plain(top), "╭") || !strings.HasSuffix(plain(top), "╮") {
 		t.Errorf("no top border: %q", plain(top))
 	}
 	if !strings.HasPrefix(plain(bottom), "╰") || !strings.HasSuffix(plain(bottom), "╯") {
 		t.Errorf("no bottom border: %q", plain(bottom))
 	}
-	// The three rows inside it are bounded by the sides.
-	for _, row := range []int{m.barRow() - 1, m.barRow(), m.barRow() + 1} {
+	// Every row inside it is bounded by the sides, blank lines included.
+	for _, row := range []int{m.barRow() - 2, m.barRow() - 1, m.barRow(),
+		m.barRow() + 1, m.barRow() + 2} {
 		line := plain(lines[row])
 		if !strings.HasPrefix(line, "│") || !strings.HasSuffix(line, "│") {
 			t.Errorf("row %d is not inside the box: %q", row, line)

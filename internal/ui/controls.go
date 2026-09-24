@@ -68,9 +68,21 @@ type button struct {
 	start, end int // half-open columns
 }
 
-// buttonWidth gives every button a space either side, so a click does not
-// have to land on the glyph itself.
-const buttonWidth = 3
+// A button is drawn as a bracketed cell, [ icon ], so it reads as something
+// to press. All five columns answer to a click, and a gap keeps neighbours
+// from running into one another.
+const (
+	buttonWidth = 5
+	buttonGap   = 1
+)
+
+// groupWidth is what a run of buttons occupies, gaps between them included.
+func groupWidth(n int) int {
+	if n == 0 {
+		return 0
+	}
+	return n*buttonWidth + (n-1)*buttonGap
+}
 
 // controlButtons lays the row out: transport against the left edge, the
 // thumbs centred on the row, repeat against the right. Rendering and
@@ -78,7 +90,7 @@ const buttonWidth = 3
 // should.
 func (m Model) controlButtons() []button {
 	width := m.contentWidth()
-	if width < 3*buttonWidth {
+	if width < groupWidth(3) {
 		return nil
 	}
 	// Columns are counted across the whole row, so a span can be compared
@@ -109,15 +121,15 @@ func (m Model) controlButtons() []button {
 	at := lay(leftGroup, contentLeft)
 
 	// Centred on the row, but never on top of the transport.
-	centreStart := max(contentLeft+(width-len(centre)*buttonWidth)/2, at)
-	if centreStart+len(centre)*buttonWidth > right {
+	centreStart := max(contentLeft+(width-groupWidth(len(centre)))/2, at+buttonGap)
+	if centreStart+groupWidth(len(centre)) > right {
 		centre = nil
 	} else {
 		at = lay(centre, centreStart)
 	}
 
-	repeatStart := right - len(repeatGroup)*buttonWidth
-	if repeatStart < at {
+	repeatStart := right - groupWidth(len(repeatGroup))
+	if repeatStart < at+buttonGap {
 		repeatGroup = nil
 	} else {
 		lay(repeatGroup, repeatStart)
@@ -126,13 +138,15 @@ func (m Model) controlButtons() []button {
 	return append(append(leftGroup, centre...), repeatGroup...)
 }
 
-// lay assigns columns to a group and returns where it ends.
+// lay assigns columns to a group and returns where the last button ends.
 func lay(group []button, at int) int {
+	end := at
 	for i := range group {
 		group[i].start, group[i].end = at, at+buttonWidth
-		at += buttonWidth
+		end = group[i].end
+		at += buttonWidth + buttonGap
 	}
-	return at
+	return end
 }
 
 func (m Model) playPauseIcon() string {
@@ -156,11 +170,13 @@ func (m Model) renderControls() string {
 		if btn.start > at {
 			b.WriteString(strings.Repeat(" ", btn.start-at))
 		}
+		// The brackets stay quiet whatever the button is doing; only the
+		// icon lights up.
 		style := dim
 		if btn.lit {
 			style = active
 		}
-		b.WriteString(style.Render(" " + btn.icon + " "))
+		b.WriteString(dim.Render("[ ") + style.Render(btn.icon) + dim.Render(" ]"))
 		at = btn.end
 	}
 	if end := contentLeft + width; at < end {
