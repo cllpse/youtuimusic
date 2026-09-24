@@ -738,6 +738,8 @@ var (
 	// alert is the one thing that is not the accent. An error announcing
 	// itself by colour is the point of colouring it.
 	alert = lipgloss.Red
+	// contrast is what goes on top of the accent when the accent is a fill.
+	contrast = lipgloss.BrightWhite
 )
 
 var (

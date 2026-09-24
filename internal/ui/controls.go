@@ -69,20 +69,22 @@ type button struct {
 	start, end int // half-open columns
 }
 
-// A button is a filled block with the icon in the middle of it — a cell of
-// background either side — so it reads as something to press without
-// drawing anything that has to be read. All three columns answer to a
-// click, and the gap is two so a row of them does not merge into one slab.
+// A button is three cells — the icon with one either side — all of which
+// answer to a click. The gap is two so a row of them does not run together.
 const (
 	buttonWidth = 3
 	buttonGap   = 2
 )
 
 var (
-	buttonStyle = lipgloss.NewStyle().Background(muted)
-	// A button with something to act on, or something switched on, lights
-	// its icon. The fill stays the same: it is the button, not the state.
-	buttonLitStyle = lipgloss.NewStyle().Background(muted).Foreground(accent).Bold(true)
+	// Idle, a button is only its icon, dimmed: there is nothing to press.
+	buttonStyle = lipgloss.NewStyle().Foreground(muted)
+	// Live, it fills with the accent, which is what makes it look pressable
+	// rather than printed.
+	buttonLitStyle = lipgloss.NewStyle().
+			Background(accent).
+			Foreground(contrast).
+			Bold(true)
 )
 
 // groupWidth is what a run of buttons occupies, gaps between them included.

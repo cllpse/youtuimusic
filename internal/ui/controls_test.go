@@ -487,41 +487,56 @@ func TestTheWholeButtonIsClickable(t *testing.T) {
 	}
 }
 
-// It is drawn as a filled block, not as characters that have to be read.
-func TestButtonsAreDrawnAsFilledBlocks(t *testing.T) {
+// A live button fills with the accent; an idle one is only its icon,
+// dimmed. Neither draws anything that has to be read as punctuation.
+func TestButtonsFillWhenLive(t *testing.T) {
 	m, _, _, _ := playingModel(t)
 	row := plain(controlsLine(m))
 
 	if strings.ContainsAny(row, "[]") {
-		t.Errorf("brackets are still drawn: %q", row)
+		t.Errorf("brackets are drawn: %q", row)
 	}
-	// A cell of fill either side of the icon.
 	if !strings.Contains(row, " "+iconPrevious+" ") {
 		t.Errorf("the icon is not padded: %q", row)
 	}
-	// Neighbours do not merge into one block.
 	if strings.Contains(row, iconPrevious+"  "+iconPause) {
 		t.Errorf("buttons are touching: %q", row)
 	}
 
-	styled := controlsLine(m)
-	codes := sgrCodes(styled)
-	if !codes["100"] {
-		t.Errorf("nothing on the row is filled: %v", codes)
+	codes := sgrCodes(controlsLine(m))
+	if !codes["44"] {
+		t.Errorf("no live button is filled with the accent: %v", codes)
 	}
-	if !codes["34"] {
-		t.Errorf("nothing on the row is lit: %v", codes)
+	if !codes["97"] {
+		t.Errorf("a filled button has no light text on it: %v", codes)
+	}
+	// The repeat button is off, so it is dim rather than filled.
+	if !codes["90"] {
+		t.Errorf("nothing on the row is dimmed: %v", codes)
 	}
 }
 
-// Idle, the buttons are still buttons — filled, just not lit.
-func TestIdleButtonsAreStillFilled(t *testing.T) {
+// With nothing playing there is nothing to press, and the row says so.
+func TestIdleButtonsAreOnlyDimIcons(t *testing.T) {
 	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
 	codes := sgrCodes(controlsLine(m))
-	if !codes["100"] {
-		t.Errorf("the idle row is not filled: %v", codes)
+	if !codes["90"] {
+		t.Errorf("the idle row is not dimmed: %v", codes)
 	}
-	if codes["34"] {
-		t.Errorf("the idle row is lit: %v", codes)
+	if codes["44"] || codes["100"] {
+		t.Errorf("an idle button is filled: %v", codes)
+	}
+}
+
+// Switching repeat on fills its button without touching the others.
+func TestTurningSomethingOnFillsItsButton(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	if sgrCodes(controlsLine(m))["44"] {
+		t.Fatal("something is already filled")
+	}
+	next, _ := m.Update(keyPress("r"))
+	m = next.(Model)
+	if !sgrCodes(controlsLine(m))["44"] {
+		t.Errorf("repeat on did not fill its button: %v", sgrCodes(controlsLine(m)))
 	}
 }

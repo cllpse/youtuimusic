@@ -470,3 +470,51 @@ func TestThePopoverStaysInsideTheList(t *testing.T) {
 		}
 	}
 }
+
+// The row says what pressing it does. Liked, that is to remove the like, so
+// it carries a cross rather than a filled thumb — which would read as a
+// statement about the track instead of as an action.
+func TestALikedTrackOffersToUnlikeWithACross(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+	m.Tracks[0].Rating = RatingUp
+
+	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
+	m = drain(t, next.(Model), cmd)
+
+	rows := m.menuRows()
+	if rows[0].label != "Unlike track" {
+		t.Errorf("label = %q", rows[0].label)
+	}
+	if rows[0].icon != iconRemove {
+		t.Errorf("icon = %q, want the cross", rows[0].icon)
+	}
+	rendered := m.renderMenu()
+	if strings.Contains(rendered, iconThumbUp) {
+		t.Error("the filled thumb is still drawn")
+	}
+	if !strings.Contains(rendered, iconRemove) {
+		t.Error("the cross is not drawn")
+	}
+}
+
+// One space reads as cramped against these glyphs, which sit tight in their
+// cell.
+func TestTheMenuSeparatesIconFromLabel(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
+	m = drain(t, next.(Model), cmd)
+
+	rendered := plain(m.renderMenu())
+	for _, row := range m.menuRows() {
+		if !strings.Contains(rendered, row.icon+menuGap+row.label) {
+			t.Errorf("%q is not separated from its icon:\n%s", row.label, rendered)
+		}
+	}
+	// And the box is wide enough for it, with the rule spanning the inside.
+	width, _ := m.menuSize()
+	for i, line := range strings.Split(rendered, "\n") {
+		if lipgloss.Width(line) != width {
+			t.Errorf("menu line %d is %d cells, want %d: %q", i, lipgloss.Width(line), width, line)
+		}
+	}
+}

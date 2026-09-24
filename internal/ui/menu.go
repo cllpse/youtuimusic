@@ -11,7 +11,12 @@ import (
 const (
 	iconAlbum  = "\U000f0025" // md-album
 	iconArtist = "\U000f0803" // md-account_music
+	iconRemove = "\U000f0156" // md-close
 )
+
+// menuGap is the space between a row's icon and its label. One reads as
+// cramped: these glyphs are drawn tight inside their cell.
+const menuGap = "  "
 
 // menuItem is a row of the track menu.
 type menuItem int
@@ -50,7 +55,10 @@ func (m Model) menuRows() []menuRow {
 	// it rather than offering to do it again.
 	like := menuRow{menuLike, iconThumbUpOff, "Like track", true}
 	if t.Rating == RatingUp {
-		like = menuRow{menuLike, iconThumbUp, "Unlike track", true}
+		// A cross, because the row undoes something rather than doing it
+		// again; a filled thumb there reads as "this is liked", which is
+		// not what pressing it would do.
+		like = menuRow{menuLike, iconRemove, "Unlike track", true}
 	}
 	return []menuRow{
 		like,
@@ -99,8 +107,8 @@ func (m Model) menuSize() (width, height int) {
 	for _, row := range m.menuRows() {
 		longest = max(longest, lipgloss.Width(row.label))
 	}
-	// icon, space, label, then padding and border either side.
-	return longest + 2 + 2 + 2, len(m.menuRows()) + 1 + 2
+	// icon, gap, label, then padding and border either side.
+	return longest + 1 + len(menuGap) + 2 + 2, len(m.menuRows()) + 1 + 2
 }
 
 // openMenu puts the menu on screen at a point, nudged so that all of it
@@ -120,7 +128,7 @@ func (m Model) renderMenu() string {
 
 	lines := make([]string, 0, len(rows)+1)
 	for i, row := range rows {
-		line := pad(row.icon+" "+row.label, inner)
+		line := pad(row.icon+menuGap+row.label, inner)
 		switch {
 		case !row.enabled:
 			line = dim.Render(line)
