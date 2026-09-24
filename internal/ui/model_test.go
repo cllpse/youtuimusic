@@ -883,3 +883,18 @@ func TestEveryLoaderIsTheSame(t *testing.T) {
 		}
 	}
 }
+
+// The bar's characters have to be in the font the terminal is using, or
+// they are drawn from a fallback at whatever width that font likes and the
+// row stops lining up. Shade blocks are the ones that are always there.
+func TestTheBarUsesOnlySafeGlyphs(t *testing.T) {
+	safe := map[rune]bool{'░': true, '▒': true, '▓': true, '█': true, '▌': true}
+	if !safe[emptyCell] {
+		t.Errorf("the unplayed cell is %q, which is not one of the shade or "+
+			"block characters every monospace font carries", string(emptyCell))
+	}
+	if lipgloss.Width(string(emptyCell)) != 1 {
+		t.Errorf("%q is %d cells wide; the bar is counted in single cells",
+			string(emptyCell), lipgloss.Width(string(emptyCell)))
+	}
+}

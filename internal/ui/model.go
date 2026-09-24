@@ -1361,10 +1361,18 @@ func rampAt(_, position float64) color.Color {
 // because the characters differ — a solid block against a light shade.
 func mutedRamp(_, _ float64) color.Color { return muted }
 
-// emptyCell is what the bar has not reached yet. A braille cell filled with
-// dots reads as another solid bar at a glance; a single small dot reads as
-// track. Alternatives, in order of weight: '⠿', '░', '⣿'.
-const emptyCell = '·'
+// emptyCell is what the bar has not reached yet: the medium shade, which
+// fonts draw as a checkerboard dither — solid and hole in equal measure,
+// which is what perforated looks like.
+//
+// The glyph that would be exactly right is U+1FB95 CHECKER BOARD FILL, and
+// the crosshatched squares U+25A6..U+25A9 would do as well. None of them
+// are in the Nerd Fonts installed here, checked with fontconfig, so they
+// would be drawn from a fallback font at whatever width it happens to use
+// and the bar would stop lining up. Only the shade blocks are safe.
+//
+// Lighter and heavier, both present: '░' and '▓'.
+const emptyCell = '▒'
 
 func newBar(fill progress.ColorFunc) progress.Model {
 	bar := progress.New(
