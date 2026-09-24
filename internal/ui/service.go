@@ -75,7 +75,6 @@ type (
 	}
 	playingMsg struct {
 		track  Track
-		title  string
 		length time.Duration
 	}
 	eventMsg player.Event
@@ -220,7 +219,7 @@ func (m Model) play(t Track) tea.Cmd {
 		if err := audio.SetPaused(false); err != nil {
 			return errMsg{fmt.Errorf("playing %s: %w", t.Title, err)}
 		}
-		return playingMsg{track: t, title: nowPlaying(t), length: s.Duration}
+		return playingMsg{track: t, length: s.Duration}
 	}
 }
 
@@ -284,11 +283,4 @@ func (m Model) watchEvents() tea.Cmd {
 		}
 		return eventMsg(ev)
 	}
-}
-
-func nowPlaying(t Track) string {
-	if t.Artist == "" {
-		return t.Title
-	}
-	return t.Artist + " — " + t.Title
 }

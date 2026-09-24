@@ -214,28 +214,93 @@ func TestIdleSaysReady(t *testing.T) {
 	if !strings.Contains(m.View().Content, "Ready") {
 		t.Error("idle status is not Ready")
 	}
-	m.NowPlaying = "DAPHNI — Poly"
-	out := m.View().Content
-	if strings.Contains(out, "Ready") || !strings.Contains(out, "DAPHNI — Poly") {
+	m.playing = Track{VideoID: "a", Title: "Poly", Artist: "DAPHNI", Album: "Cherry"}
+	out := plain(m.View().Content)
+	if strings.Contains(out, "Ready") {
 		t.Error("playing status should replace Ready")
+	}
+	if !strings.Contains(out, "Poly") || !strings.Contains(out, "Cherry") {
+		t.Errorf("the status line is missing the track or its album:\n%s", out)
 	}
 }
 
-func TestLoadingShowsTheSpinner(t *testing.T) {
+// The wait is shown where it is happening — in the list, under the tabs —
+// rather than down in the status line.
+func TestLoadingShowsTheSpinnerInTheList(t *testing.T) {
 	m := sample()
+	m.Tracks = nil
 	m.loading = true
-	out := plain(m.View().Content)
-	if !strings.Contains(out, "Loading…") {
-		t.Fatalf("no loading line:\n%s", out)
+
+	lines := strings.Split(plain(m.View().Content), "\n")
+	list := strings.Join(lines[tabsHeight:tabsHeight+m.bodyHeight()], "\n")
+	if !strings.Contains(list, "Loading…") {
+		t.Fatalf("nothing loading in the list:\n%s", list)
 	}
-	frames := 0
+	var frames int
 	for _, f := range m.spin.Spinner.Frames {
-		if strings.Contains(out, strings.TrimSpace(f)) {
+		if strings.Contains(list, strings.TrimSpace(f)) {
 			frames++
 		}
 	}
 	if frames == 0 {
-		t.Errorf("no spinner frame on screen, want one of %q", m.spin.Spinner.Frames)
+		t.Errorf("no spinner frame, want one of %q", m.spin.Spinner.Frames)
+	}
+	// And not in the status line, which says what is playing.
+	if strings.Contains(lines[m.barRow()-1], "Loading…") {
+		t.Errorf("the status line still says it: %q", lines[m.barRow()-1])
+	}
+}
+
+// Reloading a list that is already on screen must not blank it.
+func TestReloadingKeepsTheListVisible(t *testing.T) {
+	m := sample()
+	m.loading = true
+	out := plain(m.View().Content)
+	if !strings.Contains(out, "Alpha") {
+		t.Error("the list was replaced by the spinner")
+	}
+	if strings.Contains(out, "Loading…") {
+		t.Error("a reload should not cover what is already there")
+	}
+}
+
+// The status line leads with the track, then its album, muted.
+func TestTheStatusLineIsTitleThenAlbum(t *testing.T) {
+	m := sample()
+	m.playing = Track{VideoID: "a", Title: "Poly", Artist: "DAPHNI", Album: "Cherry"}
+
+	// The status line on its own, so the box's own border is not in the way.
+	status := m.statusLine()
+	bare := plain(status)
+	if column(bare, "Poly") > column(bare, "Cherry") {
+		t.Errorf("the album comes first: %q", bare)
+	}
+	if strings.Contains(bare, "DAPHNI") {
+		t.Errorf("the artist is on the line: %q", bare)
+	}
+	if !sgrCodes(status)["90"] {
+		t.Errorf("nothing on the line is muted: %v", sgrCodes(status))
+	}
+	if before := status[:strings.Index(status, "Poly")]; strings.Contains(before, "\x1b[") {
+		t.Errorf("the title is styled as well: %q", before)
+	}
+	// It is on the frame too, where it belongs.
+	if !strings.Contains(plain(strings.Split(m.View().Content, "\n")[m.barRow()-1]), "Poly") {
+		t.Error("the status line is not above the bar")
+	}
+}
+
+// Paused is said by the bar going grey and the control becoming a play
+// triangle; a word as well would be a third.
+func TestNothingSaysPaused(t *testing.T) {
+	m := sample()
+	m.playing = Track{VideoID: "a", Title: "Poly"}
+	m.Paused = true
+	if out := plain(m.View().Content); strings.Contains(strings.ToLower(out), "paused") {
+		t.Errorf("the frame says paused:\n%s", out)
+	}
+	if m.playPauseIcon() != iconPlay {
+		t.Error("the control is not a play triangle")
 	}
 }
 

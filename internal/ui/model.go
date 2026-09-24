@@ -96,11 +96,12 @@ type Model struct {
 	// the window has no way to reach its end.
 	trackOffset int
 
-	// Playback state, fed from player events.
-	NowPlaying string
-	Position   time.Duration
-	Length     time.Duration
-	Paused     bool
+	// Playback state, fed from player events. What is playing is held as a
+	// track rather than a rendered line, so the status can show its parts
+	// differently.
+	Position time.Duration
+	Length   time.Duration
+	Paused   bool
 
 	// Search
 	Searching bool
@@ -525,7 +526,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case playingMsg:
-		m.NowPlaying, m.Length = msg.title, msg.length
+		m.Length = msg.length
 		m.Position, m.Paused, m.Err = 0, false, nil
 		m.playing = msg.track
 		if next, ok := m.following(); ok && next.VideoID != m.playing.VideoID {
@@ -916,6 +917,12 @@ func (m Model) renderTabs() string {
 }
 
 func (m Model) renderTracks(width, height int) string {
+	// The wait belongs where it is happening, not down in the status line.
+	if m.loading && len(m.Tracks) == 0 {
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
+			m.spin.View()+" "+dim.Render("Loading…"))
+	}
+
 	bar := m.scrollbar(height)
 	if bar != nil {
 		width -= scrollbarWidth
@@ -1033,22 +1040,31 @@ func (m Model) showsRating() bool { return m.showingID != likedPlaylistID }
 // statusLine is the one line above the bar. Everything on it is cut to the
 // width: a long track title would otherwise push the frame wider than the
 // terminal and take every other row with it.
+//
+// Nothing here says "paused". The bar goes grey and the control becomes a
+// play triangle, which is two ways of saying it already.
 func (m Model) statusLine() string {
-	const pausedNote = "  paused"
 	switch {
 	case m.Searching:
 		return truncate("/"+m.Query+"█", m.contentWidth())
 	case m.Err != nil:
 		return failed.Render(truncate(m.Err.Error(), m.contentWidth()))
-	case m.loading:
-		return m.spin.View() + " " + dim.Render(truncate("Loading…", max(0, m.contentWidth()-2)))
-	case m.NowPlaying != "" && m.Paused:
-		return truncate(m.NowPlaying, max(0, m.contentWidth()-len(pausedNote))) + dim.Render(pausedNote)
-	case m.NowPlaying != "":
-		return truncate(m.NowPlaying, m.contentWidth())
+	case m.playing.VideoID != "":
+		return m.nowPlayingLine()
 	default:
 		return dim.Render(truncate("Ready", m.contentWidth()))
 	}
+}
+
+// nowPlayingLine is the track's title, with its album muted behind it.
+func (m Model) nowPlayingLine() string {
+	width := m.contentWidth()
+	title := truncate(m.playing.Title, width)
+	room := width - lipgloss.Width(title) - 2
+	if m.playing.Album == "" || room < 4 {
+		return title
+	}
+	return title + "  " + dim.Render(truncate(m.playing.Album, room))
 }
 
 // playerBox is the frame around the title, the bar and the controls. Its

@@ -227,9 +227,9 @@ func (m Model) skip(forward bool) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// start plays a track, naming it at once because resolving takes a moment.
+// start plays a track, showing it at once because resolving takes a moment.
 func (m Model) start(t Track) (tea.Model, tea.Cmd) {
-	m.NowPlaying, m.Position, m.Length = nowPlaying(t), 0, t.Duration
+	m.playing, m.Position, m.Length = t, 0, t.Duration
 	return m, m.play(t)
 }
 

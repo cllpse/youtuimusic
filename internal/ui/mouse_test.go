@@ -113,8 +113,8 @@ func TestSecondClickPlays(t *testing.T) {
 	if len(au.loaded) != 1 || au.loaded[0] != "https://stream/a" {
 		t.Fatalf("loaded = %v", au.loaded)
 	}
-	if m.NowPlaying != "A — Alpha" {
-		t.Errorf("now playing = %q", m.NowPlaying)
+	if m.playing.Title != "Alpha" {
+		t.Errorf("now playing = %q", m.playing.Title)
 	}
 }
 

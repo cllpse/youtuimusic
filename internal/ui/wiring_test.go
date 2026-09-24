@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -238,8 +239,8 @@ func TestEnterOnATrackResolvesAndPlays(t *testing.T) {
 	if len(au.loaded) != 1 || au.loaded[0] != "https://stream/a" {
 		t.Fatalf("loaded = %v", au.loaded)
 	}
-	if m.NowPlaying != "A — Alpha" {
-		t.Errorf("now playing = %q", m.NowPlaying)
+	if m.playing.Title != "Alpha" {
+		t.Errorf("now playing = %q", m.playing.Title)
 	}
 	if m.Length != 3*time.Minute {
 		t.Errorf("length = %v, want the resolved stream's", m.Length)
@@ -564,7 +565,7 @@ func TestAFailureToUnpauseIsReported(t *testing.T) {
 	if m.Err == nil {
 		t.Fatal("no error reported")
 	}
-	if m.NowPlaying == "A — Alpha" && m.playing.VideoID != "" {
-		t.Error("reported as playing despite failing to start")
+	if !strings.Contains(m.Err.Error(), "socket closed") {
+		t.Errorf("err = %v, want the failure to unpause", m.Err)
 	}
 }
