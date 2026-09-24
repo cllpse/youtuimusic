@@ -1257,7 +1257,7 @@ func (m Model) statusText() string {
 	}
 	// Bold carries the title against the album, since both sit on the same
 	// fill and a second colour on it would be hard to read.
-	return lipgloss.NewStyle().Bold(true).Render(m.playing.Title) + "  " + m.playing.Album
+	return lipgloss.NewStyle().Bold(true).Render(m.playing.Title) + ", " + m.playing.Album
 }
 
 // playerBox is the frame around the title, the bar and the controls. Its
@@ -1323,10 +1323,16 @@ func rampAt(_, position float64) color.Color {
 // because the characters differ — a solid block against a light shade.
 func mutedRamp(_, _ float64) color.Color { return muted }
 
+// emptyCell is what the bar has not reached yet: a cell of dots rather
+// than the component's hatching, which reads as texture beside the solid
+// half blocks instead of as a track waiting to be filled.
+const emptyCell = '⣿'
+
 func newBar(fill progress.ColorFunc) progress.Model {
 	bar := progress.New(
 		progress.WithoutPercentage(),
 		progress.WithColorFunc(fill),
+		progress.WithFillCharacters(progress.DefaultFullCharHalfBlock, emptyCell),
 	)
 	// The default is a fixed grey, which is off-scheme like the rest.
 	bar.EmptyColor = muted

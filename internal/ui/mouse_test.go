@@ -406,7 +406,7 @@ func TestHitTestingMatchesTheRenderedFrame(t *testing.T) {
 	// The bar row is the one with the bar drawn on it, and it is the whole
 	// row: nothing flanks it.
 	const barChars = string(progress.DefaultFullCharHalfBlock) +
-		string(progress.DefaultEmptyCharBlock)
+		string(emptyCell)
 	if !strings.ContainsAny(lines[m.barRow()], barChars) {
 		t.Fatalf("row %d is %q, which has no bar on it", m.barRow(), lines[m.barRow()])
 	}
@@ -508,7 +508,7 @@ func TestTheBarRowIsNothingButTheBar(t *testing.T) {
 		t.Errorf("the bar row reads %q, want only the bar", row)
 	}
 	full := strings.Count(row, string(progress.DefaultFullCharHalfBlock))
-	empty := strings.Count(row, string(progress.DefaultEmptyCharBlock))
+	empty := strings.Count(row, string(emptyCell))
 	if full+empty != m.contentWidth() {
 		t.Errorf("the bar is %d cells of %d", full+empty, m.contentWidth())
 	}

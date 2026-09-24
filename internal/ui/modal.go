@@ -88,13 +88,17 @@ func (m Model) openSearch() (tea.Model, tea.Cmd) {
 // search box being typed into.
 func (m Model) modalHeader(inner int) string {
 	if m.detour.tab.kind != tabSearch {
-		label := m.modalIcon() + menuGap + m.modalKind()
+		// The way back is a button, drawn the way the transport's buttons
+		// are, so that it reads as something to press rather than as a mark.
+		prefix, used := "", 0
 		if len(m.history) > 0 {
-			label = iconBack + menuGap + label
+			prefix = buttonLitStyle.Render(" "+iconBack+" ") + menuGap
+			used = buttonWidth + len(menuGap)
 		}
-		room := inner - lipgloss.Width(label) - len(menuGap)
-		return active.Render(label) + menuGap +
-			pad(truncate(m.detour.tab.Title, max(room, 0)), max(room, 0))
+		label := m.modalIcon() + menuGap + m.modalKind()
+		room := max(inner-used-lipgloss.Width(label)-len(menuGap), 0)
+		return prefix + active.Render(label) + menuGap +
+			pad(truncate(m.detour.tab.Title, room), room)
 	}
 	query := m.detour.query
 	if m.detour.typing {
@@ -177,6 +181,16 @@ func (m Model) renderModal() string {
 		spinner:     m.spin.View(),
 	}.rows()...)
 	return modalBox.Render(strings.Join(lines, "\n"))
+}
+
+// modalBackButton is where the way back sits, when there is one.
+func (m Model) modalBackButton() (x, y, width int, ok bool) {
+	if !m.detour.active || len(m.history) == 0 || m.detour.tab.kind == tabSearch {
+		return 0, 0, 0, false
+	}
+	mx, my, _, _ := m.modalBounds()
+	// Past the box's border and its padding, on the header line.
+	return mx + modalChrome/2, my + 1, buttonWidth, true
 }
 
 // modalContains reports whether a point is anywhere on the popover.
@@ -292,8 +306,17 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
 // popover when the click lands outside it.
 func (m Model) clickModal(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	if !m.modalContains(mouse.X, mouse.Y) {
-		// Clicking away dismisses the lot; esc is what steps back.
+		// The player is not "away". Working the transport while a popover
+		// is open should work the transport, not dismiss what you opened.
+		if mouse.Y >= tabsHeight+m.bodyHeight() {
+			return m.handleClick(mouse)
+		}
+		// Clicking anywhere else dismisses the lot; esc is what steps back.
 		return m.closeDetour()
+	}
+	if x, y, width, ok := m.modalBackButton(); ok &&
+		mouse.Y == y && mouse.X >= x && mouse.X < x+width {
+		return m.leaveDetour()
 	}
 	row, ok := m.modalHit(mouse.X, mouse.Y)
 	if !ok {

@@ -713,3 +713,99 @@ func TestSearchClearsWhatWasBehindIt(t *testing.T) {
 		t.Error("esc from a search should close, not step back")
 	}
 }
+
+// The way back is a button, and pressing it goes back.
+func TestTheBackButtonIsAButtonAndWorks(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
+
+	m = openVia(t, m, menuArtist)
+	if _, _, _, ok := m.modalBackButton(); ok {
+		t.Error("the first popover offers a way back")
+	}
+
+	next, cmd := m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+	x, y, width, ok := m.modalBackButton()
+	if !ok {
+		t.Fatal("no way back on the second popover")
+	}
+
+	// It is drawn filled, the way the transport's buttons are.
+	header := strings.Split(m.renderModal(), "\n")[1]
+	if !sgrCodes(header)["44"] {
+		t.Errorf("the back button is not filled: %v", sgrCodes(header))
+	}
+	if !strings.Contains(plain(header), iconBack) {
+		t.Errorf("no back icon: %q", plain(header))
+	}
+
+	// Every column of it goes back.
+	for offset := range width {
+		again := openVia(t, m, menuAlbum)
+		_ = again
+		next, cmd := m.Update(click(x+offset, y))
+		back := drain(t, next.(Model), cmd)
+		if !back.detour.active {
+			t.Fatalf("column %d closed the popover instead of going back", x+offset)
+		}
+		if back.detour.tab.Title != "DAPHNI" {
+			t.Errorf("column %d went to %q", x+offset, back.detour.tab.Title)
+		}
+	}
+}
+
+// Working the transport while a popover is open should work the transport,
+// not dismiss what was opened.
+func TestThePlayerDoesNotDismissAPopover(t *testing.T) {
+	m, lib, st, au := menuModel(t)
+	lib.tracks["MPREbCherry"] = []ytm.Track{{VideoID: "c1", Title: "Cherry Track"}}
+	m = openVia(t, m, menuAlbum)
+	m.playing = Track{VideoID: "a", Title: "Poly"}
+	m.Length = time.Minute
+
+	// A control.
+	b, ok := buttonAt(m, controlPlayPause)
+	if !ok {
+		t.Fatal("no play button")
+	}
+	next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+	m = drain(t, next.(Model), cmd)
+	if !m.detour.active {
+		t.Fatal("pressing a control closed the popover")
+	}
+	if au.toggles != 1 {
+		t.Errorf("the control did nothing: %d toggles", au.toggles)
+	}
+
+	// The progress bar.
+	start, width := m.barGeometry()
+	next, cmd = m.Update(click(start+width/2, m.barRow()))
+	m = drain(t, next.(Model), cmd)
+	if !m.detour.active {
+		t.Fatal("touching the bar closed the popover")
+	}
+	if !m.scrubbing {
+		t.Error("the bar did not take the press")
+	}
+	next, cmd = m.Update(release(start+width/2, m.barRow()))
+	m = drain(t, next.(Model), cmd)
+	if len(au.seeks) != 1 {
+		t.Errorf("seeks = %v", au.seeks)
+	}
+	if !m.detour.active {
+		t.Error("letting go closed the popover")
+	}
+	_ = st
+
+	// Clicking the list behind it still dismisses. The popover is inset, so
+	// "behind it" means beside it rather than any row of the list.
+	x, _, _, _ := m.modalBounds()
+	if x < 1 {
+		t.Fatal("the popover reaches the edge; nothing is beside it")
+	}
+	next, cmd = m.Update(click(x-1, trackRow(1)))
+	if drain(t, next.(Model), cmd).detour.active {
+		t.Error("clicking beside it did not dismiss")
+	}
+}

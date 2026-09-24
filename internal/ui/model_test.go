@@ -320,7 +320,7 @@ func TestThePlayerBoxHoldsOnlyTheBarAndButtons(t *testing.T) {
 		}
 	}
 	// The bar and the buttons are where they were.
-	if !strings.ContainsAny(plain(lines[m.barRow()]), "▌░") {
+	if !strings.ContainsAny(plain(lines[m.barRow()]), "▌"+string(emptyCell)) {
 		t.Errorf("no progress bar on row %d: %q", m.barRow(), plain(lines[m.barRow()]))
 	}
 	if !strings.Contains(lines[m.controlsRow()], iconPrevious) {
