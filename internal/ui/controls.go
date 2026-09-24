@@ -252,6 +252,15 @@ func (m Model) skip(forward bool) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// open does whatever a row is for: a release has nothing to play, so it
+// opens instead.
+func (m Model) open(t Track) (tea.Model, tea.Cmd) {
+	if t.isRelease() {
+		return m.goTo(Playlist{ID: t.AlbumID, Title: t.Title, kind: tabAlbum})
+	}
+	return m.start(t)
+}
+
 // start plays a track, showing it at once because resolving takes a moment.
 func (m Model) start(t Track) (tea.Model, tea.Cmd) {
 	m.playing, m.Position, m.Length = t, 0, t.Duration

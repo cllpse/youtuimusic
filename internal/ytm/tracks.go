@@ -70,15 +70,72 @@ func (c *Client) PlaylistTracks(ctx context.Context, playlistID string) ([]Track
 const songsFilter = "EgWKAQIIAWoMEA4QChADEAQQCRAF"
 
 // Search returns songs matching a query.
+//
+// The server answers twenty at a time and hands back a token for the rest,
+// so this follows them: twenty is too few to find anything with.
 func (c *Client) Search(ctx context.Context, query string) ([]Track, error) {
-	raw, err := c.post(ctx, "search", map[string]any{
+	return c.pages(ctx, "search", map[string]any{
 		"query":  query,
 		"params": songsFilter,
 	})
-	if err != nil {
-		return nil, err
+}
+
+// maxPages caps how far a listing is followed. Continuations run until the
+// server runs out, which for a common word is a long way.
+const maxPages = 5
+
+// pages walks a listing, following continuations. A failure part way
+// through gives back what did arrive: some results beat none.
+func (c *Client) pages(ctx context.Context, endpoint string, body map[string]any) ([]Track, error) {
+	var all []Track
+	for range maxPages {
+		raw, err := c.post(ctx, endpoint, body)
+		if err != nil {
+			if len(all) > 0 {
+				return all, nil
+			}
+			return nil, err
+		}
+		tracks, err := parseTracks(raw)
+		if err != nil {
+			if len(all) > 0 {
+				return all, nil
+			}
+			return nil, err
+		}
+		all = append(all, tracks...)
+
+		token := continuationToken(raw)
+		if token == "" {
+			break
+		}
+		body = map[string]any{"continuation": token}
 	}
-	return parseTracks(raw)
+	return all, nil
+}
+
+// continuationToken finds the token for the next page. The newer shape came
+// in without the older one going away, so both are looked for.
+func continuationToken(raw json.RawMessage) string {
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		return ""
+	}
+	for _, node := range findAll(tree, "continuationCommand") {
+		if command, ok := node.(map[string]any); ok {
+			if token, _ := command["token"].(string); token != "" {
+				return token
+			}
+		}
+	}
+	for _, node := range findAll(tree, "nextContinuationData") {
+		if data, ok := node.(map[string]any); ok {
+			if token, _ := data["continuation"].(string); token != "" {
+				return token
+			}
+		}
+	}
+	return ""
 }
 
 // AlbumTracks returns the tracks on an album.
@@ -86,11 +143,65 @@ func (c *Client) AlbumTracks(ctx context.Context, browseID string) ([]Track, err
 	return c.browseTracks(ctx, browseID)
 }
 
-// ArtistTracks returns the songs on an artist's page. It is what the page
-// itself leads with rather than everything they have recorded — the server
-// decides how much of that to send.
-func (c *Client) ArtistTracks(ctx context.Context, browseID string) ([]Track, error) {
-	return c.browseTracks(ctx, browseID)
+// ArtistPage returns what an artist's page leads with: their songs, and
+// then their releases.
+//
+// A release comes back as a Track with no video id — there is nothing to
+// play — carrying the album's browse id instead, so that opening one is the
+// same operation as going to a track's album.
+func (c *Client) ArtistPage(ctx context.Context, browseID string) ([]Track, error) {
+	if browseID == "" {
+		return nil, fmt.Errorf("ytm: browse: no id")
+	}
+	raw, err := c.post(ctx, "browse", map[string]any{"browseId": browseID})
+	if err != nil {
+		return nil, err
+	}
+	songs, err := parseTracks(raw)
+	if err != nil {
+		return nil, err
+	}
+	return append(songs, parseReleases(raw)...), nil
+}
+
+// parseReleases pulls the album tiles off a page. They are a different
+// renderer from a track row — a tile rather than a line — which is why the
+// track parser walks straight past them.
+func parseReleases(raw json.RawMessage) []Track {
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		return nil
+	}
+	var out []Track
+	seen := make(map[string]bool)
+	for _, node := range findAll(tree, "musicTwoRowItemRenderer") {
+		item, ok := node.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, pageType := browseTile(item)
+		if id == "" || pageType != pageTypeAlbum || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, Track{
+			Title:   runsText(item["title"]),
+			Artist:  runsText(item["subtitle"]),
+			AlbumID: id,
+		})
+	}
+	return out
+}
+
+// browseTile reads where a tile leads and what kind of page that is.
+func browseTile(item map[string]any) (id, pageType string) {
+	nav, _ := item["navigationEndpoint"].(map[string]any)
+	endpoint, _ := nav["browseEndpoint"].(map[string]any)
+	if endpoint == nil {
+		return "", ""
+	}
+	id, _ = endpoint["browseId"].(string)
+	return id, pageTypeOf(endpoint)
 }
 
 // browseTracks reads whatever track rows a browse id's page carries. Albums
@@ -134,12 +245,14 @@ func parseTracks(raw json.RawMessage) ([]Track, error) {
 		}
 		t := Track{
 			Title:    flexColumn(item, 0),
-			Artist:   flexColumn(item, 1),
-			Album:    flexColumn(item, 2),
 			Duration: parseDuration(fixedColumn(item, 0)),
 			AlbumID:  browseTarget(item, pageTypeAlbum),
 			ArtistID: browseTarget(item, pageTypeArtist),
 			Rating:   ratingOf(item),
+		}
+		t.Artist, t.Album = artistAndAlbum(item)
+		if t.Duration == 0 {
+			t.Duration = durationIn(flexColumn(item, 1))
 		}
 		if pid, ok := item["playlistItemData"].(map[string]any); ok {
 			t.VideoID, _ = pid["videoId"].(string)
@@ -155,6 +268,93 @@ func parseTracks(raw json.RawMessage) ([]Track, error) {
 		out = append(out, t)
 	}
 	return out, nil
+}
+
+// artistAndAlbum reads a row's artist and album.
+//
+// A playlist puts each in its own column. A search result does not: it packs
+// the type, the artist, the album and the length into one column separated
+// by bullets, which read straight through as part of the artist's name. The
+// links say which part is which, so they are used first; the bullets are
+// only taken apart when a row links nowhere.
+func artistAndAlbum(item map[string]any) (artist, album string) {
+	artist = linkedText(item, pageTypeArtist)
+	album = linkedText(item, pageTypeAlbum)
+	if artist != "" && album != "" {
+		return artist, album
+	}
+
+	parts := bulletParts(flexColumn(item, 1))
+	if artist == "" && len(parts) > 0 {
+		artist = parts[0]
+	}
+	if album == "" && len(parts) > 1 {
+		album = parts[1]
+	}
+	if album == "" {
+		album = flexColumn(item, 2)
+	}
+	return artist, album
+}
+
+// linkedText finds the text of the run that leads to a given kind of page.
+func linkedText(item map[string]any, pageType string) string {
+	for _, node := range findAll(item, "runs") {
+		runs, ok := node.([]any)
+		if !ok {
+			continue
+		}
+		for _, r := range runs {
+			run, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
+			nav, _ := run["navigationEndpoint"].(map[string]any)
+			endpoint, _ := nav["browseEndpoint"].(map[string]any)
+			if endpoint == nil || pageTypeOf(endpoint) != pageType {
+				continue
+			}
+			if text, _ := run["text"].(string); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+// rowTypes are the words a search result leads with, which name the kind of
+// thing rather than the thing.
+var rowTypes = map[string]bool{
+	"song": true, "video": true, "album": true, "single": true,
+	"ep": true, "playlist": true, "artist": true,
+}
+
+// bulletParts splits a packed column and keeps only the parts that name
+// something — not the row's type, its length, or how many times it has been
+// played.
+func bulletParts(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, "•") {
+		part = strings.TrimSpace(part)
+		if part == "" || rowTypes[strings.ToLower(part)] || parseDuration(part) > 0 {
+			continue
+		}
+		if strings.HasSuffix(part, "views") || strings.HasSuffix(part, "plays") {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+// durationIn finds a length among a packed column's parts.
+func durationIn(s string) time.Duration {
+	for _, part := range strings.Split(s, "•") {
+		if d := parseDuration(strings.TrimSpace(part)); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 // flexColumn reads the nth variable-width column's text.

@@ -44,6 +44,11 @@ won by community size, not by language.
 cache hit is ~600 ns. Resolving the highlighted row before the user presses
 play is worth more than any speedup to resolving itself.
 
+**Follow a search's continuations, but not a playlist's.** The server answers
+twenty results at a time behind a token, which is too few to find anything
+with, so search follows them up to a cap. A playlist is different: the first
+page is already a hundred tracks and the rest is latency nobody asked for.
+
 **Fetch the first page of a playlist, not all of it.** Playlist reads are
 paged at ~100 tracks server-side: 100 tracks ≈ 0.8 s, 529 tracks ≈ 2.7 s. Show
 the first page and fill in the rest behind it.
@@ -62,7 +67,7 @@ the first page and fill in the rest behind it.
 | `r` | repeat: off, all, one |
 | `/` | search in a popover, `enter` to run it, `esc` to close |
 | `+` / `-` | thumbs up or down; the same key again clears it |
-| `q`, `ctrl+c` | quit |
+| `ctrl+c` | quit |
 
 With the track menu or the popover open, `j`/`k` and `enter` work it and
 `esc` closes it. The transport keys keep working either way: pausing should
@@ -76,7 +81,9 @@ sitting beside the transport means; `+` and `-` still act on the highlighted
 row.
 
 Right-clicking a track opens a menu: like or unlike it, go to its album, go
-to its artist. A track that links nowhere has those rows greyed.
+to its artist. A track that links nowhere has those rows greyed. An artist
+opens with their songs and then their releases; a release has nothing to
+play, so opening one shows the album.
 
 Albums, artists and search all open the same popover over the list, inset so
 that what it covers is still visible around it and stopping short of the

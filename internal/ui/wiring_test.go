@@ -49,7 +49,7 @@ func (f *fakeLibrary) AlbumTracks(_ context.Context, id string) ([]ytm.Track, er
 	return f.tracks[id], f.err
 }
 
-func (f *fakeLibrary) ArtistTracks(_ context.Context, id string) ([]ytm.Track, error) {
+func (f *fakeLibrary) ArtistPage(_ context.Context, id string) ([]ytm.Track, error) {
 	f.askedFor = append(f.askedFor, "artist:"+id)
 	return f.tracks[id], f.err
 }

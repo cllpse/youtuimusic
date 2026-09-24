@@ -146,3 +146,28 @@ func TestClampOffsetHoldsTheWindowInsideTheList(t *testing.T) {
 		}
 	}
 }
+
+// An artist's page lists albums beside songs. A release has nothing to play,
+// so it carries the album mark and no length.
+func TestAReleaseRowIsMarkedAndHasNoLength(t *testing.T) {
+	release := Track{Title: "Cherry", Artist: "DAPHNI", AlbumID: "MPREbCherry"}
+	if !release.isRelease() {
+		t.Fatal("not recognised as a release")
+	}
+	line := plain(trackLine(release, 60, true, false))
+	if !strings.HasPrefix(line, iconAlbum) {
+		t.Errorf("no album mark: %q", line)
+	}
+	if strings.Contains(line, "0:00") {
+		t.Errorf("a release shows a length: %q", line)
+	}
+
+	// A song in the same table still shows its own.
+	song := Track{VideoID: "v", Title: "Poly", Duration: time.Minute}
+	if song.isRelease() {
+		t.Fatal("a song with a video id is not a release")
+	}
+	if !strings.Contains(plain(trackLine(song, 60, true, false)), "1:00") {
+		t.Error("a song lost its length")
+	}
+}

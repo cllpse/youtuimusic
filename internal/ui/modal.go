@@ -218,7 +218,7 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
 
 	case "enter":
 		if t, ok := m.selectedDetourTrack(); ok {
-			next, cmd := m.start(t)
+			next, cmd := m.open(t)
 			return next, cmd, true
 		}
 	case "+", "=":
@@ -259,7 +259,7 @@ func (m Model) clickModal(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	m.moveDetour(0)
 	t := m.detour.tracks[row]
 	if again {
-		return m.start(t)
+		return m.open(t)
 	}
 	return m, m.prefetch(t.VideoID)
 }

@@ -106,8 +106,8 @@ func rowStyle(playing, selected bool) (lipgloss.Style, bool) {
 func trackLine(t Track, width int, showRating, highlighted bool) string {
 	const durCol, rateCol = 6, 2
 	prefix := "  "
-	if showRating {
-		prefix = t.Rating.glyph() + " "
+	if showRating || t.isRelease() {
+		prefix = t.glyph() + " "
 	}
 	rest := width - durCol - rateCol - 2
 	if rest < 4 {
@@ -118,7 +118,10 @@ func trackLine(t Track, width int, showRating, highlighted bool) string {
 	artistW := rest - titleW
 
 	artist := pad(truncate(t.Artist, artistW), artistW)
-	duration := pad(formatDuration(t.Duration), durCol)
+	duration := strings.Repeat(" ", durCol)
+	if !t.isRelease() {
+		duration = pad(formatDuration(t.Duration), durCol)
+	}
 	if !highlighted {
 		artist, duration = dim.Render(artist), dim.Render(duration)
 	}

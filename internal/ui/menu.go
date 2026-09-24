@@ -172,8 +172,10 @@ func (m Model) menuHit(x, y int) (int, bool) {
 func (m Model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 	rows := m.menuRows()
 	switch key {
-	case "esc", "q", "ctrl+c":
+	case "esc":
 		m.menu = trackMenu{}
+	case "ctrl+c":
+		return m, tea.Quit
 	case "up", "k":
 		m.menu.cursor = clamp(m.menu.cursor-1, len(rows))
 	case "down", "j":

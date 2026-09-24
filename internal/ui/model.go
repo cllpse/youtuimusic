@@ -58,7 +58,11 @@ type Playlist struct {
 	kind  tabKind
 }
 
-// Track is one row in the table.
+// Track is one row in the table. A release is a Track too: an artist's page
+// lists albums beside songs, and there is nothing to play in an album.
+//
+// glyph is the mark in the leading column — what a release is, or how a
+// track is rated.
 type Track struct {
 	VideoID  string
 	Title    string
@@ -70,6 +74,17 @@ type Track struct {
 	Album    string
 	AlbumID  string
 	ArtistID string
+}
+
+// isRelease reports whether a row is an album rather than a song: it has
+// somewhere to go and nothing to play.
+func (t Track) isRelease() bool { return t.VideoID == "" && t.AlbumID != "" }
+
+func (t Track) glyph() string {
+	if t.isRelease() {
+		return iconAlbum
+	}
+	return t.Rating.glyph()
 }
 
 // likedPlaylistID is YouTube's fixed id for the auto playlist a thumbs-up
@@ -504,6 +519,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A thumbs-up adds the track to Liked Music and clearing one takes
 		// it out again, so what is held for that tab no longer describes it.
 		delete(m.cache, likedPlaylistID)
+
+		if msg.applied != RatingUp {
+			// Take the row out here rather than refetching. The server can
+			// take a moment to agree, and a refetch that still listed the
+			// track would put it straight back.
+			m.dropFromLiked(msg.videoID)
+			return m, nil
+		}
 		if tab := m.tabAt(m.tabCursor); tab.ID == likedPlaylistID {
 			return m, m.fetchTracks(tab)
 		}
@@ -568,7 +591,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	switch key {
-	case "ctrl+c", "q":
+	case "ctrl+c":
 		return m, tea.Quit
 
 	case "/":
@@ -576,7 +599,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		if t, ok := m.SelectedTrack(); ok {
-			return m.start(t)
+			return m.open(t)
 		}
 
 	case " ", "space":
@@ -709,6 +732,30 @@ var (
 	failed = lipgloss.NewStyle().Foreground(alert)
 	active = lipgloss.NewStyle().Foreground(accent)
 )
+
+// dropFromLiked removes a track from the liked playlist wherever it is on
+// screen, which is what unliking it means there.
+func (m *Model) dropFromLiked(videoID string) {
+	if m.showingID == likedPlaylistID {
+		m.Tracks = without(m.Tracks, videoID)
+		m.trackCursor = clamp(m.trackCursor, len(m.Tracks))
+		m.scroll()
+	}
+	if m.detour.active && m.detour.tab.ID == likedPlaylistID {
+		m.detour.tracks = without(m.detour.tracks, videoID)
+		m.detour.cursor = clamp(m.detour.cursor, len(m.detour.tracks))
+	}
+}
+
+func without(tracks []Track, videoID string) []Track {
+	out := make([]Track, 0, len(tracks))
+	for _, t := range tracks {
+		if t.VideoID != videoID {
+			out = append(out, t)
+		}
+	}
+	return out
+}
 
 // isPlaying reports whether a row is the track mpv is on.
 func (m Model) isPlaying(t Track) bool {

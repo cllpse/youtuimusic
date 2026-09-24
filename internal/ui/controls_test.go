@@ -540,3 +540,93 @@ func TestTurningSomethingOnFillsItsButton(t *testing.T) {
 		t.Errorf("repeat on did not fill its button: %v", sgrCodes(controlsLine(m)))
 	}
 }
+
+// q used to quit, which is a keystroke away from every other letter. Only
+// ctrl+c does now.
+func TestOnlyCtrlCQuits(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	if _, cmd := m.Update(keyPress("q")); cmd != nil {
+		t.Error("q still does something")
+	}
+	if _, cmd := m.Update(keyPress("ctrl+c")); cmd == nil {
+		t.Error("ctrl+c does not quit")
+	}
+	// Not from inside the menu either.
+	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
+	m = drain(t, next.(Model), cmd)
+	m.Tracks = fromAPI(library().tracks["LM"])
+	next, cmd = m.Update(rightClick(trackX, trackRow(0)))
+	m = drain(t, next.(Model), cmd)
+	if !m.menu.open {
+		t.Fatal("no menu to test")
+	}
+	next, cmd = m.Update(keyPress("q"))
+	if cmd != nil {
+		t.Error("q quits from the menu")
+	}
+	if !next.(Model).menu.open {
+		t.Error("q closed the menu; only esc should")
+	}
+	if _, cmd := next.(Model).Update(keyPress("ctrl+c")); cmd == nil {
+		t.Error("ctrl+c does not quit from the menu")
+	}
+}
+
+// Unliking a track takes it out of Liked Music at once. Refetching instead
+// would put it back: the server takes a moment to agree.
+func TestUnlikingRemovesTheRowFromLikedMusic(t *testing.T) {
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	m := wired(t, lib, st, au)
+	m.Playlists = []Playlist{{ID: likedPlaylistID, Title: "Liked Music"}}
+	m.Tracks = fromAPI(lib.tracks["LM"])
+	for i := range m.Tracks {
+		m.Tracks[i].Rating = RatingUp
+	}
+	m.showingID = likedPlaylistID
+	m.cache[likedPlaylistID] = m.Tracks
+	before := len(m.Tracks)
+	m.playing = m.Tracks[0]
+
+	// Unlike the playing track from the controls.
+	b, _ := buttonAt(m, controlThumbUp)
+	next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+	m = drain(t, next.(Model), cmd)
+
+	if len(m.Tracks) != before-1 {
+		t.Fatalf("the list still has %d rows, want %d", len(m.Tracks), before-1)
+	}
+	for _, track := range m.Tracks {
+		if track.VideoID == "a" {
+			t.Error("the unliked track is still listed")
+		}
+	}
+	if _, cached := m.cache[likedPlaylistID]; cached {
+		t.Error("the stale list is still cached")
+	}
+	// And it did not go asking the server for the list again.
+	for _, asked := range lib.askedFor {
+		if asked == likedPlaylistID {
+			t.Error("refetched Liked Music, which can still list the track")
+		}
+	}
+}
+
+// Liking one does need the server: there is no telling where it goes.
+func TestLikingWhileOnLikedMusicRefetches(t *testing.T) {
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	lib.tracks[likedPlaylistID] = []ytm.Track{{VideoID: "a", Title: "Alpha"}}
+	m := wired(t, lib, st, au)
+	m.Playlists = []Playlist{{ID: likedPlaylistID, Title: "Liked Music"}}
+	opened, openCmd := m.showTab()
+	m = drain(t, opened, openCmd)
+	m.playing = m.Tracks[0]
+
+	asked := len(lib.askedFor)
+	b, _ := buttonAt(m, controlThumbUp)
+	next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+	m = drain(t, next.(Model), cmd)
+
+	if len(lib.askedFor) != asked+1 {
+		t.Errorf("asked for %v; want one more fetch", lib.askedFor)
+	}
+}

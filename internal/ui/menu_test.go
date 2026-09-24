@@ -518,3 +518,28 @@ func TestTheMenuSeparatesIconFromLabel(t *testing.T) {
 		}
 	}
 }
+
+// A release opens rather than playing: there is nothing to play.
+func TestEnterOnAReleaseOpensTheAlbum(t *testing.T) {
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	lib.tracks["MPREbCherry"] = []ytm.Track{{VideoID: "c1", Title: "Cherry Track"}}
+	m := wired(t, lib, st, au)
+	m.detour = detour{
+		active: true,
+		tab:    Playlist{ID: "UCd", Title: "DAPHNI", kind: tabArtist},
+		tracks: []Track{{Title: "Cherry", Artist: "DAPHNI", AlbumID: "MPREbCherry"}},
+	}
+
+	next, cmd := m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+
+	if len(au.loaded) != 0 || len(st.resolved) != 0 {
+		t.Errorf("tried to play a release: loaded %v resolved %v", au.loaded, st.resolved)
+	}
+	if m.detour.tab.kind != tabAlbum || m.detour.tab.Title != "Cherry" {
+		t.Fatalf("the popover is showing %+v", m.detour.tab)
+	}
+	if len(m.detour.tracks) != 1 || m.detour.tracks[0].Title != "Cherry Track" {
+		t.Fatalf("album tracks = %+v", m.detour.tracks)
+	}
+}

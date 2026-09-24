@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -269,7 +271,7 @@ func TestAlbumAndArtistBrowseByID(t *testing.T) {
 			return c.AlbumTracks(context.Background(), "MPREbxyz")
 		}},
 		{"artist", func(c *Client) ([]Track, error) {
-			return c.ArtistTracks(context.Background(), "UCxyz")
+			return c.ArtistPage(context.Background(), "UCxyz")
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -302,3 +304,166 @@ func TestBrowsingWithNoIDIsAnError(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 }
+
+// A search result packs its type, artist, album and length into one column
+// separated by bullets. Reading that column whole put the bullets into the
+// artist's name.
+func TestASearchRowIsUnpacked(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(signedInBody(`{"musicResponsiveListItemRenderer":{
+		  "flexColumns":[
+		    {"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Xtal"}]}}},
+		    {"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[
+		      {"text":"Song"},{"text":" • "},
+		      {"text":"Aphex Twin"},{"text":" • "},
+		      {"text":"Selected Ambient Works 85-92"},{"text":" • "},
+		      {"text":"4:51"}]}}}],
+		  "playlistItemData":{"videoId":"v1"}}}`)))
+	})
+	got, err := c.Search(context.Background(), "xtal")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d results", len(got))
+	}
+	if got[0].Artist != "Aphex Twin" {
+		t.Errorf("artist = %q", got[0].Artist)
+	}
+	if got[0].Album != "Selected Ambient Works 85-92" {
+		t.Errorf("album = %q", got[0].Album)
+	}
+	// The length is in that column too, where no fixed column carries it.
+	if got[0].Duration != 4*time.Minute+51*time.Second {
+		t.Errorf("duration = %v", got[0].Duration)
+	}
+	for _, field := range []string{got[0].Artist, got[0].Album, got[0].Title} {
+		if strings.Contains(field, "•") {
+			t.Errorf("a bullet survived in %q", field)
+		}
+	}
+}
+
+// When the parts are linked, the links say which is which rather than the
+// order they happen to be in.
+func TestLinkedRunsNameTheArtistAndAlbum(t *testing.T) {
+	link := func(text, id, pageType string) string {
+		return `{"text":"` + text + `","navigationEndpoint":{"browseEndpoint":{
+		  "browseId":"` + id + `","browseEndpointContextSupportedConfigs":{
+		    "browseEndpointContextMusicConfig":{"pageType":"` + pageType + `"}}}}}`
+	}
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(signedInBody(`{"musicResponsiveListItemRenderer":{
+		  "flexColumns":[
+		    {"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Poly"}]}}},
+		    {"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[
+		      {"text":"Song"},{"text":" • "},` +
+			link("DAPHNI", "UCd", pageTypeArtist) + `,{"text":" • "},` +
+			link("Cherry", "MPREbC", pageTypeAlbum) + `]}}}],
+		  "playlistItemData":{"videoId":"v1"}}}`)))
+	})
+	got, _ := c.Search(context.Background(), "poly")
+	if len(got) != 1 || got[0].Artist != "DAPHNI" || got[0].Album != "Cherry" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// Twenty is one page. The rest come back behind a token.
+func TestSearchFollowsContinuations(t *testing.T) {
+	var calls int
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		calls++
+		row := trackRow("page"+itoa(calls), "a", "b", "3:00", "v"+itoa(calls), "")
+		// Hand out a token twice, then stop.
+		if calls < 3 {
+			_, _ = w.Write([]byte(`{"responseContext":{"serviceTrackingParams":
+			  [{"params":[{"key":"logged_in","value":"1"}]}]},
+			  "contents":{"gridRenderer":{"items":[` + row + `]}},
+			  "continuationItemRenderer":{"continuationEndpoint":
+			    {"continuationCommand":{"token":"more` + itoa(calls) + `"}}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(signedInBody(row)))
+	})
+
+	got, err := c.Search(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("made %d requests, want 3", calls)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d results across the pages: %+v", len(got), got)
+	}
+	if got[2].Title != "page3" {
+		t.Errorf("the last page is %q", got[2].Title)
+	}
+}
+
+// A listing that never stops handing out tokens has to be cut off.
+func TestContinuationsAreCapped(t *testing.T) {
+	var calls int
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"responseContext":{"serviceTrackingParams":
+		  [{"params":[{"key":"logged_in","value":"1"}]}]},
+		  "contents":{"gridRenderer":{"items":[` +
+			trackRow("t", "a", "b", "3:00", "v"+itoa(calls), "") + `]}},
+		  "continuationItemRenderer":{"continuationEndpoint":
+		    {"continuationCommand":{"token":"endless"}}}}`))
+	})
+	if _, err := c.Search(context.Background(), "x"); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if calls != maxPages {
+		t.Errorf("made %d requests, want the cap of %d", calls, maxPages)
+	}
+}
+
+// An artist's page carries their releases as tiles, which the track parser
+// walks past.
+func TestArtistPageIncludesReleases(t *testing.T) {
+	tile := func(title, id, subtitle string) string {
+		return `{"musicTwoRowItemRenderer":{
+		  "title":{"runs":[{"text":"` + title + `"}]},
+		  "subtitle":{"runs":[{"text":"` + subtitle + `"}]},
+		  "navigationEndpoint":{"browseEndpoint":{"browseId":"` + id + `",
+		    "browseEndpointContextSupportedConfigs":{
+		      "browseEndpointContextMusicConfig":{"pageType":"MUSIC_PAGE_TYPE_ALBUM"}}}}}}`
+	}
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(signedInBody(
+			trackRow("A Song", "DAPHNI", "Cherry", "3:00", "v1", "") + "," +
+				tile("Cherry", "MPREbCherry", "Album • 2017") + "," +
+				tile("Joli Mai", "MPREbJoli", "Album • 2017") + "," +
+				tile("Cherry", "MPREbCherry", "Album • 2017"))))
+	})
+
+	got, err := c.ArtistPage(context.Background(), "UCd")
+	if err != nil {
+		t.Fatalf("ArtistPage: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d rows, want a song and two releases: %+v", len(got), got)
+	}
+	if got[0].VideoID != "v1" {
+		t.Errorf("the song is not first: %+v", got[0])
+	}
+	// A release has nothing to play and carries the album to open instead.
+	for _, release := range got[1:] {
+		if release.VideoID != "" {
+			t.Errorf("a release has a video id: %+v", release)
+		}
+		if release.AlbumID == "" {
+			t.Errorf("a release has no album to open: %+v", release)
+		}
+	}
+	if got[1].Title != "Cherry" || got[2].Title != "Joli Mai" {
+		t.Errorf("releases = %q, %q", got[1].Title, got[2].Title)
+	}
+}
+
+func itoa(i int) string { return strconv.Itoa(i) }
