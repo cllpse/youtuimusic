@@ -225,7 +225,8 @@ func TestACompleteListingOffersNothing(t *testing.T) {
 
 // The header names the columns and marks the one in use.
 func TestTheHeaderNamesTheColumns(t *testing.T) {
-	table := trackTable{tracks: tableTracks(), width: 70, height: 6, showRating: true}
+	table := trackTable{tracks: tableTracks(), width: 70, height: 6, showRating: true,
+		sortable: true}
 	header := plain(table.rows()[0])
 
 	for _, want := range []string{"Title", "Artist", "Length"} {
@@ -244,11 +245,11 @@ func TestTheHeaderNamesTheColumns(t *testing.T) {
 	}
 
 	table.sort = sortSpec{by: sortArtist}
-	if got := plain(table.rows()[0]); !strings.Contains(got, "Artist↑") {
+	if got := plain(table.rows()[0]); !strings.Contains(got, "Artist ↑") {
 		t.Errorf("the sorted column is not marked: %q", got)
 	}
 	table.sort = sortSpec{by: sortArtist, desc: true}
-	if got := plain(table.rows()[0]); !strings.Contains(got, "Artist↓") {
+	if got := plain(table.rows()[0]); !strings.Contains(got, "Artist ↓") {
 		t.Errorf("the direction is not shown: %q", got)
 	}
 }
@@ -381,7 +382,7 @@ func TestEveryHeaderLabelFitsWithItsArrow(t *testing.T) {
 	for _, by := range []sortColumn{sortTitle, sortArtist, sortLength, sortAdded} {
 		for _, desc := range []bool{false, true} {
 			table := trackTable{
-				tracks: tracks, width: 80, height: 6,
+				tracks: tracks, width: 80, height: 6, sortable: true,
 				sort: sortSpec{by: by, desc: desc}, now: time.Now(),
 			}
 			header := plain(table.rows()[0])
@@ -483,7 +484,8 @@ func TestAnAlbumsTableIsTitlesOnly(t *testing.T) {
 	tracks := tableTracks()
 	tracks[0].Added = time.Now()
 
-	full := trackTable{tracks: tracks, width: 70, height: 6, showRating: true, now: time.Now()}
+	full := trackTable{tracks: tracks, width: 70, height: 6, showRating: true,
+		sortable: true, now: time.Now()}
 	album := full
 	album.titleOnly = true
 
@@ -519,5 +521,53 @@ func TestAnAlbumsTableIsTitlesOnly(t *testing.T) {
 	spans := album.headerSpans()
 	if len(spans) != 1 || spans[0].by != sortTitle {
 		t.Errorf("header spans = %+v", spans)
+	}
+}
+
+// The flag is the whole point of it: the same table, sortable or not.
+func TestSortingCanBeTurnedOff(t *testing.T) {
+	tracks := tableTracks()
+	base := trackTable{tracks: tracks, width: 70, height: 6, showRating: true,
+		sort: sortSpec{by: sortArtist}, now: time.Now()}
+
+	on := base
+	on.sortable = true
+	if got := plain(on.rows()[0]); !strings.Contains(got, "Artist ↑") {
+		t.Errorf("a sortable table does not mark its column: %q", got)
+	}
+	if len(on.headerSpans()) == 0 {
+		t.Error("a sortable table offers no columns to click")
+	}
+
+	off := base
+	if got := plain(off.rows()[0]); strings.ContainsAny(got, "↑↓") {
+		t.Errorf("an unsortable table still marks a column: %q", got)
+	}
+	// Still a header, just not a control.
+	if got := plain(off.rows()[0]); !strings.Contains(got, "Artist") {
+		t.Errorf("an unsortable table lost its labels: %q", got)
+	}
+	if spans := off.headerSpans(); spans != nil {
+		t.Errorf("an unsortable table answers clicks: %+v", spans)
+	}
+	// Both are the same width, so turning sorting off shifts nothing.
+	if a, b := lipgloss.Width(plain(on.rows()[0])), lipgloss.Width(plain(off.rows()[0])); a != b {
+		t.Errorf("the header is %d cells sortable and %d not", a, b)
+	}
+}
+
+// The arrow is a mark beside the name, not another letter of it.
+func TestTheArrowIsSpacedFromTheLabel(t *testing.T) {
+	for _, by := range []sortColumn{sortTitle, sortArtist, sortLength} {
+		table := trackTable{tracks: tableTracks(), width: 80, height: 6,
+			sortable: true, sort: sortSpec{by: by}, now: time.Now()}
+		header := plain(table.rows()[0])
+		at := strings.IndexAny(header, "↑↓")
+		if at <= 0 {
+			t.Fatalf("no arrow for %v: %q", by, header)
+		}
+		if header[at-1] != ' ' {
+			t.Errorf("the arrow is against the label: %q", header)
+		}
 	}
 }

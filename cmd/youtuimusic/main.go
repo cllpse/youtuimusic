@@ -12,6 +12,7 @@ import (
 	"github.com/cllpse/youtuimusic/internal/auth"
 	"github.com/cllpse/youtuimusic/internal/chromium"
 	"github.com/cllpse/youtuimusic/internal/player"
+	"github.com/cllpse/youtuimusic/internal/state"
 	"github.com/cllpse/youtuimusic/internal/stream"
 	"github.com/cllpse/youtuimusic/internal/ui"
 	"github.com/cllpse/youtuimusic/internal/ytm"
@@ -55,7 +56,7 @@ func run() error {
 		Library: ytm.NewClient(session),
 		Streams: stream.New(),
 		Audio:   audio,
-	})
+	}).Restore(state.Load())
 
 	_, err = tea.NewProgram(model).Run()
 	return err

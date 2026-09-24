@@ -29,6 +29,10 @@ type trackTable struct {
 	// titleOnly drops every column but the first. An album is one artist's
 	// record, so naming them down the page says the same thing each time.
 	titleOnly bool
+	// sortable offers the columns as sort controls. A popover is a detour
+	// into one record or one artist, where the order is the thing being
+	// looked at, so it says no and the header stops being a control.
+	sortable bool
 	// playing is the video id to colour, and is empty when nothing is.
 	playing string
 	sort    sortSpec
@@ -50,10 +54,10 @@ const (
 	scrollbarWidth = 2
 
 	markWidth = 2
-	// lengthWidth fits "Length" and the arrow that marks it as the column
-	// in use. Six would cut the arrow off, and then the header says which
-	// column is sorted but not which way.
-	lengthWidth = 7
+	// lengthWidth fits "Length", the space before the arrow, and the arrow
+	// that marks it as the column in use. Cutting either off leaves the
+	// header saying which column is sorted but not which way.
+	lengthWidth = 8
 	addedWidth  = 12
 )
 
@@ -189,19 +193,25 @@ func (t trackTable) header(cols layout) string {
 // headerCell names one column, marked when it is the one in use.
 func (t trackTable) headerCell(by sortColumn, label string, width int) string {
 	style := dim
-	if t.sort.by == by {
-		label += t.sort.arrow()
+	if t.sortable && t.sort.by == by {
+		// A space so the arrow reads as a mark beside the name rather
+		// than as another letter of it.
+		label += " " + t.sort.arrow()
 		style = active
 	}
 	return style.Render(pad(truncate(label, width), width))
 }
 
 // headerSpans is where each column sits on the header row, so that clicking
-// one can sort by it.
+// one can sort by it. A table that cannot be sorted offers none, so the
+// header is a label rather than a row of controls that do nothing.
 func (t trackTable) headerSpans() []struct {
 	by         sortColumn
 	start, end int
 } {
+	if !t.sortable {
+		return nil
+	}
 	width := t.width
 	if t.hasScrollbar() {
 		width -= scrollbarWidth

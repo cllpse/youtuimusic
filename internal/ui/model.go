@@ -18,6 +18,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/cllpse/youtuimusic/internal/player"
+	"github.com/cllpse/youtuimusic/internal/state"
 	"github.com/cllpse/youtuimusic/internal/ytm"
 )
 
@@ -129,6 +130,11 @@ type Model struct {
 	playing Track
 	repeat  Repeat
 	loading bool
+
+	// restoring is where the last session left off, held until the pieces
+	// it names exist: the library for the tab, that tab's tracks for the
+	// position. Nil once there is nothing left to put back.
+	restoring *state.State
 
 	// cache is what each tab has fetched, so going back to one is instant.
 	// It holds where the listing carries on as well as its rows: without
@@ -285,7 +291,7 @@ func (m Model) enterDetour(tab Playlist) (Model, tea.Cmd) {
 
 	if entry, ok := m.cache[tab.ID]; ok {
 		m.detour.arrival, m.detour.more = entry.tracks, entry.next
-		m.detour.tracks = sorted(entry.tracks, m.sort)
+		m.detour.tracks = entry.tracks
 		if len(m.detour.tracks) > 0 {
 			return m, m.prefetch(m.detour.tracks[0].VideoID)
 		}
@@ -386,6 +392,7 @@ func (m Model) showTab() (Model, tea.Cmd) {
 		m.arrival, m.more = entry.tracks, entry.next
 		m.Tracks, m.loading, m.Err = sorted(entry.tracks, m.sort), false, nil
 		m.showingID = tab.ID
+		m.restorePosition(tab.ID)
 		if len(m.Tracks) > 0 {
 			return m, m.prefetch(m.Tracks[0].VideoID)
 		}
@@ -556,6 +563,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Playlists = append(m.Playlists, Playlist{ID: p.ID, Title: p.Title})
 		}
 		m.tabCursor, m.Err = 0, nil
+		m.restoreTab()
 		if m.tabCount() == 0 {
 			m.loading = false
 			return m, nil
@@ -571,6 +579,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.inDetour {
 			m.detour.arrival = append(m.detour.arrival, fromAPI(msg.page.Tracks)...)
 			m.detour.more = msg.page.Next
+			// The popover shows its arrival order, so the new page is
+			// what it shows. applySort does not reach it any more.
+			m.detour.tracks = m.detour.arrival
 			m.cache[m.detour.tab.ID] = cached{m.detour.arrival, m.detour.more}
 		} else {
 			m.arrival = append(m.arrival, fromAPI(msg.page.Tracks)...)
@@ -599,7 +610,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cache[msg.id] = cached{tracks, msg.page.Next}
 		if m.detour.active && m.detour.tab.ID == msg.id {
 			m.detour.arrival, m.detour.more = tracks, msg.page.Next
-			m.detour.tracks = sorted(tracks, m.sort)
+			m.detour.tracks = tracks
 			m.detour.cursor, m.detour.offset = 0, 0
 			m.loading, m.Err = false, nil
 			if len(m.detour.tracks) > 0 {
@@ -622,6 +633,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.continueSort()
 		}
 		m.trackCursor, m.trackOffset = 0, 0
+		m.restorePosition(msg.id)
 		if len(m.Tracks) > 0 {
 			return m, batch(m.prefetch(m.Tracks[0].VideoID), m.continueSort())
 		}
@@ -634,7 +646,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.detour.arrival, m.detour.more = fromAPI(msg.page.Tracks), msg.page.Next
-		m.detour.tracks = sorted(m.detour.arrival, m.sort)
+		m.detour.tracks = m.detour.arrival
 		m.detour.cursor, m.detour.offset = 0, 0
 		m.loading, m.Err = false, nil
 		if len(m.detour.tracks) > 0 {
@@ -726,6 +738,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "ctrl+c":
+		m.record()
 		return m, tea.Quit
 
 	case "/":
@@ -740,8 +753,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.press(controlPlayPause)
 
 	case "s":
+		if m.detour.active {
+			return m, nil
+		}
 		return m.sortBy(m.sort.next(m.table(m.width, m.bodyHeight()).showsAdded()))
 	case "S":
+		if m.detour.active {
+			return m, nil
+		}
 		return m.sortBy(sortSpec{by: max(m.sort.by, sortTitle), desc: !m.sort.desc})
 
 	case "n":
@@ -865,6 +884,10 @@ var (
 	alert = lipgloss.Red
 	// contrast is what goes on top of the accent when the accent is a fill.
 	contrast = lipgloss.BrightWhite
+	// played is the paused bar's filled part: neutral, so nothing about it
+	// reads as playing, but lighter than muted so it is still visible
+	// against the groove behind it.
+	played = lipgloss.White
 )
 
 var (
@@ -916,10 +939,10 @@ func (m *Model) setTracks(tracks []Track) {
 	m.Tracks = sorted(tracks, m.sort)
 }
 
-// setDetourTracks does the same for the popover.
+// setDetourTracks does the same for the popover, which keeps the order it
+// arrived in because it cannot be sorted.
 func (m *Model) setDetourTracks(tracks []Track) {
-	m.detour.arrival = tracks
-	m.detour.tracks = sorted(tracks, m.sort)
+	m.detour.arrival, m.detour.tracks = tracks, tracks
 }
 
 // applySort rebuilds both lists from the order they arrived in. Sorting the
@@ -931,9 +954,6 @@ func (m *Model) applySort() {
 	// and rebuilding anyway would empty it.
 	if m.arrival != nil {
 		m.Tracks = sorted(m.arrival, m.sort)
-	}
-	if m.detour.arrival != nil {
-		m.detour.tracks = sorted(m.detour.arrival, m.sort)
 	}
 }
 
@@ -952,20 +972,17 @@ const maxAutoPages = 50
 // Ordering half a list puts the wrong rows at the top, so an order is only
 // true once everything is in — and asking for it is the only way to know.
 func (m *Model) continueSort() tea.Cmd {
-	if m.sort.by == sortNone || m.loadingMore || m.autoPages >= maxAutoPages {
+	// A popover cannot be sorted, so there is no order to complete there.
+	if m.sort.by == sortNone || m.loadingMore || m.detour.active ||
+		m.autoPages >= maxAutoPages {
 		return nil
 	}
-	inDetour := m.detour.active
-	from := m.more
-	if inDetour {
-		from = m.detour.more
-	}
-	if !from.More() {
+	if !m.more.More() {
 		return nil
 	}
 	m.autoPages++
 	m.loadingMore = true
-	return m.loadMore(from, inDetour)
+	return m.loadMore(m.more, false)
 }
 
 // isPlaying reports whether a row is the track mpv is on.
@@ -1002,9 +1019,9 @@ var (
 
 const (
 	tabsHeight = 3 // border, label, border
-	// playerRows is the box: border, blank, bar, blank, controls, border.
-	// The title that used to sit in it is the status bar's now.
-	playerRows = 6
+	// playerRows is the box: border, bar, blank, controls, border. The
+	// title that used to sit in it is the status bar's now.
+	playerRows = 5
 	statusRows = 1
 	// progressRows is everything below the list.
 	progressRows = playerRows + statusRows
@@ -1023,9 +1040,9 @@ func (m Model) bodyHeight() int {
 	return 1
 }
 
-// barRow is the line the progress bar is drawn on: past the list, the box's
-// own border and the blank line under it.
-func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 2 }
+// barRow is the line the progress bar is drawn on: past the list and the
+// box's own border.
+func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 1 }
 
 // statusRow is the bar under the player.
 func (m Model) statusRow() int { return tabsHeight + m.bodyHeight() + playerRows }
@@ -1167,6 +1184,7 @@ func (m Model) renderTracks(width, height int) string {
 func (m Model) table(width, height int) trackTable {
 	return trackTable{
 		sort:        m.sort,
+		sortable:    true,
 		now:         m.clock(),
 		tracks:      m.Tracks,
 		cursor:      m.trackCursor,
@@ -1349,13 +1367,11 @@ const (
 func (m Model) contentWidth() int { return max(0, m.width-2*contentLeft) }
 
 func (m Model) renderPlayer() string {
-	// The bar is given air either side rather than being wedged against the
-	// border and the buttons.
-	blank := strings.Repeat(" ", m.contentWidth())
+	// One blank line, under the bar, so it is not wedged against the
+	// buttons. Above it the box's own border is separation enough.
 	inner := lipgloss.JoinVertical(lipgloss.Left,
-		blank,
 		m.renderBar(),
-		blank,
+		strings.Repeat(" ", m.contentWidth()),
 		m.renderControls(),
 	)
 	return playerBox.Render(inner)
@@ -1387,11 +1403,12 @@ func rampAt(_, position float64) color.Color {
 	return barRamp[min(max(i, 0), len(barRamp)-1)]
 }
 
-// mutedRamp greys the played part out. It lands on the same colour as the
-// unplayed part, which is the point: paused, the bar keeps its shape but
-// stops being the one lit thing on the screen. The two halves stay legible
-// because the characters differ — a solid block against a light shade.
-func mutedRamp(_, _ float64) color.Color { return muted }
+// mutedRamp drains the colour out of the played part without draining the
+// information: paused, the bar stops being the one lit thing on the screen
+// but still says where the playhead is. It has to be a lighter neutral than
+// the groove rather than the same one — matching it hid the position, which
+// is the one thing the bar is for.
+func mutedRamp(_, _ float64) color.Color { return played }
 
 // emptyCell is what the bar has not reached yet: a solid block in the
 // muted colour, so the track reads as a filled groove rather than as

@@ -466,15 +466,23 @@ func TestThePlayerIsBoxed(t *testing.T) {
 		t.Fatalf("view is %d lines, want 20", len(lines))
 	}
 
-	top, bottom := lines[m.barRow()-2], lines[m.barRow()+3]
+	// The bar sits directly under the border: no blank line above it, one
+	// below, separating it from the buttons.
+	top, bottom := lines[m.barRow()-1], lines[m.barRow()+3]
 	if !strings.HasPrefix(plain(top), "╭") || !strings.HasSuffix(plain(top), "╮") {
 		t.Errorf("no top border: %q", plain(top))
 	}
 	if !strings.HasPrefix(plain(bottom), "╰") || !strings.HasSuffix(plain(bottom), "╯") {
 		t.Errorf("no bottom border: %q", plain(bottom))
 	}
+	if inner := strings.TrimSpace(plain(lines[m.barRow()])[1:]); inner == "" {
+		t.Error("the row under the border is blank; the bar should be there")
+	}
+	if inner := strings.Trim(plain(lines[m.barRow()+1]), "│ "); inner != "" {
+		t.Errorf("the row under the bar is not blank: %q", inner)
+	}
 	// Every row inside it is bounded by the sides, blank lines included.
-	for _, row := range []int{m.barRow() - 1, m.barRow(), m.barRow() + 1, m.barRow() + 2} {
+	for _, row := range []int{m.barRow(), m.barRow() + 1, m.barRow() + 2} {
 		line := plain(lines[row])
 		if !strings.HasPrefix(line, "│") || !strings.HasSuffix(line, "│") {
 			t.Errorf("row %d is not inside the box: %q", row, line)
