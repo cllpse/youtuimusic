@@ -550,14 +550,27 @@ func (m Model) applyRating(r Rating) (tea.Model, tea.Cmd) {
 
 // --------------------------------------------------------------- view ----
 
+// Every colour in the interface comes from these three, so recolouring it
+// is one edit rather than a search.
+//
+// They are named palette entries, not indices into the 256-colour cube:
+// 0-15 are the terminal's own scheme, and anything above that is a fixed
+// table that ignores it.
 var (
-	// Named palette entries, not indices into the 256-colour cube: 0-15 are
-	// the terminal's own scheme, and anything above that is a fixed table
-	// that ignores it.
-	dim      = lipgloss.NewStyle().Foreground(lipgloss.BrightBlack)
-	failed   = lipgloss.NewStyle().Foreground(lipgloss.Red)
-	selected = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Magenta)
-	active   = lipgloss.NewStyle().Foreground(lipgloss.Magenta)
+	accent = lipgloss.Blue
+	// accentBright is the same hue, one slot up, which is how a sixteen
+	// colour palette does emphasis.
+	accentBright = lipgloss.BrightBlue
+	// muted is grey rather than blue on purpose: it is what the accent has
+	// to stand out against.
+	muted = lipgloss.BrightBlack
+)
+
+var (
+	dim      = lipgloss.NewStyle().Foreground(muted)
+	failed   = lipgloss.NewStyle().Foreground(accentBright)
+	selected = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	active   = lipgloss.NewStyle().Foreground(accent)
 )
 
 // tabBorder is a rounded box whose bottom edge is open on the tab in front,
@@ -571,13 +584,13 @@ func tabBorder(left, middle, right string) lipgloss.Border {
 var (
 	inactiveTabStyle = lipgloss.NewStyle().
 				Border(tabBorder("┴", "─", "┴"), true).
-				BorderForeground(lipgloss.BrightBlack).
-				Foreground(lipgloss.BrightBlack).
+				BorderForeground(muted).
+				Foreground(muted).
 				Padding(0, 1)
 	activeTabStyle = inactiveTabStyle.
 			Border(tabBorder("┘", " ", "└"), true).
-			BorderForeground(lipgloss.Magenta).
-			Foreground(lipgloss.Magenta).
+			BorderForeground(accent).
+			Foreground(accent).
 			Bold(true)
 	// The gap is the rule that carries on past the last tab. It inherits the
 	// tab's padding unless that is cleared, which would push the row two
@@ -773,9 +786,8 @@ func (m Model) renderProgress() string {
 // steps in between and emits them as true colour — off-scheme by
 // construction, however the endpoints were named.
 var barRamp = []color.Color{
-	lipgloss.Blue,
-	lipgloss.Magenta,
-	lipgloss.BrightMagenta,
+	accent,
+	accentBright,
 }
 
 // rampAt picks the ramp entry for a position along the bar. Sixteen colours
@@ -796,7 +808,7 @@ func newBar() progress.Model {
 		progress.WithColorFunc(rampAt),
 	)
 	// The default is a fixed grey, which is off-scheme like the rest.
-	bar.EmptyColor = lipgloss.BrightBlack
+	bar.EmptyColor = muted
 	return bar
 }
 

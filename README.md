@@ -73,7 +73,9 @@ per tab.
 
 **Colours come from the terminal, not from this program.** Everything drawn
 names an entry in the sixteen-colour ANSI palette, so the scheme the user
-already has is the scheme the app wears. That rules out the progress
+already has is the scheme the app wears. Three names in `internal/ui` decide
+all of it — `accent`, `accentBright` and `muted` — so recolouring the
+interface is one edit. That rules out the progress
 component's own blend: it interpolates in RGB and emits true colour, so the
 steps between two named endpoints are values this program invented. The bar
 uses a colour function returning palette entries instead — a ramp with steps
