@@ -79,8 +79,10 @@ With the track menu or the popover open, `j`/`k` and `enter` work it and
 `esc` closes it. The transport keys keep working either way: pausing should
 not depend on what is on top.
 
-The title, the progress bar and the controls share one box: transport on the
-left, thumbs in the middle, repeat on the right. A liked row is marked with
+The progress bar and the controls share a box — transport on the left,
+thumbs in the middle, repeat on the right — and under it a status bar says
+what the app is doing and what is playing, in two blocks the way lipgloss's
+own example lays one out. A liked row is marked with
 the same thumb icon the control uses, except in the liked playlist itself,
 where every row would carry it. The thumbs there act on what is playing, which is what
 sitting beside the transport means; `+` and `-` still act on the highlighted

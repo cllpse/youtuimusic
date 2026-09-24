@@ -1001,8 +1001,13 @@ var (
 )
 
 const (
-	tabsHeight   = 3 // border, label, border
-	progressRows = 7 // border, title, blank, bar, blank, controls, border
+	tabsHeight = 3 // border, label, border
+	// playerRows is the box: border, blank, bar, blank, controls, border.
+	// The title that used to sit in it is the status bar's now.
+	playerRows = 6
+	statusRows = 1
+	// progressRows is everything below the list.
+	progressRows = playerRows + statusRows
 	maxTabTitle  = 18
 	tabFurniture = 4 // a border and a space either side
 )
@@ -1019,8 +1024,11 @@ func (m Model) bodyHeight() int {
 }
 
 // barRow is the line the progress bar is drawn on: past the list, the box's
-// own border, the title and the blank line under it.
-func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 3 }
+// own border and the blank line under it.
+func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 2 }
+
+// statusRow is the bar under the player.
+func (m Model) statusRow() int { return tabsHeight + m.bodyHeight() + playerRows }
 
 // controlsRow is the line of buttons, a blank line below the bar.
 func (m Model) controlsRow() int { return m.barRow() + 2 }
@@ -1056,6 +1064,7 @@ func (m Model) View() tea.View {
 		m.renderTabs(),
 		m.renderTracks(m.width, m.bodyHeight()),
 		m.renderPlayer(),
+		m.renderStatusBar(),
 	)
 	// Anything floating sits over the frame rather than in it, so opening
 	// one reflows nothing underneath.
@@ -1199,32 +1208,56 @@ func (m *Model) scrollTo(y int) {
 // the column would say the same thing all the way down.
 func (m Model) showsRating() bool { return m.showingID != likedPlaylistID }
 
-// statusLine is the one line above the bar. Everything on it is cut to the
-// width: a long track title would otherwise push the frame wider than the
-// terminal and take every other row with it.
-//
-// Nothing here says "paused". The bar goes grey and the control becomes a
-// play triangle, which is two ways of saying it already.
-func (m Model) statusLine() string {
+// The status bar is two blocks: a small bright one saying what the app is
+// doing, and one holding what is playing that takes the rest of the row.
+var (
+	statusBarStyle = lipgloss.NewStyle().Background(muted)
+	statusKeyStyle = lipgloss.NewStyle().
+			Background(accent).
+			Foreground(contrast).
+			Bold(true).
+			Padding(0, 1)
+	statusAlertStyle = statusKeyStyle.Background(alert)
+	statusTextStyle  = statusBarStyle.Padding(0, 1)
+)
+
+// renderStatusBar draws the row under the player.
+func (m Model) renderStatusBar() string {
+	key, style := "READY", statusKeyStyle
 	switch {
 	case m.Err != nil:
-		return failed.Render(truncate(m.Err.Error(), m.contentWidth()))
-	case m.playing.VideoID != "":
-		return m.nowPlayingLine()
-	default:
-		return dim.Render(truncate("Ready", m.contentWidth()))
+		key, style = "ERROR", statusAlertStyle
+	case m.loading || m.loadingMore:
+		key = "LOADING"
 	}
+
+	// On a narrow terminal the blocks give way rather than pushing the
+	// frame wider than the screen.
+	block := style.Render(truncate(key, max(m.width-2, 0)))
+	rest := max(m.width-lipgloss.Width(block), 0)
+	if rest == 0 {
+		return block
+	}
+	text := statusTextStyle
+	if rest < 3 {
+		text = statusBarStyle // no room for the padding, let alone words
+	}
+	return block + text.Width(rest).Render(truncate(m.statusText(), max(rest-2, 0)))
 }
 
-// nowPlayingLine is the track's title, with its album muted behind it.
-func (m Model) nowPlayingLine() string {
-	width := m.contentWidth()
-	title := truncate(m.playing.Title, width)
-	room := width - lipgloss.Width(title) - 2
-	if m.playing.Album == "" || room < 4 {
-		return title
+// statusText is what the wide block holds: the trouble, or the track.
+func (m Model) statusText() string {
+	switch {
+	case m.Err != nil:
+		return m.Err.Error()
+	case m.playing.VideoID == "":
+		return "Nothing playing"
+	case m.playing.Album == "":
+		return m.playing.Title
 	}
-	return title + "  " + dim.Render(truncate(m.playing.Album, room))
+	// Bold carries the title against the album, since both sit on the same
+	// fill and a second colour on it would be hard to read.
+	return lipgloss.NewStyle().Bold(true).Render(m.playing.Title) + "  " + m.playing.Album
 }
 
 // playerBox is the frame around the title, the bar and the controls. Its
@@ -1246,11 +1279,10 @@ const (
 func (m Model) contentWidth() int { return max(0, m.width-2*contentLeft) }
 
 func (m Model) renderPlayer() string {
-	// The bar is given air either side rather than being wedged between the
-	// title and the buttons.
+	// The bar is given air either side rather than being wedged against the
+	// border and the buttons.
 	blank := strings.Repeat(" ", m.contentWidth())
 	inner := lipgloss.JoinVertical(lipgloss.Left,
-		pad(m.statusLine(), m.contentWidth()),
 		blank,
 		m.renderBar(),
 		blank,

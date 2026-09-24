@@ -217,9 +217,10 @@ func TestThePopoverIsInsetAndOverlays(t *testing.T) {
 	if !strings.Contains(plain(strings.Join(after, "\n")), "Cherry Track") {
 		t.Error("the popover's tracks are not on the frame")
 	}
-	// The player box below it is untouched.
-	if plain(after[len(after)-1]) != plain(before[len(before)-1]) {
-		t.Error("the bottom of the frame moved")
+	// The player box below it is untouched. Not the status bar: opening a
+	// popover sets something loading, which is its job to say.
+	if plain(after[m.statusRow()-1]) != plain(before[m.statusRow()-1]) {
+		t.Error("the bottom of the player moved")
 	}
 }
 
@@ -465,7 +466,7 @@ func TestThePopoverStaysInsideTheList(t *testing.T) {
 		}
 		// The player's bottom border is still drawn.
 		lines := strings.Split(m.View().Content, "\n")
-		if last := plain(lines[len(lines)-1]); !strings.HasSuffix(last, "╯") {
+		if last := plain(lines[m.statusRow()-1]); !strings.HasSuffix(last, "╯") {
 			t.Errorf("%dx%d: the player box is broken: %q", size.w, size.h, last)
 		}
 	}

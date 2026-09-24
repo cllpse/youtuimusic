@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -205,7 +206,7 @@ func TestSearchTypesIntoThePopover(t *testing.T) {
 
 func TestViewRendersEveryRegion(t *testing.T) {
 	out := sample().View().Content
-	for _, want := range []string{"One", "Alpha", "Ready"} {
+	for _, want := range []string{"One", "Alpha", "READY"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("view is missing %q:\n%s", want, out)
 		}
@@ -218,16 +219,17 @@ func TestViewRendersEveryRegion(t *testing.T) {
 // Idle says Ready rather than naming the playlist, which the tabs already do.
 func TestIdleSaysReady(t *testing.T) {
 	m := sample()
-	if !strings.Contains(m.View().Content, "Ready") {
-		t.Error("idle status is not Ready")
+	idle := plain(strings.Split(m.View().Content, "\n")[m.statusRow()])
+	if !strings.Contains(idle, "READY") || !strings.Contains(idle, "Nothing playing") {
+		t.Errorf("idle bar reads %q", idle)
 	}
 	m.playing = Track{VideoID: "a", Title: "Poly", Artist: "DAPHNI", Album: "Cherry"}
-	out := plain(m.View().Content)
-	if strings.Contains(out, "Ready") {
-		t.Error("playing status should replace Ready")
+	playing := plain(strings.Split(m.View().Content, "\n")[m.statusRow()])
+	if strings.Contains(playing, "Nothing playing") {
+		t.Error("the bar still says nothing is playing")
 	}
-	if !strings.Contains(out, "Poly") || !strings.Contains(out, "Cherry") {
-		t.Errorf("the status line is missing the track or its album:\n%s", out)
+	if !strings.Contains(playing, "Poly") || !strings.Contains(playing, "Cherry") {
+		t.Errorf("the bar is missing the track or its album: %q", playing)
 	}
 }
 
@@ -252,9 +254,9 @@ func TestLoadingShowsTheSpinnerInTheList(t *testing.T) {
 	if frames == 0 {
 		t.Errorf("no spinner frame, want one of %q", m.spin.Spinner.Frames)
 	}
-	// And not in the status line, which says what is playing.
-	if strings.Contains(lines[m.barRow()-2], "Loading…") {
-		t.Errorf("the status line still says it: %q", lines[m.barRow()-2])
+	// The status bar says so too, in its own words.
+	if got := plain(lines[m.statusRow()]); !strings.Contains(got, "LOADING") {
+		t.Errorf("the status bar does not say it: %q", got)
 	}
 }
 
@@ -271,29 +273,76 @@ func TestReloadingKeepsTheListVisible(t *testing.T) {
 	}
 }
 
-// The status line leads with the track, then its album, muted.
-func TestTheStatusLineIsTitleThenAlbum(t *testing.T) {
+// The status bar is two blocks: what the app is doing, then what is
+// playing. Both used to live inside the player box.
+func TestTheStatusBarSaysWhatIsPlaying(t *testing.T) {
 	m := sample()
 	m.playing = Track{VideoID: "a", Title: "Poly", Artist: "DAPHNI", Album: "Cherry"}
 
-	// The status line on its own, so the box's own border is not in the way.
-	status := m.statusLine()
-	bare := plain(status)
+	bar := strings.Split(m.View().Content, "\n")[m.statusRow()]
+	bare := plain(bar)
+	if !strings.Contains(bare, "READY") {
+		t.Errorf("no state block: %q", bare)
+	}
+	if column(bare, "READY") > column(bare, "Poly") {
+		t.Errorf("the state block is not first: %q", bare)
+	}
 	if column(bare, "Poly") > column(bare, "Cherry") {
-		t.Errorf("the album comes first: %q", bare)
+		t.Errorf("the album comes before the title: %q", bare)
 	}
 	if strings.Contains(bare, "DAPHNI") {
-		t.Errorf("the artist is on the line: %q", bare)
+		t.Errorf("the artist is on the bar: %q", bare)
 	}
-	if !sgrCodes(status)["90"] {
-		t.Errorf("nothing on the line is muted: %v", sgrCodes(status))
+	if lipgloss.Width(bare) != m.width {
+		t.Errorf("the bar is %d cells, want the full %d", lipgloss.Width(bare), m.width)
 	}
-	if before := status[:strings.Index(status, "Poly")]; strings.Contains(before, "\x1b[") {
-		t.Errorf("the title is styled as well: %q", before)
+	// Two fills: the bright one for the state, the quiet one for the rest.
+	codes := sgrCodes(bar)
+	if !codes["44"] {
+		t.Errorf("the state block is not filled with the accent: %v", codes)
 	}
-	// It is on the frame too, where it belongs.
-	if !strings.Contains(plain(strings.Split(m.View().Content, "\n")[m.barRow()-2]), "Poly") {
-		t.Error("the status line is not above the bar")
+	if !codes["100"] {
+		t.Errorf("the rest of the bar is not filled: %v", codes)
+	}
+}
+
+// The player box holds the bar and the buttons, and nothing else.
+func TestThePlayerBoxHoldsOnlyTheBarAndButtons(t *testing.T) {
+	m := sample()
+	m.playing = Track{VideoID: "a", Title: "Poly", Album: "Cherry"}
+
+	lines := strings.Split(m.View().Content, "\n")
+	for _, row := range []int{m.barRow() - 1, m.barRow() + 1} {
+		if got := strings.TrimSpace(plain(lines[row])); got != "││" && got != "│ │" {
+			if strings.ContainsAny(got, "PolyCherry") {
+				t.Errorf("row %d still holds the track: %q", row, got)
+			}
+		}
+	}
+	// The bar and the buttons are where they were.
+	if !strings.ContainsAny(plain(lines[m.barRow()]), "▌░") {
+		t.Errorf("no progress bar on row %d: %q", m.barRow(), plain(lines[m.barRow()]))
+	}
+	if !strings.Contains(lines[m.controlsRow()], iconPrevious) {
+		t.Errorf("no controls on row %d", m.controlsRow())
+	}
+	// And the box still ends above the status bar.
+	if !strings.HasSuffix(plain(lines[m.statusRow()-1]), "╯") {
+		t.Errorf("the box does not close above the status bar: %q", plain(lines[m.statusRow()-1]))
+	}
+}
+
+// Trouble turns the state block red and puts the message beside it.
+func TestTheStatusBarShowsErrors(t *testing.T) {
+	m := sample()
+	m.Err = errors.New("something went wrong")
+
+	bar := strings.Split(m.View().Content, "\n")[m.statusRow()]
+	if bare := plain(bar); !strings.Contains(bare, "ERROR") || !strings.Contains(bare, "something went wrong") {
+		t.Errorf("bar reads %q", bare)
+	}
+	if !sgrCodes(bar)["41"] {
+		t.Errorf("the state block is not red: %v", sgrCodes(bar))
 	}
 }
 
@@ -365,7 +414,7 @@ func TestThePlayerIsBoxed(t *testing.T) {
 		t.Fatalf("view is %d lines, want 20", len(lines))
 	}
 
-	top, bottom := lines[m.barRow()-3], lines[m.barRow()+3]
+	top, bottom := lines[m.barRow()-2], lines[m.barRow()+3]
 	if !strings.HasPrefix(plain(top), "╭") || !strings.HasSuffix(plain(top), "╮") {
 		t.Errorf("no top border: %q", plain(top))
 	}
@@ -373,8 +422,7 @@ func TestThePlayerIsBoxed(t *testing.T) {
 		t.Errorf("no bottom border: %q", plain(bottom))
 	}
 	// Every row inside it is bounded by the sides, blank lines included.
-	for _, row := range []int{m.barRow() - 2, m.barRow() - 1, m.barRow(),
-		m.barRow() + 1, m.barRow() + 2} {
+	for _, row := range []int{m.barRow() - 1, m.barRow(), m.barRow() + 1, m.barRow() + 2} {
 		line := plain(lines[row])
 		if !strings.HasPrefix(line, "│") || !strings.HasSuffix(line, "│") {
 			t.Errorf("row %d is not inside the box: %q", row, line)
