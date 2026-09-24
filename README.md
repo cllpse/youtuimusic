@@ -60,7 +60,7 @@ the first page and fill in the rest behind it.
 | `space` | pause and resume, or start the highlighted track |
 | `n` / `p` | next and previous track |
 | `r` | repeat: off, all, one |
-| `/` | search, `enter` to run it, `esc` to cancel; results arrive as their own tab |
+| `/` | search in a popover, `enter` to run it, `esc` to close |
 | `+` / `-` | thumbs up or down; the same key again clears it |
 | `q`, `ctrl+c` | quit |
 
@@ -76,10 +76,13 @@ sitting beside the transport means; `+` and `-` still act on the highlighted
 row.
 
 Right-clicking a track opens a menu: like or unlike it, go to its album, go
-to its artist. The last two open a popover over the list, inset so that what
-it covers is still visible around it and stopping short of the player, which
-stays usable. `esc` or a click outside closes it, and nothing underneath was
-disturbed. A track that links nowhere has those rows greyed.
+to its artist. A track that links nowhere has those rows greyed.
+
+Albums, artists and search all open the same popover over the list, inset so
+that what it covers is still visible around it and stopping short of the
+player, which stays usable. It carries its own table — same columns, same
+scrolling — and `esc` or a click outside closes it, leaving everything
+underneath as it was. The search one puts its box on the top line.
 
 A list longer than the window gets a scrollbar down its right edge. It can
 be clicked and dragged, and it is only there when there is something to

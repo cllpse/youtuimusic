@@ -73,10 +73,6 @@ type Track struct {
 	ArtistID string
 }
 
-// searchTabID names the tab holding the last search. It cannot collide with
-// a playlist id, which is why it is not a plausible one.
-const searchTabID = "\x00search"
-
 // likedPlaylistID is YouTube's fixed id for the auto playlist a thumbs-up
 // adds to.
 const likedPlaylistID = "LM"
@@ -102,14 +98,6 @@ type Model struct {
 	Position time.Duration
 	Length   time.Duration
 	Paused   bool
-
-	// Search
-	Searching bool
-	Query     string
-	// extra is the one tab that is not a playlist — search results, an
-	// album, an artist. Opening another replaces it rather than adding to
-	// the row.
-	extra Playlist
 
 	menu   trackMenu
 	detour detour
@@ -218,6 +206,11 @@ type detour struct {
 	tracks []Track
 	cursor int
 	offset int
+
+	// A search popover carries its own input. typing is whether keys go to
+	// it rather than to the list below.
+	query  string
+	typing bool
 }
 
 // currentTab is what a fetch in flight belongs to: the popover when one is
@@ -278,20 +271,13 @@ func (m *Model) moveDetour(delta int) {
 	m.detour.offset = max(m.detour.offset, 0)
 }
 
-// tabCount is the playlists plus the search results, when there are any.
-func (m Model) tabCount() int {
-	if m.extra.ID != "" {
-		return len(m.Playlists) + 1
-	}
-	return len(m.Playlists)
-}
+// tabCount is the playlists. Nothing else lives in the row: a search, an
+// album and an artist are all popovers.
+func (m Model) tabCount() int { return len(m.Playlists) }
 
 func (m Model) tabAt(i int) Playlist {
 	if i >= 0 && i < len(m.Playlists) {
 		return m.Playlists[i]
-	}
-	if i == len(m.Playlists) && m.extra.ID != "" {
-		return m.extra
 	}
 	return Playlist{}
 }
@@ -504,10 +490,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case searchMsg:
-		m.extra = Playlist{ID: searchTabID, Title: msg.query, kind: tabSearch}
-		m.cache[searchTabID] = fromAPI(msg.tracks)
-		m.tabCursor = m.tabCount() - 1
-		return m.showTab()
+		// The popover may have been closed, or replaced by an album, while
+		// this was in flight.
+		if !m.detour.active || m.detour.tab.kind != tabSearch {
+			return m, nil
+		}
+		m.detour.tracks = fromAPI(msg.tracks)
+		m.detour.cursor, m.detour.offset = 0, 0
+		m.loading, m.Err = false, nil
+		if len(m.detour.tracks) > 0 {
+			return m, m.prefetch(m.detour.tracks[0].VideoID)
+		}
+		return m, nil
 
 	case ratedMsg:
 		if msg.err != nil {
@@ -583,34 +577,12 @@ func (m Model) handleEvent(ev player.Event) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// While searching, everything but the control keys is literal text.
-	if m.Searching {
-		switch key {
-		case "esc":
-			m.Searching, m.Query = false, ""
-		case "enter":
-			m.Searching = false
-			if m.Query != "" {
-				return m, batch(m.startLoading(), m.runSearch(m.Query))
-			}
-		case "backspace":
-			if m.Query != "" {
-				m.Query = m.Query[:len(m.Query)-1]
-			}
-		default:
-			if len(key) == 1 {
-				m.Query += key
-			}
-		}
-		return m, nil
-	}
-
 	switch key {
 	case "ctrl+c", "q":
 		return m, tea.Quit
 
 	case "/":
-		m.Searching, m.Query = true, ""
+		return m.openSearch()
 
 	case "enter":
 		if t, ok := m.SelectedTrack(); ok {
@@ -1078,8 +1050,6 @@ func (m Model) showsRating() bool { return m.showingID != likedPlaylistID }
 // play triangle, which is two ways of saying it already.
 func (m Model) statusLine() string {
 	switch {
-	case m.Searching:
-		return truncate("/"+m.Query+"█", m.contentWidth())
 	case m.Err != nil:
 		return failed.Render(truncate(m.Err.Error(), m.contentWidth()))
 	case m.playing.VideoID != "":

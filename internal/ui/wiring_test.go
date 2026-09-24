@@ -326,10 +326,12 @@ func TestAFailedRatingIsPutBack(t *testing.T) {
 	}
 }
 
-func TestSearchReplacesTheTable(t *testing.T) {
+// Search fills the popover and leaves everything behind it alone.
+func TestSearchFillsThePopover(t *testing.T) {
 	lib, st := library(), &fakeStreams{}
 	m := wired(t, lib, st, newFakeAudio())
 	m.Tracks = fromAPI(lib.tracks["LM"])
+	beneath := len(m.Tracks)
 
 	next, _ := m.Update(keyPress("/"))
 	m = next.(Model)
@@ -340,14 +342,17 @@ func TestSearchReplacesTheTable(t *testing.T) {
 	next, cmd := m.Update(keyPress("enter"))
 	m = drain(t, next.(Model), cmd)
 
-	if m.Searching {
-		t.Error("still in search mode after enter")
+	if m.detour.typing {
+		t.Error("still typing after enter")
 	}
-	if len(m.Tracks) != 1 || m.Tracks[0].Title != "Found" {
-		t.Fatalf("tracks = %+v", m.Tracks)
+	if len(m.detour.tracks) != 1 || m.detour.tracks[0].Title != "Found" {
+		t.Fatalf("popover tracks = %+v", m.detour.tracks)
 	}
-	if got, _ := m.SelectedPlaylist(); got.Title != "xtal" {
-		t.Errorf("front tab = %q, want the search", got.Title)
+	if len(m.Tracks) != beneath {
+		t.Errorf("the list underneath changed to %d rows", len(m.Tracks))
+	}
+	if m.tabCount() != len(m.Playlists) {
+		t.Errorf("the tab row grew to %d", m.tabCount())
 	}
 	if len(lib.askedFor) == 0 || lib.askedFor[len(lib.askedFor)-1] != "search:xtal" {
 		t.Errorf("asked for %v", lib.askedFor)

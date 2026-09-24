@@ -42,20 +42,93 @@ func (m Model) modalListHeight() int {
 	return max(height-2-modalHeader, 1)
 }
 
+// iconSearch heads the search popover's input.
+const iconSearch = "\U000f0349" // md-magnify
+
 func (m Model) modalIcon() string {
-	if m.detour.tab.kind == tabArtist {
+	switch m.detour.tab.kind {
+	case tabArtist:
 		return iconArtist
+	case tabSearch:
+		return iconSearch
 	}
 	return iconAlbum
+}
+
+// openSearch opens the popover on an empty query, with the input focused.
+func (m Model) openSearch() (tea.Model, tea.Cmd) {
+	m.menu = trackMenu{}
+	m.detour = detour{
+		active: true,
+		tab:    Playlist{Title: "Search", kind: tabSearch},
+		typing: true,
+	}
+	return m, nil
+}
+
+// modalHeader is the popover's first line: what it is showing, or the
+// search box being typed into.
+func (m Model) modalHeader(inner int) string {
+	if m.detour.tab.kind != tabSearch {
+		return active.Render(pad(truncate(m.modalIcon()+" "+m.detour.tab.Title, inner), inner))
+	}
+	query := m.detour.query
+	if m.detour.typing {
+		query += "█"
+	} else if query == "" {
+		query = dim.Render("type to search")
+	}
+	return active.Render(iconSearch+menuGap) + pad(truncate(query, max(inner-3, 0)), inner-3)
+}
+
+// typeInto runs the search box. Everything reaches it while it has focus,
+// because everything is text — including the space bar, which would
+// otherwise pause what is playing mid-word.
+func (m Model) typeInto(key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
+	case "ctrl+c":
+		return m, tea.Quit, true
+	case "esc":
+		next, cmd := m.leaveDetour()
+		return next, cmd, true
+	case "enter":
+		m.detour.typing = false
+		if m.detour.query == "" {
+			return m, nil, true
+		}
+		return m, batch(m.startLoading(), m.runSearch(m.detour.query)), true
+	case "backspace":
+		if q := m.detour.query; q != "" {
+			m.detour.query = q[:len(q)-1]
+		}
+		return m, nil, true
+	case "space":
+		m.detour.query += " "
+		return m, nil, true
+	default:
+		if len(key) == 1 {
+			m.detour.query += key
+		}
+		return m, nil, true
+	}
 }
 
 func (m Model) renderModal() string {
 	inner := m.modalContentWidth()
 	height := m.modalListHeight()
 
-	title := pad(truncate(m.modalIcon()+" "+m.detour.tab.Title, inner), inner)
 	lines := make([]string, 0, modalHeader+height)
-	lines = append(lines, active.Render(title), strings.Repeat(" ", inner))
+	lines = append(lines, m.modalHeader(inner), strings.Repeat(" ", inner))
+
+	if m.detour.tab.kind == tabSearch && !m.loading && len(m.detour.tracks) == 0 {
+		note := dim.Render("type to search")
+		if !m.detour.typing && m.detour.query != "" {
+			note = dim.Render("nothing found")
+		}
+		lines = append(lines, lipgloss.Place(inner, height,
+			lipgloss.Center, lipgloss.Center, note))
+		return modalBox.Render(strings.Join(lines, "\n"))
+	}
 
 	if m.loading && len(m.detour.tracks) == 0 {
 		lines = append(lines, pad(m.spin.View()+" "+dim.Render("Loading…"), inner))
@@ -133,7 +206,15 @@ func (m *Model) scrollDetour(delta int) {
 // transport keys are deliberately left to fall through, because pausing
 // should not depend on what is on top.
 func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
+	if m.detour.typing {
+		return m.typeInto(key)
+	}
 	switch key {
+	case "/":
+		if m.detour.tab.kind == tabSearch {
+			m.detour.typing = true
+			return m, nil, true
+		}
 	case "esc":
 		next, cmd := m.leaveDetour()
 		return next, cmd, true
@@ -167,7 +248,7 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
 			return next, cmd, true
 		}
 
-	case "/", "left", "h", "right", "l", "tab", "shift+tab":
+	case "left", "h", "right", "l", "tab", "shift+tab":
 		// Working the thing underneath while it is covered would be a
 		// surprise. The way out is esc.
 

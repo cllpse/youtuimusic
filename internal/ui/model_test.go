@@ -177,22 +177,29 @@ func TestRatingTogglesOff(t *testing.T) {
 	}
 }
 
-func TestSearchCapturesKeys(t *testing.T) {
+// Search is a popover with its own input, so keys go to the box and not to
+// the list behind it.
+func TestSearchTypesIntoThePopover(t *testing.T) {
 	m := press(sample(), "/")
-	if !m.Searching {
-		t.Fatal("not in search mode")
+	if !m.detour.active || m.detour.tab.kind != tabSearch {
+		t.Fatal("/ did not open the search popover")
 	}
+	if !m.detour.typing {
+		t.Error("the box does not have focus")
+	}
+
 	// j and k are text here, not movement.
 	m = press(m, "j", "k")
-	if m.Query != "jk" || m.trackCursor != 0 {
-		t.Fatalf("query = %q, cursor = %d", m.Query, m.trackCursor)
+	if m.detour.query != "jk" || m.trackCursor != 0 || m.detour.cursor != 0 {
+		t.Fatalf("query = %q, list cursor = %d, popover cursor = %d",
+			m.detour.query, m.trackCursor, m.detour.cursor)
 	}
 	m = press(m, "backspace")
-	if m.Query != "j" {
-		t.Fatalf("query = %q", m.Query)
+	if m.detour.query != "j" {
+		t.Fatalf("query = %q", m.detour.query)
 	}
-	if m = press(m, "esc"); m.Searching || m.Query != "" {
-		t.Fatalf("esc left searching=%v query=%q", m.Searching, m.Query)
+	if m = press(m, "esc"); m.detour.active {
+		t.Fatal("esc left the popover open")
 	}
 }
 
