@@ -76,10 +76,11 @@ func (m Model) renderModal() string {
 		row := i + m.detour.offset
 		line := ""
 		if row < len(m.detour.tracks) {
-			highlighted := row == m.detour.cursor
-			line = m.trackLine(m.detour.tracks[row], listWidth, showRating, highlighted)
-			if highlighted {
-				line = selected.Render(line)
+			t := m.detour.tracks[row]
+			style, styled := rowStyle(m.isPlaying(t), row == m.detour.cursor)
+			line = m.trackLine(t, listWidth, showRating, styled)
+			if styled {
+				line = style.Render(line)
 			}
 		}
 		line = pad(line, listWidth)

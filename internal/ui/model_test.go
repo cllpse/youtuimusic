@@ -555,3 +555,81 @@ func TestTheLastColumnIsATrackWhenThereIsNoBar(t *testing.T) {
 		t.Errorf("hit = %v, %d; want the track row", where, n)
 	}
 }
+
+// The track playing and the row under the cursor are different things, and
+// a row can be either, both, or neither.
+func TestPlayingAndSelectedAreSeparate(t *testing.T) {
+	m := sample()
+	m.Tracks = []Track{
+		{VideoID: "a", Title: "Alpha"},
+		{VideoID: "b", Title: "Beta"},
+		{VideoID: "c", Title: "Gamma"},
+	}
+	m.playing = m.Tracks[1] // Beta plays
+	m.trackCursor = 0       // the cursor is on Alpha
+
+	lines := strings.Split(m.View().Content, "\n")
+	alpha, beta, gamma := lines[tabsHeight], lines[tabsHeight+1], lines[tabsHeight+2]
+
+	// The cursor is a filled background and nothing else.
+	if !sgrCodes(alpha)["100"] {
+		t.Errorf("the selected row is not highlighted: %v", sgrCodes(alpha))
+	}
+	if sgrCodes(alpha)["34"] {
+		t.Errorf("the selected row is coloured as if playing: %v", sgrCodes(alpha))
+	}
+
+	// The playing track is coloured and not highlighted.
+	if !sgrCodes(beta)["34"] {
+		t.Errorf("the playing row is not coloured: %v", sgrCodes(beta))
+	}
+	if sgrCodes(beta)["100"] {
+		t.Errorf("the playing row is highlighted as if selected: %v", sgrCodes(beta))
+	}
+
+	// A row that is neither is left alone.
+	if sgrCodes(gamma)["100"] || sgrCodes(gamma)["34"] {
+		t.Errorf("an ordinary row is styled: %v", sgrCodes(gamma))
+	}
+
+	// And a row that is both says both.
+	m.trackCursor = 1
+	both := strings.Split(m.View().Content, "\n")[tabsHeight+1]
+	if !sgrCodes(both)["34"] || !sgrCodes(both)["100"] {
+		t.Errorf("the playing row under the cursor says %v, want both", sgrCodes(both))
+	}
+}
+
+// The highlight has to run the width of the row, or it reads as a smear
+// behind the text rather than as a bar.
+func TestTheSelectionHighlightFillsTheRow(t *testing.T) {
+	m := sample()
+	m.Tracks = []Track{{VideoID: "a", Title: "Alpha", Artist: "A"}}
+	m.trackCursor = 0
+
+	row := strings.Split(m.View().Content, "\n")[tabsHeight]
+	if lipgloss.Width(plain(row)) != m.width {
+		t.Fatalf("the row is %d cells, want %d", lipgloss.Width(plain(row)), m.width)
+	}
+	// Nothing turns the background off part way along.
+	if i := strings.Index(row, "\x1b[49m"); i >= 0 && i < strings.LastIndex(row, "Alpha") {
+		t.Errorf("the highlight stops before the text ends: %q", row)
+	}
+}
+
+// Grey on a filled background is nothing, so a styled row must not mute its
+// own columns.
+func TestAHighlightedRowDoesNotMuteItsColumns(t *testing.T) {
+	m := sample()
+	m.Tracks = []Track{{VideoID: "a", Title: "Alpha", Artist: "DAPHNI"}}
+	m.trackCursor = 0
+
+	row := strings.Split(m.View().Content, "\n")[tabsHeight]
+	artist := row[strings.Index(row, "DAPHNI"):]
+	if strings.Contains(artist[:len("DAPHNI")], "\x1b[") {
+		t.Errorf("the artist is styled separately on a highlighted row: %q", row)
+	}
+	if !sgrCodes(row)["100"] {
+		t.Fatalf("the row is not highlighted at all: %v", sgrCodes(row))
+	}
+}

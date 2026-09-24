@@ -741,11 +741,40 @@ var (
 )
 
 var (
-	dim      = lipgloss.NewStyle().Foreground(muted)
-	failed   = lipgloss.NewStyle().Foreground(alert)
-	selected = lipgloss.NewStyle().Bold(true).Foreground(accent)
-	active   = lipgloss.NewStyle().Foreground(accent)
+	dim    = lipgloss.NewStyle().Foreground(muted)
+	failed = lipgloss.NewStyle().Foreground(alert)
+	active = lipgloss.NewStyle().Foreground(accent)
 )
+
+// A row carries two independent things: whether it is the track playing,
+// and whether it is the one under the cursor. Colour says the first and a
+// filled background says the second, so a row can say both at once — which
+// it has to, since the cursor is usually on the track that is playing.
+var (
+	rowPlaying  = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	rowSelected = lipgloss.NewStyle().Background(muted)
+	rowBoth     = lipgloss.NewStyle().Bold(true).Foreground(accent).Background(muted)
+)
+
+// rowStyle picks how a row is drawn, and reports whether it is styled at
+// all. An unstyled row mutes its own columns; a styled one must not, since
+// grey on a filled background is nothing.
+func rowStyle(playing, selected bool) (lipgloss.Style, bool) {
+	switch {
+	case playing && selected:
+		return rowBoth, true
+	case playing:
+		return rowPlaying, true
+	case selected:
+		return rowSelected, true
+	}
+	return lipgloss.Style{}, false
+}
+
+// isPlaying reports whether a row is the track mpv is on.
+func (m Model) isPlaying(t Track) bool {
+	return m.playing.VideoID != "" && t.VideoID == m.playing.VideoID
+}
 
 // tabBorder is a rounded box whose bottom edge is open on the tab in front,
 // so it reads as joined to the table below it.
@@ -934,10 +963,11 @@ func (m Model) renderTracks(width, height int) string {
 		row := i + m.trackOffset
 		line := ""
 		if row < len(m.Tracks) {
-			highlighted := row == m.trackCursor
-			line = m.trackLine(m.Tracks[row], width, m.showsRating(), highlighted)
-			if highlighted {
-				line = selected.Render(line)
+			t := m.Tracks[row]
+			style, styled := rowStyle(m.isPlaying(t), row == m.trackCursor)
+			line = m.trackLine(t, width, m.showsRating(), styled)
+			if styled {
+				line = style.Render(line)
 			}
 		}
 		b.WriteString(pad(line, width))
