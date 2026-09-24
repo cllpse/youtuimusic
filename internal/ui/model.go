@@ -564,11 +564,14 @@ var (
 	// muted is grey rather than blue on purpose: it is what the accent has
 	// to stand out against.
 	muted = lipgloss.BrightBlack
+	// alert is the one thing that is not the accent. An error announcing
+	// itself by colour is the point of colouring it.
+	alert = lipgloss.Red
 )
 
 var (
 	dim      = lipgloss.NewStyle().Foreground(muted)
-	failed   = lipgloss.NewStyle().Foreground(accentBright)
+	failed   = lipgloss.NewStyle().Foreground(alert)
 	selected = lipgloss.NewStyle().Bold(true).Foreground(accent)
 	active   = lipgloss.NewStyle().Foreground(accent)
 )
