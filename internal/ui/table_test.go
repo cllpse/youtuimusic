@@ -396,3 +396,81 @@ func TestEveryHeaderLabelFitsWithItsArrow(t *testing.T) {
 		}
 	}
 }
+
+// truncate counts screen cells, which is not the same as counting runes: a
+// CJK character or an emoji takes two cells, a combining mark none.
+//
+// Cutting by rune index against a width measured in cells panicked on the
+// first title that was not Latin — "slice bounds out of range [:41] with
+// capacity 32", from a thirty-two character title seventy cells wide.
+func TestTruncateCountsCellsNotRunes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		w    int
+		want string
+	}{
+		{"fits", "hello", 10, "hello"},
+		{"exact", "hello", 5, "hello"},
+		{"latin", "hello there", 5, "hell…"},
+		{"no room", "hello", 1, "…"},
+		{"zero", "hello", 0, ""},
+		{"negative", "hello", -3, ""},
+		// Each of these is two cells wide, so five fit in ten.
+		{"cjk fits", "宇多田ヒカル", 12, "宇多田ヒカル"},
+		{"cjk cut", "宇多田ヒカル", 7, "宇多田…"},
+		{"cjk odd width", "宇多田ヒカル", 6, "宇多…"},
+		{"emoji", "party 🎉🎉🎉🎉", 9, "party 🎉…"},
+		{"combining marks are free", "ééé", 3, "ééé"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncate(tc.in, tc.w)
+			if got != tc.want {
+				t.Errorf("truncate(%q, %d) = %q, want %q", tc.in, tc.w, got, tc.want)
+			}
+			if w := lipgloss.Width(got); w > max(tc.w, 0) {
+				t.Errorf("result is %d cells, past the %d asked for", w, tc.w)
+			}
+		})
+	}
+}
+
+// Whatever it is given, it must not exceed the width and must not panic.
+func TestTruncateNeverOverrunsOrPanics(t *testing.T) {
+	inputs := []string{
+		"", "a", "ascii title here",
+		"宇多田ヒカル - First Love (オリジナル)",
+		"🎉🎉🎉🎉🎉🎉🎉🎉",
+		"mixed 日本語 and latin and 🎉",
+		strings.Repeat("字", 40),
+		// The shape that crashed: thirty-five characters, seventy cells.
+		strings.Repeat("字", 35),
+		"é" + strings.Repeat("字", 10),
+	}
+	for _, in := range inputs {
+		for w := -2; w < 50; w++ {
+			got := truncate(in, w)
+			if cells := lipgloss.Width(got); cells > max(w, 0) {
+				t.Errorf("truncate(%q, %d) is %d cells", in, w, cells)
+			}
+		}
+	}
+}
+
+// And a table of such titles still lays out square.
+func TestRowsAreSquareWithWideCharacters(t *testing.T) {
+	tracks := []Track{
+		{VideoID: "a", Title: "宇多田ヒカル - First Love", Artist: "宇多田ヒカル", Duration: time.Minute},
+		{VideoID: "b", Title: strings.Repeat("字", 40), Artist: "🎉🎉🎉🎉", Duration: time.Minute},
+		{VideoID: "c", Title: "plain", Artist: "plain", Duration: time.Minute},
+	}
+	for _, width := range []int{20, 42, 60, 110} {
+		table := trackTable{tracks: tracks, width: width, height: len(tracks) + headerRows,
+			showRating: true, now: time.Now()}
+		for i, row := range table.rows() {
+			if got := lipgloss.Width(plain(row)); got != width {
+				t.Errorf("width %d: row %d is %d cells", width, i, got)
+			}
+		}
+	}
+}

@@ -1228,6 +1228,13 @@ func (m Model) renderBar() string {
 	return m.bar.ViewAs(m.fraction())
 }
 
+// truncate cuts a string to fit a number of screen cells, ending it with an
+// ellipsis to say that something was cut.
+//
+// It counts cells and not runes, which is not the same count: a CJK
+// character or an emoji occupies two, a combining mark none. Slicing by rune
+// index against a width measured in cells panics on the first title that is
+// not Latin.
 func truncate(s string, w int) string {
 	if w <= 0 {
 		return ""
@@ -1235,11 +1242,23 @@ func truncate(s string, w int) string {
 	if lipgloss.Width(s) <= w {
 		return s
 	}
-	runes := []rune(s)
 	if w == 1 {
-		return string(runes[:1])
+		// No room for both a character and the mark saying there was more.
+		return "…"
 	}
-	return string(runes[:w-1]) + "…"
+
+	var b strings.Builder
+	b.Grow(len(s))
+	width := 0
+	for _, r := range s {
+		cells := lipgloss.Width(string(r))
+		if width+cells > w-1 {
+			break
+		}
+		b.WriteRune(r)
+		width += cells
+	}
+	return b.String() + "…"
 }
 
 func pad(s string, w int) string {
