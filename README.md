@@ -64,12 +64,19 @@ the first page and fill in the rest behind it.
 | `+` / `-` | thumbs up or down; the same key again clears it |
 | `q`, `ctrl+c` | quit |
 
+With the track menu open, `j`/`k` and `enter` work it and `esc` closes it.
+
 The title, the progress bar and the controls share one box: transport on the
 left, thumbs in the middle, repeat on the right. A liked row is marked with
 the same thumb icon the control uses, except in the liked playlist itself,
 where every row would carry it. The thumbs there act on what is playing, which is what
 sitting beside the transport means; `+` and `-` still act on the highlighted
 row.
+
+Right-clicking a track opens a menu: like it, go to its album, go to its
+artist. The last two open as a tab, and there is only ever one of those —
+going to an album and then to its artist replaces it rather than leaving a
+trail across the row. A track that links nowhere has those rows greyed.
 
 The mouse works too: click a tab to open it, click a track to select it and
 again to play it, click any control, and drag the progress bar to scrub. The wheel changes tab

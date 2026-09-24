@@ -43,6 +43,16 @@ func (f *fakeLibrary) PlaylistTracks(_ context.Context, id string) ([]ytm.Track,
 	return f.tracks[id], nil
 }
 
+func (f *fakeLibrary) AlbumTracks(_ context.Context, id string) ([]ytm.Track, error) {
+	f.askedFor = append(f.askedFor, "album:"+id)
+	return f.tracks[id], f.err
+}
+
+func (f *fakeLibrary) ArtistTracks(_ context.Context, id string) ([]ytm.Track, error) {
+	f.askedFor = append(f.askedFor, "artist:"+id)
+	return f.tracks[id], f.err
+}
+
 func (f *fakeLibrary) Search(_ context.Context, query string) ([]ytm.Track, error) {
 	f.askedFor = append(f.askedFor, "search:"+query)
 	return f.results, f.err

@@ -42,10 +42,21 @@ func (r Rating) glyph() string {
 	}
 }
 
+// tabKind says what a tab holds, which is what decides how to fetch it.
+type tabKind int
+
+const (
+	tabPlaylist tabKind = iota
+	tabSearch
+	tabAlbum
+	tabArtist
+)
+
 // Playlist is one tab.
 type Playlist struct {
 	ID    string
 	Title string
+	kind  tabKind
 }
 
 // Track is one row in the table.
@@ -55,6 +66,11 @@ type Track struct {
 	Artist   string
 	Duration time.Duration
 	Rating   Rating
+	// Album names the tab the menu opens; AlbumID and ArtistID are where
+	// its "go to" rows lead, and are empty when a row leads nowhere.
+	Album    string
+	AlbumID  string
+	ArtistID string
 }
 
 // searchTabID names the tab holding the last search. It cannot collide with
@@ -89,8 +105,12 @@ type Model struct {
 	// Search
 	Searching bool
 	Query     string
-	// searchTitle labels the results tab, and is empty when there is none.
-	searchTitle string
+	// extra is the one tab that is not a playlist — search results, an
+	// album, an artist. Opening another replaces it rather than adding to
+	// the row.
+	extra Playlist
+
+	menu trackMenu
 
 	// playing is the track mpv is on, held whole rather than by id so the
 	// controls can still show and rate it after another tab is opened.
@@ -188,7 +208,7 @@ func (m *Model) startLoading() tea.Cmd {
 
 // tabCount is the playlists plus the search results, when there are any.
 func (m Model) tabCount() int {
-	if m.searchTitle != "" {
+	if m.extra.ID != "" {
 		return len(m.Playlists) + 1
 	}
 	return len(m.Playlists)
@@ -198,8 +218,8 @@ func (m Model) tabAt(i int) Playlist {
 	if i >= 0 && i < len(m.Playlists) {
 		return m.Playlists[i]
 	}
-	if i == len(m.Playlists) && m.searchTitle != "" {
-		return Playlist{ID: searchTabID, Title: m.searchTitle}
+	if i == len(m.Playlists) && m.extra.ID != "" {
+		return m.extra
 	}
 	return Playlist{}
 }
@@ -315,6 +335,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
+		if m.menu.open {
+			return m.handleMenuKey(msg.String())
+		}
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
@@ -343,7 +366,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		tab := m.tabAt(m.tabCursor)
-		if tab.ID == "" || tab.ID == searchTabID {
+		// Search results arrive with the search; there is nothing to fetch.
+		if tab.ID == "" || tab.kind == tabSearch {
 			return m, nil
 		}
 		return m, m.fetchTracks(tab)
@@ -361,6 +385,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.showTab()
 
 	case tracksMsg:
+		// A menu is anchored to a row of the list being replaced.
+		m.menu = trackMenu{}
 		tracks := fromAPI(msg.tracks)
 		// The server can still describe a just-rated track the old way, so
 		// what this app did wins over what the list says.
@@ -392,7 +418,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case searchMsg:
-		m.searchTitle = msg.query
+		m.extra = Playlist{ID: searchTabID, Title: msg.query, kind: tabSearch}
 		m.cache[searchTabID] = fromAPI(msg.tracks)
 		m.tabCursor = m.tabCount() - 1
 		return m.showTab()
@@ -710,6 +736,18 @@ func (m Model) View() tea.View {
 		m.renderTracks(m.width, m.bodyHeight()),
 		m.renderPlayer(),
 	)
+	if m.menu.open {
+		// The menu sits over the frame rather than in it, so opening one
+		// does not reflow anything underneath.
+		//
+		// This goes through a compositor rather than composing the layers
+		// onto a canvas directly: a layer's own Draw ignores its position,
+		// and only the compositor works out where each one belongs.
+		content = lipgloss.NewCompositor(
+			lipgloss.NewLayer(content),
+			lipgloss.NewLayer(m.renderMenu()).X(m.menu.x).Y(m.menu.y).Z(1),
+		).Render()
+	}
 
 	v := tea.NewView(content)
 	v.AltScreen = true

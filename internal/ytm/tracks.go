@@ -16,6 +16,10 @@ type Track struct {
 	Artist   string
 	Album    string
 	Duration time.Duration
+	// AlbumID and ArtistID are browse ids, empty when the row does not
+	// link anywhere — a single with no album page, say.
+	AlbumID  string
+	ArtistID string
 	// Rating is the thumbs state the server already has for this track.
 	Rating Rating
 	// SetVideoID identifies this track's occurrence within a playlist, which
@@ -77,6 +81,32 @@ func (c *Client) Search(ctx context.Context, query string) ([]Track, error) {
 	return parseTracks(raw)
 }
 
+// AlbumTracks returns the tracks on an album.
+func (c *Client) AlbumTracks(ctx context.Context, browseID string) ([]Track, error) {
+	return c.browseTracks(ctx, browseID)
+}
+
+// ArtistTracks returns the songs on an artist's page. It is what the page
+// itself leads with rather than everything they have recorded — the server
+// decides how much of that to send.
+func (c *Client) ArtistTracks(ctx context.Context, browseID string) ([]Track, error) {
+	return c.browseTracks(ctx, browseID)
+}
+
+// browseTracks reads whatever track rows a browse id's page carries. Albums
+// and artist pages are laid out differently from each other and from a
+// playlist, but the rows themselves are the same renderer.
+func (c *Client) browseTracks(ctx context.Context, browseID string) ([]Track, error) {
+	if browseID == "" {
+		return nil, fmt.Errorf("ytm: browse: no id")
+	}
+	raw, err := c.post(ctx, "browse", map[string]any{"browseId": browseID})
+	if err != nil {
+		return nil, err
+	}
+	return parseTracks(raw)
+}
+
 // Rate sets the thumbs state of a track. Applying the rating a track already
 // has is the caller's job to avoid; RatingNone clears whatever is set.
 func (c *Client) Rate(ctx context.Context, videoID string, r Rating) error {
@@ -107,6 +137,8 @@ func parseTracks(raw json.RawMessage) ([]Track, error) {
 			Artist:   flexColumn(item, 1),
 			Album:    flexColumn(item, 2),
 			Duration: parseDuration(fixedColumn(item, 0)),
+			AlbumID:  browseTarget(item, pageTypeAlbum),
+			ArtistID: browseTarget(item, pageTypeArtist),
 			Rating:   ratingOf(item),
 		}
 		if pid, ok := item["playlistItemData"].(map[string]any); ok {
@@ -165,6 +197,39 @@ func ratingOf(item map[string]any) Rating {
 		}
 	}
 	return RatingNone
+}
+
+// The page a browse id leads to, which is how an album link is told from an
+// artist link when both hang off the same row.
+const (
+	pageTypeAlbum  = "MUSIC_PAGE_TYPE_ALBUM"
+	pageTypeArtist = "MUSIC_PAGE_TYPE_ARTIST"
+)
+
+// browseTarget finds the browse id on a row that leads to a given kind of
+// page. The links live in the column runs — the artist in one, the album in
+// another — but which column is which varies, so they are told apart by
+// where they lead rather than by where they sit.
+func browseTarget(item map[string]any, pageType string) string {
+	for _, node := range findAll(item, "browseEndpoint") {
+		endpoint, ok := node.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, _ := endpoint["browseId"].(string)
+		if id == "" || pageTypeOf(endpoint) != pageType {
+			continue
+		}
+		return id
+	}
+	return ""
+}
+
+func pageTypeOf(endpoint map[string]any) string {
+	configs, _ := endpoint["browseEndpointContextSupportedConfigs"].(map[string]any)
+	music, _ := configs["browseEndpointContextMusicConfig"].(map[string]any)
+	pageType, _ := music["pageType"].(string)
+	return pageType
 }
 
 func firstVideoID(item map[string]any) string {

@@ -82,15 +82,47 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseWheelMsg:
+		if m.menu.open {
+			return m, nil // the menu is anchored; scrolling under it would lie
+		}
 		return m.handleWheel(mouse)
 
 	case tea.MouseClickMsg:
-		if mouse.Button != tea.MouseLeft {
-			return m, nil
+		switch mouse.Button {
+		case tea.MouseRight:
+			return m.openMenuAt(mouse)
+		case tea.MouseLeft:
+			if m.menu.open {
+				return m.clickMenu(mouse)
+			}
+			return m.handleClick(mouse)
 		}
-		return m.handleClick(mouse)
 	}
 	return m, nil
+}
+
+// openMenuAt opens the track menu on whatever row was right-clicked.
+func (m Model) openMenuAt(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	where, n := m.hit(mouse.X, mouse.Y)
+	if where != regionTracks || n >= len(m.Tracks) {
+		return m, nil
+	}
+	m.trackCursor = n
+	m.scroll()
+	return m.openMenu(m.Tracks[n], mouse.X, mouse.Y), nil
+}
+
+// clickMenu runs a row, or dismisses the menu when the click lands outside
+// it — which is what clicking away from a menu means everywhere else.
+func (m Model) clickMenu(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	if !m.menuContains(mouse.X, mouse.Y) {
+		m.menu = trackMenu{}
+		return m, nil
+	}
+	if row, ok := m.menuHit(mouse.X, mouse.Y); ok {
+		return m.activate(row)
+	}
+	return m, nil // on its border, which is neither a row nor outside
 }
 
 func (m Model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {

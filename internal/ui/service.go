@@ -24,6 +24,8 @@ const (
 type Library interface {
 	LibraryPlaylists(ctx context.Context) ([]ytm.Playlist, error)
 	PlaylistTracks(ctx context.Context, playlistID string) ([]ytm.Track, error)
+	AlbumTracks(ctx context.Context, browseID string) ([]ytm.Track, error)
+	ArtistTracks(ctx context.Context, browseID string) ([]ytm.Track, error)
 	Search(ctx context.Context, query string) ([]ytm.Track, error)
 	Rate(ctx context.Context, videoID string, r ytm.Rating) error
 }
@@ -102,6 +104,9 @@ func fromAPI(ts []ytm.Track) []Track {
 			Artist:   t.Artist,
 			Duration: t.Duration,
 			Rating:   fromAPIRating(t.Rating),
+			Album:    t.Album,
+			AlbumID:  t.AlbumID,
+			ArtistID: t.ArtistID,
 		})
 	}
 	return out
@@ -142,7 +147,18 @@ func (m Model) fetchTracks(p Playlist) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		ts, err := lib.PlaylistTracks(ctx, p.ID)
+		var (
+			ts  []ytm.Track
+			err error
+		)
+		switch p.kind {
+		case tabAlbum:
+			ts, err = lib.AlbumTracks(ctx, p.ID)
+		case tabArtist:
+			ts, err = lib.ArtistTracks(ctx, p.ID)
+		default:
+			ts, err = lib.PlaylistTracks(ctx, p.ID)
+		}
 		if err != nil {
 			return errMsg{fmt.Errorf("%s: %w", p.Title, err)}
 		}

@@ -215,3 +215,90 @@ func TestARowWithNoLikeStatusIsUnrated(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// A row links to both an album and an artist, and the two are told apart by
+// where they lead rather than by which column they sit in.
+func TestAlbumAndArtistIDsAreReadFromARow(t *testing.T) {
+	link := func(id, pageType string) string {
+		return `{"text":"x","navigationEndpoint":{"browseEndpoint":{"browseId":"` + id + `",
+		  "browseEndpointContextSupportedConfigs":{"browseEndpointContextMusicConfig":
+		    {"pageType":"` + pageType + `"}}}}}`
+	}
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(signedInBody(`{"musicResponsiveListItemRenderer":{
+		  "flexColumns":[
+		    {"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Poly"}]}}},
+		    {"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[` +
+			link("UCartist", pageTypeArtist) + `]}}},
+		    {"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[` +
+			link("MPREbalbum", pageTypeAlbum) + `]}}}],
+		  "playlistItemData":{"videoId":"v1"}}}`)))
+	})
+	got, err := c.PlaylistTracks(context.Background(), "PL1")
+	if err != nil {
+		t.Fatalf("PlaylistTracks: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d tracks", len(got))
+	}
+	if got[0].AlbumID != "MPREbalbum" {
+		t.Errorf("album id = %q", got[0].AlbumID)
+	}
+	if got[0].ArtistID != "UCartist" {
+		t.Errorf("artist id = %q", got[0].ArtistID)
+	}
+}
+
+// A row that links nowhere is not an error; it just has nowhere to go.
+func TestARowWithNoLinksHasNoIDs(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(signedInBody(trackRow("t", "a", "b", "3:00", "v1", "s1"))))
+	})
+	got, _ := c.PlaylistTracks(context.Background(), "PL1")
+	if len(got) != 1 || got[0].AlbumID != "" || got[0].ArtistID != "" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAlbumAndArtistBrowseByID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(c *Client) ([]Track, error)
+	}{
+		{"album", func(c *Client) ([]Track, error) {
+			return c.AlbumTracks(context.Background(), "MPREbxyz")
+		}},
+		{"artist", func(c *Client) ([]Track, error) {
+			return c.ArtistTracks(context.Background(), "UCxyz")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotID string
+			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				gotID, _ = body["browseId"].(string)
+				_, _ = w.Write([]byte(signedInBody(
+					trackRow("Track", "Artist", "Album", "3:00", "v1", ""))))
+			})
+			got, err := tc.call(c)
+			if err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			// No VL prefix: these are not playlists.
+			if gotID != "MPREbxyz" && gotID != "UCxyz" {
+				t.Errorf("browseId = %q", gotID)
+			}
+			if len(got) != 1 || got[0].Title != "Track" {
+				t.Fatalf("got %+v", got)
+			}
+		})
+	}
+}
+
+func TestBrowsingWithNoIDIsAnError(t *testing.T) {
+	c := NewClient(Session{Cookie: testCookie})
+	if _, err := c.AlbumTracks(context.Background(), ""); err == nil {
+		t.Fatal("expected an error")
+	}
+}
