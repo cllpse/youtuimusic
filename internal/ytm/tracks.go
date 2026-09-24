@@ -201,9 +201,11 @@ func parseReleases(raw json.RawMessage) []Track {
 			continue
 		}
 		seen[id] = true
+		title := tidy(runsText(item["title"]))
 		out = append(out, Track{
-			Title:   tidy(runsText(item["title"])),
+			Title:   title,
 			Artist:  tidy(runsText(item["subtitle"])),
+			Album:   title,
 			AlbumID: id,
 		})
 	}

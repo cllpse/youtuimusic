@@ -26,6 +26,9 @@ type trackTable struct {
 	// showRating is false where every row would carry the same mark, as in
 	// the liked playlist.
 	showRating bool
+	// titleOnly drops every column but the first. An album is one artist's
+	// record, so naming them down the page says the same thing each time.
+	titleOnly bool
 	// playing is the video id to colour, and is empty when nothing is.
 	playing string
 	sort    sortSpec
@@ -77,6 +80,9 @@ func (t trackTable) hasScrollbar() bool {
 // showsAdded reports whether any row knows when it was added. Most listings
 // do not say, and a column of blanks is worse than no column.
 func (t trackTable) showsAdded() bool {
+	if t.titleOnly {
+		return false
+	}
 	for _, track := range t.tracks {
 		if !track.Added.IsZero() {
 			return true
@@ -91,6 +97,9 @@ type layout struct {
 }
 
 func (t trackTable) layout(width int) layout {
+	if t.titleOnly {
+		return layout{title: max(width-markWidth, 0)}
+	}
 	spare := width - markWidth - lengthWidth - 2
 	added := 0
 	if t.showsAdded() {
@@ -146,6 +155,10 @@ func (t trackTable) header(cols layout) string {
 		// Too narrow for columns, so naming them would run past the edge.
 		return strings.Repeat(" ", max(t.width, 0))
 	}
+	if t.titleOnly {
+		return strings.Repeat(" ", markWidth) +
+			t.headerCell(sortTitle, "Title", cols.title)
+	}
 	cells := []struct {
 		by    sortColumn
 		label string
@@ -168,15 +181,19 @@ func (t trackTable) header(cols layout) string {
 		if i > 0 {
 			out += " "
 		}
-		label := cell.label
-		style := dim
-		if t.sort.by == cell.by {
-			label += t.sort.arrow()
-			style = active
-		}
-		out += style.Render(pad(truncate(label, cell.width), cell.width))
+		out += t.headerCell(cell.by, cell.label, cell.width)
 	}
 	return out
+}
+
+// headerCell names one column, marked when it is the one in use.
+func (t trackTable) headerCell(by sortColumn, label string, width int) string {
+	style := dim
+	if t.sort.by == by {
+		label += t.sort.arrow()
+		style = active
+	}
+	return style.Render(pad(truncate(label, width), width))
 }
 
 // headerSpans is where each column sits on the header row, so that clicking
@@ -195,13 +212,14 @@ func (t trackTable) headerSpans() []struct {
 		by         sortColumn
 		start, end int
 	}
-	widths := []span{
-		{sortTitle, 0, cols.title},
-		{sortArtist, 0, cols.artist},
-		{sortLength, 0, lengthWidth},
-	}
-	if cols.added > 0 {
-		widths = append(widths, span{sortAdded, 0, cols.added})
+	widths := []span{{sortTitle, 0, cols.title}}
+	if !t.titleOnly {
+		widths = append(widths,
+			span{sortArtist, 0, cols.artist},
+			span{sortLength, 0, lengthWidth})
+		if cols.added > 0 {
+			widths = append(widths, span{sortAdded, 0, cols.added})
+		}
 	}
 
 	at := markWidth
@@ -267,6 +285,9 @@ func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string
 	if cols.title+cols.artist < 4 {
 		// No room for columns; the title is the only thing worth keeping.
 		return truncate(prefix+track.Title, t.width)
+	}
+	if t.titleOnly {
+		return prefix + pad(truncate(track.Title, cols.title), cols.title)
 	}
 
 	artist := pad(truncate(track.Artist, cols.artist), cols.artist)

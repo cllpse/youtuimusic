@@ -28,9 +28,11 @@ func TestTheMainViewAndThePopoverShareOneTable(t *testing.T) {
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = sized.(Model)
 	m.Tracks, m.trackCursor, m.playing = tracks, 1, tracks[2]
+	// An artist, not an album: an album's table is deliberately narrower,
+	// and this is about the two sharing one renderer.
 	m.detour = detour{
 		active: true,
-		tab:    Playlist{ID: "MPREb", Title: "Cherry", kind: tabAlbum},
+		tab:    Playlist{ID: "UCd", Title: "DAPHNI", kind: tabArtist},
 		tracks: tracks,
 		cursor: 1,
 	}
@@ -472,5 +474,50 @@ func TestRowsAreSquareWithWideCharacters(t *testing.T) {
 				t.Errorf("width %d: row %d is %d cells", width, i, got)
 			}
 		}
+	}
+}
+
+// An album is one artist's record, so naming them down the page says the
+// same thing on every row.
+func TestAnAlbumsTableIsTitlesOnly(t *testing.T) {
+	tracks := tableTracks()
+	tracks[0].Added = time.Now()
+
+	full := trackTable{tracks: tracks, width: 70, height: 6, showRating: true, now: time.Now()}
+	album := full
+	album.titleOnly = true
+
+	header := plain(album.rows()[0])
+	if !strings.Contains(header, "Title") {
+		t.Errorf("no title column: %q", header)
+	}
+	for _, gone := range []string{"Artist", "Length", "Added"} {
+		if strings.Contains(header, gone) {
+			t.Errorf("%s is still a column: %q", gone, header)
+		}
+	}
+	// The full table still has them, so the comparison means something.
+	if got := plain(full.rows()[0]); !strings.Contains(got, "Artist") {
+		t.Fatalf("the full table lost its columns too: %q", got)
+	}
+
+	// The rows carry only the title, and still fill the width.
+	for i, row := range album.rows() {
+		if lipgloss.Width(plain(row)) != 70 {
+			t.Errorf("row %d is %d cells", i, lipgloss.Width(plain(row)))
+		}
+	}
+	// Exactly the mark and the title, and nothing after them. Checked whole
+	// rather than by substring: the artist here is "A", which is inside
+	// "Alpha".
+	first := plain(album.rows()[1])
+	if got, want := strings.TrimSpace(first), iconThumbUp+" Alpha"; got != want {
+		t.Errorf("row reads %q, want %q", got, want)
+	}
+
+	// And only that column answers to a click.
+	spans := album.headerSpans()
+	if len(spans) != 1 || spans[0].by != sortTitle {
+		t.Errorf("header spans = %+v", spans)
 	}
 }

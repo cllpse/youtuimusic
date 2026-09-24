@@ -509,6 +509,10 @@ func TestArtistPageIncludesReleases(t *testing.T) {
 		if release.VideoID != "" {
 			t.Errorf("a release has a video id: %+v", release)
 		}
+		// The header of the album page comes from Album, not Title.
+		if release.Album != release.Title {
+			t.Errorf("a release does not carry its album name: %+v", release)
+		}
 		if release.AlbumID == "" {
 			t.Errorf("a release has no album to open: %+v", release)
 		}

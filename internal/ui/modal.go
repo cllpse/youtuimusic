@@ -88,17 +88,23 @@ func (m Model) openSearch() (tea.Model, tea.Cmd) {
 // search box being typed into.
 func (m Model) modalHeader(inner int) string {
 	if m.detour.tab.kind != tabSearch {
-		// The way back is a button, drawn the way the transport's buttons
-		// are, so that it reads as something to press rather than as a mark.
-		prefix, used := "", 0
+		// The way back stays against the left edge, drawn the way the
+		// transport's buttons are so that it reads as something to press.
+		// What it is showing sits in the middle of the row, where a title
+		// belongs, and gives way to the button rather than under it.
+		back, taken := "", 0
 		if len(m.history) > 0 {
-			prefix = buttonLitStyle.Render(" "+iconBack+" ") + menuGap
-			used = buttonWidth + len(menuGap)
+			back = buttonLitStyle.Render(" " + iconBack + " ")
+			taken = buttonWidth
 		}
-		label := m.modalIcon() + menuGap + m.modalKind()
-		room := max(inner-used-lipgloss.Width(label)-len(menuGap), 0)
-		return prefix + active.Render(label) + menuGap +
-			pad(truncate(m.detour.tab.Title, room), room)
+		prefix := m.modalIcon() + menuGap + m.modalKind() + menuGap
+		room := max(inner-taken-lipgloss.Width(prefix), 0)
+		title := active.Render(prefix) + truncate(m.detour.tab.Title, room)
+
+		width := lipgloss.Width(title)
+		start := max((inner-width)/2, taken)
+		return back + strings.Repeat(" ", start-taken) + title +
+			strings.Repeat(" ", max(inner-start-width, 0))
 	}
 	query := m.detour.query
 	if m.detour.typing {
@@ -175,6 +181,7 @@ func (m Model) renderModal() string {
 		width:       inner,
 		height:      height,
 		showRating:  m.detour.tab.ID != likedPlaylistID,
+		titleOnly:   m.detour.tab.kind == tabAlbum,
 		playing:     m.playing.VideoID,
 		more:        m.detour.more.More(),
 		loadingMore: m.loadingMore,

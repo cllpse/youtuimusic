@@ -222,12 +222,6 @@ func (m Model) rateTrack(t Track, r Rating) (tea.Model, tea.Cmd) {
 // goTo shows an album or an artist. It takes over the view rather than
 // joining the tab row: it is somewhere you went, not somewhere you keep.
 func (m Model) goTo(tab Playlist) (tea.Model, tea.Cmd) {
-	if tab.Title == "" {
-		tab.Title = "Album"
-		if tab.kind == tabArtist {
-			tab.Title = "Artist"
-		}
-	}
 	next, cmd := m.enterDetour(tab)
 	return next, cmd
 }

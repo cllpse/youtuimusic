@@ -809,3 +809,59 @@ func TestThePlayerDoesNotDismissAPopover(t *testing.T) {
 		t.Error("clicking beside it did not dismiss")
 	}
 }
+
+// The way back stays at the left edge; what the popover is showing sits in
+// the middle of the row.
+func TestTheModalTitleIsCentred(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
+
+	// Without a way back, centred on the whole row.
+	m = openVia(t, m, menuArtist)
+	header := plain(strings.Split(m.renderModal(), "\n")[1])
+	if off := centreOffset(header, iconArtist, "DAPHNI"); off > 1 {
+		t.Errorf("off centre by %d without a button: %q", off, header)
+	}
+
+	// With one, still centred — and the button is on the left.
+	next, cmd := m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+	header = plain(strings.Split(m.renderModal(), "\n")[1])
+	// Border, padding, then the button's own leading cell.
+	if at, want := column(header, iconBack), modalChrome/2+1; at != want {
+		t.Errorf("the button is at column %d, want %d: %q", at, want, header)
+	}
+	if off := centreOffset(header, iconAlbum, "Cherry"); off > 1 {
+		t.Errorf("off centre by %d with a button: %q", off, header)
+	}
+	if column(header, iconBack) > column(header, iconAlbum) {
+		t.Errorf("the button is not before the title: %q", header)
+	}
+}
+
+// centreOffset is how far a title's middle is from the row's, in cells. The
+// title runs from its icon to the end of its name.
+func centreOffset(header, icon, name string) int {
+	start := column(header, icon)
+	end := column(header, name) + lipgloss.Width(name)
+	if start < 0 || end < start {
+		return 1 << 30
+	}
+	middle := start + (end-start)/2
+	off := middle - lipgloss.Width(header)/2
+	if off < 0 {
+		return -off
+	}
+	return off
+}
+
+// The header names the kind on its own, so a nameless page must not repeat it.
+func TestANamelessPageDoesNotRepeatItsKind(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+	next, cmd := m.goTo(Playlist{ID: "MPREb", kind: tabAlbum})
+	m = drain(t, next.(Model), cmd)
+	header := plain(strings.Split(m.renderModal(), "\n")[1])
+	if strings.Count(header, "Album") != 1 {
+		t.Errorf("the kind is repeated: %q", header)
+	}
+}
