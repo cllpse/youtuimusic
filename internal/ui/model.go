@@ -110,7 +110,8 @@ type Model struct {
 	// the row.
 	extra Playlist
 
-	menu trackMenu
+	menu   trackMenu
+	detour detour
 
 	// playing is the track mpv is on, held whole rather than by id so the
 	// controls can still show and rate it after another tab is opened.
@@ -134,6 +135,7 @@ type Model struct {
 	// Mouse state: a drag on the progress bar, and enough of the last click
 	// to recognise the second one of a pair.
 	scrubbing       bool
+	draggingScroll  bool
 	lastClickAt     time.Time
 	lastClickRegion region
 	lastClickRow    int
@@ -205,6 +207,73 @@ func (m *Model) startLoading() tea.Cmd {
 }
 
 // ---------------------------------------------------------------- tabs ---
+
+// detour is a temporary view of an album or an artist. It takes over the
+// screen rather than joining the tab row, and leaving it puts back what was
+// there, including where the reader had got to.
+type detour struct {
+	active bool
+	tab    Playlist
+
+	fromTab    int
+	fromCursor int
+	fromOffset int
+}
+
+// currentTab is what the list is showing: the detour when there is one, the
+// tab in front otherwise.
+func (m Model) currentTab() Playlist {
+	if m.detour.active {
+		return m.detour.tab
+	}
+	return m.tabAt(m.tabCursor)
+}
+
+// enterDetour shows an album or an artist in place of everything.
+func (m Model) enterDetour(tab Playlist) (Model, tea.Cmd) {
+	if tab.ID == "" {
+		return m, nil
+	}
+	if !m.detour.active {
+		// Only the first hop remembers the way back, so going from an album
+		// to its artist still returns to the playlist it started from.
+		m.detour = detour{
+			fromTab:    m.tabCursor,
+			fromCursor: m.trackCursor,
+			fromOffset: m.trackOffset,
+		}
+	}
+	m.detour.active, m.detour.tab = true, tab
+	m.menu = trackMenu{}
+	m.trackCursor, m.trackOffset = 0, 0
+
+	if tracks, ok := m.cache[tab.ID]; ok {
+		m.Tracks, m.showingID, m.loading, m.Err = tracks, tab.ID, false, nil
+		if len(tracks) > 0 {
+			return m, m.prefetch(tracks[0].VideoID)
+		}
+		return m, nil
+	}
+	m.Tracks, m.showingID = nil, ""
+	return m, batch(m.startLoading(), m.scheduleTabLoad())
+}
+
+// leaveDetour puts back the tab and the position the detour interrupted.
+func (m Model) leaveDetour() (Model, tea.Cmd) {
+	if !m.detour.active {
+		return m, nil
+	}
+	back := m.detour
+	m.detour = detour{}
+	m.menu = trackMenu{}
+	m.tabCursor = clamp(back.fromTab, m.tabCount())
+
+	m, cmd := m.showTab()
+	m.trackCursor = clamp(back.fromCursor, len(m.Tracks))
+	m.trackOffset = back.fromOffset
+	m.scroll()
+	return m, cmd
+}
 
 // tabCount is the playlists plus the search results, when there are any.
 func (m Model) tabCount() int {
@@ -365,7 +434,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.generation != m.tabGen {
 			return m, nil
 		}
-		tab := m.tabAt(m.tabCursor)
+		tab := m.currentTab()
 		// Search results arrive with the search; there is nothing to fetch.
 		if tab.ID == "" || tab.kind == tabSearch {
 			return m, nil
@@ -398,8 +467,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.cache[msg.id] = tracks
-		if m.tabAt(m.tabCursor).ID != msg.id {
-			return m, nil // the tab moved on while this was in flight
+		if m.currentTab().ID != msg.id {
+			return m, nil // the view moved on while this was in flight
 		}
 		// A refetch of the list already on screen keeps the reader's place
 		// in it; arriving at a new tab starts at the top.
@@ -541,9 +610,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m.press(controlRepeat)
 
+	case "esc":
+		return m.leaveDetour()
+
 	case "left", "h", "shift+tab":
+		if m.detour.active {
+			return m.leaveDetour()
+		}
 		return m.selectTab(m.tabCursor - 1)
 	case "right", "l", "tab":
+		if m.detour.active {
+			return m.leaveDetour()
+		}
 		return m.selectTab(m.tabCursor + 1)
 
 	case "up", "k":
@@ -771,6 +849,12 @@ func tabWidth(title string) int {
 // Rendering and hit-testing share it, so a click lands on the tab it looks
 // like it should.
 func (m Model) tabSpans() []tabSpan {
+	if m.detour.active {
+		// One span, and clicking it is the way back.
+		width := lipgloss.Width(iconBack) + 1 + tabFurniture +
+			lipgloss.Width(truncate(m.detour.tab.Title, maxTabTitle))
+		return []tabSpan{{index: 0, start: 0, end: min(width, m.width)}}
+	}
 	count := m.tabCount()
 	if count == 0 || m.width <= 0 {
 		return nil
@@ -798,7 +882,17 @@ func (m Model) tabSpans() []tabSpan {
 	return spans
 }
 
+// iconBack leads the detour's label, so the row reads as a way out.
+const iconBack = "\U000f004d" // md-arrow_left
+
 func (m Model) renderTabs() string {
+	if m.detour.active {
+		label := iconBack + " " + truncate(m.detour.tab.Title, maxTabTitle)
+		row := activeTabStyle.Render(label)
+		gap := tabGapStyle.Render(strings.Repeat(" ", max(0, m.width-lipgloss.Width(row))))
+		return lipgloss.JoinHorizontal(lipgloss.Bottom, row, gap)
+	}
+
 	spans := m.tabSpans()
 	if len(spans) == 0 {
 		// With no tabs the row still has to be exactly as tall, or
@@ -820,6 +914,11 @@ func (m Model) renderTabs() string {
 }
 
 func (m Model) renderTracks(width, height int) string {
+	bar := m.scrollbar(height)
+	if bar != nil {
+		width-- // the last column belongs to the bar
+	}
+
 	var b strings.Builder
 	for i := 0; i < height; i++ {
 		row := i + m.trackOffset
@@ -831,11 +930,61 @@ func (m Model) renderTracks(width, height int) string {
 			}
 		}
 		b.WriteString(pad(line, width))
+		if bar != nil {
+			b.WriteString(bar[i])
+		}
 		if i < height-1 {
 			b.WriteByte('\n')
 		}
 	}
 	return b.String()
+}
+
+// hasScrollbar reports whether the list is longer than the window. The
+// column only exists when it has something to say, so a list that fits is
+// not made narrower for nothing.
+func (m Model) hasScrollbar() bool {
+	return len(m.Tracks) > m.bodyHeight()
+}
+
+// scrollbarColumn is where it is drawn.
+func (m Model) scrollbarColumn() int { return m.width - 1 }
+
+// scrollbar returns the column down the right of the list, or nil when
+// everything fits. The thumb is the same grey as the trough: the glyphs
+// carry the difference, as they do on the progress bar.
+func (m Model) scrollbar(height int) []string {
+	total := len(m.Tracks)
+	if height <= 0 || total <= height {
+		return nil
+	}
+	thumb := max(1, height*height/total)
+	start := 0
+	if span, furthest := height-thumb, total-height; furthest > 0 {
+		start = min(m.trackOffset*span/furthest, span)
+	}
+
+	out := make([]string, height)
+	for i := range out {
+		if i >= start && i < start+thumb {
+			out[i] = dim.Render("█")
+			continue
+		}
+		out[i] = dim.Render("│")
+	}
+	return out
+}
+
+// scrollTo puts the list where a point on the scrollbar says it should be.
+func (m *Model) scrollTo(y int) {
+	height := m.bodyHeight()
+	total := len(m.Tracks)
+	if height <= 1 || total <= height {
+		return
+	}
+	row := min(max(y-tabsHeight, 0), height-1)
+	furthest := total - height
+	m.trackOffset = min(max(row*furthest/(height-1), 0), furthest)
 }
 
 // trackLine draws one row. The leading column is the same two cells whether

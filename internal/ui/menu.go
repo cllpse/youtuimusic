@@ -154,9 +154,9 @@ func (m Model) activate(row int) (tea.Model, tea.Cmd) {
 	case menuLike:
 		return m.rateTrack(t, RatingUp)
 	case menuAlbum:
-		return m.openTab(Playlist{ID: t.AlbumID, Title: t.Album, kind: tabAlbum})
+		return m.goTo(Playlist{ID: t.AlbumID, Title: t.Album, kind: tabAlbum})
 	case menuArtist:
-		return m.openTab(Playlist{ID: t.ArtistID, Title: t.Artist, kind: tabArtist})
+		return m.goTo(Playlist{ID: t.ArtistID, Title: t.Artist, kind: tabArtist})
 	}
 	return m, nil
 }
@@ -174,20 +174,15 @@ func (m Model) rateTrack(t Track, r Rating) (tea.Model, tea.Cmd) {
 	return m, m.rate(t.VideoID, r, previous)
 }
 
-// openTab puts an album or an artist in the extra tab and opens it. There is
-// only ever one, so going to an album and then to its artist does not leave
-// a trail across the tab bar.
-func (m Model) openTab(tab Playlist) (tea.Model, tea.Cmd) {
-	if tab.ID == "" {
-		return m, nil
-	}
+// goTo shows an album or an artist. It takes over the view rather than
+// joining the tab row: it is somewhere you went, not somewhere you keep.
+func (m Model) goTo(tab Playlist) (tea.Model, tea.Cmd) {
 	if tab.Title == "" {
 		tab.Title = "Album"
 		if tab.kind == tabArtist {
 			tab.Title = "Artist"
 		}
 	}
-	m.extra = tab
-	m.tabCursor = m.tabCount() - 1
-	return m.showTab()
+	next, cmd := m.enterDetour(tab)
+	return next, cmd
 }

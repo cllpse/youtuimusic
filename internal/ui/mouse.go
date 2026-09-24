@@ -18,6 +18,7 @@ const (
 	regionNone region = iota
 	regionTabs
 	regionTracks
+	regionScrollbar
 	regionBar
 	regionControls
 )
@@ -39,6 +40,9 @@ func (m Model) hit(x, y int) (region, int) {
 		return regionNone, 0
 
 	case y < tabsHeight+m.bodyHeight():
+		if m.hasScrollbar() && x == m.scrollbarColumn() {
+			return regionScrollbar, y
+		}
 		// The table is scrolled, so the row on screen is not the row in the
 		// list.
 		return regionTracks, y - tabsHeight + m.trackOffset
@@ -62,6 +66,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.(type) {
 	case tea.MouseReleaseMsg:
+		if m.draggingScroll {
+			m.draggingScroll = false
+			return m, nil
+		}
 		if !m.scrubbing {
 			return m, nil
 		}
@@ -73,6 +81,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMotionMsg:
 		// Motion is only reported while a button is held down.
+		if m.draggingScroll {
+			m.scrollTo(mouse.Y)
+			return m, nil
+		}
 		if !m.scrubbing {
 			return m, nil
 		}
@@ -132,6 +144,9 @@ func (m Model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 
 	switch where {
 	case regionTabs:
+		if m.detour.active {
+			return m.leaveDetour()
+		}
 		return m.selectTab(n)
 
 	case regionTracks:
@@ -148,6 +163,11 @@ func (m Model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 
 	case regionControls:
 		return m.press(control(n))
+
+	case regionScrollbar:
+		m.draggingScroll = true
+		m.scrollTo(mouse.Y)
+		return m, nil
 
 	case regionBar:
 		if m.Length <= 0 {
@@ -181,6 +201,9 @@ func (m Model) handleWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	where, _ := m.hit(mouse.X, mouse.Y)
 	switch where {
 	case regionTabs:
+		if m.detour.active {
+			return m, nil
+		}
 		return m.selectTab(m.tabCursor + delta)
 	case regionTracks:
 		m.scrollBy(delta * wheelStep)

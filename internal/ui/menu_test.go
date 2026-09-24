@@ -139,7 +139,7 @@ func TestLikeFromTheMenuRatesTheTrack(t *testing.T) {
 	}
 }
 
-func TestGoToAlbumAndArtistOpenATab(t *testing.T) {
+func TestGoToAlbumAndArtistTakeOverTheView(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		item  menuItem
@@ -152,14 +152,22 @@ func TestGoToAlbumAndArtistOpenATab(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, lib, _, _ := menuModel(t)
+			tabs := m.tabCount()
+
 			next, cmd := m.Update(rightClick(trackX, trackRow(0)))
 			m = drain(t, next.(Model), cmd)
 			x, y := rowAt(m, tc.item)
 			next, cmd = m.Update(click(x, y))
 			m = drain(t, next.(Model), cmd)
 
-			if got, _ := m.SelectedPlaylist(); got.Title != tc.title {
-				t.Errorf("front tab is %q, want %q", got.Title, tc.title)
+			if !m.detour.active {
+				t.Fatal("the view did not change")
+			}
+			if m.detour.tab.Title != tc.title {
+				t.Errorf("showing %q, want %q", m.detour.tab.Title, tc.title)
+			}
+			if m.tabCount() != tabs {
+				t.Errorf("the tab row grew from %d to %d", tabs, m.tabCount())
 			}
 			var asked bool
 			for _, a := range lib.askedFor {
@@ -171,15 +179,62 @@ func TestGoToAlbumAndArtistOpenATab(t *testing.T) {
 			if len(m.Tracks) != 1 || m.Tracks[0].Title != tc.track {
 				t.Fatalf("tracks = %+v", m.Tracks)
 			}
+			// The tab row says where you are and how to get back.
+			row := plain(strings.Split(m.View().Content, "\n")[1])
+			if !strings.Contains(row, tc.title) || !strings.Contains(row, iconBack) {
+				t.Errorf("the tab row reads %q", row)
+			}
+			if strings.Contains(row, "Liked Music") {
+				t.Error("the playlist tabs are still on screen")
+			}
 		})
 	}
 }
 
-// Opening an album then its artist replaces the one extra tab rather than
-// growing the row.
-func TestGoingToAlbumThenArtistKeepsOneExtraTab(t *testing.T) {
+// Leaving puts back the tab and the place in it the detour interrupted.
+func TestLeavingADetourPutsBackWhatWasThere(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.tracks["LM"] = fromUI(rows(40))
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+
+	m.trackCursor = 22
+	m.scroll()
+	// The list is scrolled, so the top row on screen is not the first track.
+	m.Tracks[m.trackOffset] = fromAPI(linked())[0]
+
+	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
+	m = drain(t, next.(Model), cmd)
+	// The right-click selected that row, and that is the place to come back
+	// to — not wherever the cursor was before it.
+	wasCursor, wasOffset := m.trackCursor, m.trackOffset
+	x, y := rowAt(m, menuAlbum)
+	next, cmd = m.Update(click(x, y))
+	m = drain(t, next.(Model), cmd)
+	if !m.detour.active {
+		t.Fatal("no detour")
+	}
+
+	next, cmd = m.Update(keyPress("esc"))
+	m = drain(t, next.(Model), cmd)
+
+	if m.detour.active {
+		t.Fatal("esc did not leave")
+	}
+	if got, _ := m.SelectedPlaylist(); got.Title != "Liked Music" {
+		t.Errorf("came back to %q", got.Title)
+	}
+	if m.trackCursor != wasCursor || m.trackOffset != wasOffset {
+		t.Errorf("came back to cursor %d offset %d, want %d and %d",
+			m.trackCursor, m.trackOffset, wasCursor, wasOffset)
+	}
+}
+
+// Album then artist is one detour, and leaving returns to where it started
+// rather than stepping back through it.
+func TestADetourWithinADetourStillReturnsHome(t *testing.T) {
 	m, _, _, _ := menuModel(t)
-	before := m.tabCount()
+	m.tabCursor = 0
 
 	for _, item := range []menuItem{menuAlbum, menuArtist} {
 		m.Tracks = fromAPI(linked())
@@ -189,8 +244,30 @@ func TestGoingToAlbumThenArtistKeepsOneExtraTab(t *testing.T) {
 		next, cmd = m.Update(click(x, y))
 		m = drain(t, next.(Model), cmd)
 	}
-	if m.tabCount() != before+1 {
-		t.Errorf("tab count went from %d to %d", before, m.tabCount())
+	if m.detour.tab.Title != "DAPHNI" {
+		t.Fatalf("second hop landed on %q", m.detour.tab.Title)
+	}
+
+	next, cmd := m.Update(keyPress("esc"))
+	m = drain(t, next.(Model), cmd)
+	if m.detour.active {
+		t.Error("one esc should leave altogether, not step back a hop")
+	}
+}
+
+// Clicking the tab row is the other way out.
+func TestClickingTheDetourTabLeaves(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
+	m = drain(t, next.(Model), cmd)
+	x, y := rowAt(m, menuAlbum)
+	next, cmd = m.Update(click(x, y))
+	m = drain(t, next.(Model), cmd)
+
+	next, cmd = m.Update(click(2, 1))
+	m = drain(t, next.(Model), cmd)
+	if m.detour.active {
+		t.Error("clicking the tab row did not leave")
 	}
 }
 
@@ -292,9 +369,11 @@ func TestTheMenuIsNudgedOnScreen(t *testing.T) {
 	width, height := m.menuSize()
 
 	for _, p := range []struct{ x, y int }{
-		{m.width - 1, trackRow(0)},
+		// Just inside the scrollbar, which a long list puts in the last
+		// column and which is not a track.
+		{m.width - 2, trackRow(0)},
 		{trackX, tabsHeight + m.bodyHeight() - 1},
-		{m.width - 1, tabsHeight + m.bodyHeight() - 1},
+		{m.width - 2, tabsHeight + m.bodyHeight() - 1},
 	} {
 		next, cmd := m.Update(rightClick(p.x, p.y))
 		opened := drain(t, next.(Model), cmd)

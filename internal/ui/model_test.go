@@ -367,3 +367,120 @@ func column(line, needle string) int {
 	}
 	return lipgloss.Width(line[:i])
 }
+
+// The scrollbar only exists when the list is longer than the window.
+func TestScrollbarAppearsOnlyWhenItOverflows(t *testing.T) {
+	m := New(Services{})
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m = sized.(Model)
+
+	m.Tracks = rows(m.bodyHeight())
+	if m.hasScrollbar() {
+		t.Error("a list that fits has a scrollbar")
+	}
+	if line := plain(strings.Split(m.View().Content, "\n")[tabsHeight]); strings.ContainsAny(line, "█│") {
+		t.Errorf("a bar is drawn anyway: %q", line)
+	}
+
+	m.Tracks = rows(m.bodyHeight() + 1)
+	if !m.hasScrollbar() {
+		t.Fatal("an overflowing list has no scrollbar")
+	}
+	for i := range m.bodyHeight() {
+		line := plain(strings.Split(m.View().Content, "\n")[tabsHeight+i])
+		if lipgloss.Width(line) != m.width {
+			t.Fatalf("row %d is %d cells, want %d", i, lipgloss.Width(line), m.width)
+		}
+		if last := []rune(line)[m.width-1]; last != '█' && last != '│' {
+			t.Errorf("row %d ends with %q, not the bar", i, string(last))
+		}
+	}
+}
+
+// The thumb sits where the window is, and covers the whole trough only when
+// there is nothing to scroll.
+func TestTheScrollbarThumbFollowsTheWindow(t *testing.T) {
+	m := New(Services{})
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m = sized.(Model)
+	m.Tracks = rows(100)
+	height := m.bodyHeight()
+
+	thumbTop := func(m Model) int {
+		for i, cell := range m.scrollbar(height) {
+			if strings.Contains(cell, "█") {
+				return i
+			}
+		}
+		return -1
+	}
+
+	if got := thumbTop(m); got != 0 {
+		t.Errorf("at the top the thumb starts at %d", got)
+	}
+	m = press(m, "G")
+	if got, want := thumbTop(m), height-max(1, height*height/100); got != want {
+		t.Errorf("at the bottom the thumb starts at %d, want %d", got, want)
+	}
+	m = press(m, "g")
+	if got := thumbTop(m); got != 0 {
+		t.Errorf("back at the top the thumb starts at %d", got)
+	}
+}
+
+// Clicking the bar puts the window where the click was, and dragging keeps
+// moving it.
+func TestClickingTheScrollbarScrolls(t *testing.T) {
+	m := New(Services{})
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m = sized.(Model)
+	m.Tracks = rows(200)
+	height := m.bodyHeight()
+	column := m.scrollbarColumn()
+
+	furthest := 200 - height
+
+	// The top of the trough is the top of the list.
+	next, _ := m.Update(click(column, tabsHeight))
+	if got := next.(Model).trackOffset; got != 0 {
+		t.Errorf("clicking the top gave offset %d", got)
+	}
+
+	// Halfway down is roughly halfway through. Not exactly: the trough's
+	// last cell has to mean the end, so a cell maps to row/(height-1).
+	next, _ = m.Update(click(column, tabsHeight+height/2))
+	m = next.(Model)
+	if got, want := m.trackOffset, furthest/2; got < want-furthest/10 || got > want+furthest/10 {
+		t.Errorf("offset = %d, want near %d", got, want)
+	}
+	if !m.draggingScroll {
+		t.Error("pressing the bar should begin a drag")
+	}
+	if m.trackCursor != 0 {
+		t.Errorf("the selection moved to %d", m.trackCursor)
+	}
+
+	// Dragging to the bottom takes the window to the end.
+	next, _ = m.Update(motion(column, tabsHeight+height-1))
+	m = next.(Model)
+	if m.trackOffset != furthest {
+		t.Errorf("offset = %d, want the end at %d", m.trackOffset, furthest)
+	}
+
+	next, _ = m.Update(release(column, tabsHeight+height-1))
+	if next.(Model).draggingScroll {
+		t.Error("still dragging after release")
+	}
+}
+
+// A list that fits has no bar, so that column is an ordinary track row.
+func TestTheLastColumnIsATrackWhenThereIsNoBar(t *testing.T) {
+	m := New(Services{})
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m = sized.(Model)
+	m.Tracks = rows(2)
+
+	if where, n := m.hit(m.width-1, tabsHeight+1); where != regionTracks || n != 1 {
+		t.Errorf("hit = %v, %d; want the track row", where, n)
+	}
+}

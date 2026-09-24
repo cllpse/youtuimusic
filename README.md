@@ -65,6 +65,7 @@ the first page and fill in the rest behind it.
 | `q`, `ctrl+c` | quit |
 
 With the track menu open, `j`/`k` and `enter` work it and `esc` closes it.
+`esc` also leaves an album or an artist.
 
 The title, the progress bar and the controls share one box: transport on the
 left, thumbs in the middle, repeat on the right. A liked row is marked with
@@ -74,9 +75,14 @@ sitting beside the transport means; `+` and `-` still act on the highlighted
 row.
 
 Right-clicking a track opens a menu: like it, go to its album, go to its
-artist. The last two open as a tab, and there is only ever one of those —
-going to an album and then to its artist replaces it rather than leaving a
-trail across the row. A track that links nowhere has those rows greyed.
+artist. The last two take over the view rather than joining the tab row —
+somewhere you went, not somewhere you keep — and `esc`, or clicking the row
+that names them, puts back the tab and the place in it you left. A track
+that links nowhere has those rows greyed.
+
+A list longer than the window gets a scrollbar down its right edge. It can
+be clicked and dragged, and it is only there when there is something to
+scroll.
 
 The mouse works too: click a tab to open it, click a track to select it and
 again to play it, click any control, and drag the progress bar to scrub. The wheel changes tab
