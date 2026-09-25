@@ -1018,8 +1018,9 @@ func TestTheCloseButtonShutsThePopover(t *testing.T) {
 	}
 }
 
-// From a stacked popover it shuts the lot, where the way back steps one.
-func TestTheCloseButtonShutsTheWholeStack(t *testing.T) {
+// From a stacked popover it closes that one and leaves what was behind it,
+// which is the whole point of the artist still being drawn there.
+func TestTheCloseButtonStepsBackFromAStack(t *testing.T) {
 	m, lib, _, _ := menuModel(t)
 	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
 	m = openVia(t, m, menuArtist)
@@ -1035,10 +1036,31 @@ func TestTheCloseButtonShutsTheWholeStack(t *testing.T) {
 	}
 	next, cmd = m.Update(click(x+1, y))
 	shut := drain(t, next.(Model), cmd)
-	if shut.detour.active {
-		t.Error("the popover is still open")
+	if !shut.detour.active {
+		t.Fatal("closing the album closed the artist behind it too")
+	}
+	if shut.detour.tab.Title != "DAPHNI" {
+		t.Errorf("it left %q open, want the artist", shut.detour.tab.Title)
 	}
 	if len(shut.history) != 0 {
-		t.Errorf("%d popovers are still stacked behind it", len(shut.history))
+		t.Errorf("%d popovers are still stacked behind the artist", len(shut.history))
+	}
+
+	// Esc from the album does the same thing, so the two agree.
+	next, cmd = m.Update(keyPress("esc"))
+	stepped := drain(t, next.(Model), cmd)
+	if !stepped.detour.active || stepped.detour.tab.Title != shut.detour.tab.Title {
+		t.Errorf("esc left %+v where the close button left %+v",
+			stepped.detour.tab, shut.detour.tab)
+	}
+
+	// And from the artist, with nothing behind it, either one closes.
+	x, y, _, ok = shut.modalCloseButton()
+	if !ok {
+		t.Fatal("the artist has no way out")
+	}
+	next, cmd = shut.Update(click(x+1, y))
+	if drain(t, next.(Model), cmd).detour.active {
+		t.Error("the last popover did not close")
 	}
 }

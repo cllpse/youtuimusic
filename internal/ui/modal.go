@@ -25,8 +25,9 @@ const (
 	albumInsetY = 1
 )
 
-// iconClose is the way out of a popover: the times sign, which every font
-// has and nobody has to learn.
+// iconClose closes the popover it is drawn on, stepping back to whatever was
+// behind it. It is the times sign, which every font has and nobody has to
+// learn.
 const iconClose = "×"
 
 // The way back and the way out are the same inside-out fill the transport's
@@ -400,7 +401,11 @@ func (m Model) clickModal(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	}
 	if x, y, width, ok := m.modalCloseButton(); ok &&
 		mouse.Y == y && mouse.X >= x && mouse.X < x+width {
-		return m.closeDetour()
+		// It closes the popover it is on, not everything under it: an album
+		// closed from the artist it opened from should leave the artist,
+		// which is still on the screen behind it. Same as esc. Clicking away
+		// from the lot is what dismisses the lot.
+		return m.leaveDetour()
 	}
 	if x, y, width, ok := m.modalBackButton(); ok &&
 		mouse.Y == y && mouse.X >= x && mouse.X < x+width {
