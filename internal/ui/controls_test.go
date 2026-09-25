@@ -516,15 +516,50 @@ func TestButtonsFillWhenLive(t *testing.T) {
 	}
 }
 
-// With nothing playing there is nothing to press, and the row says so.
-func TestIdleButtonsAreOnlyDimIcons(t *testing.T) {
+// Idle, a button is still a button: a filled box, in grey rather than the
+// accent. A row of bare symbols did not read as pressable.
+func TestIdleButtonsAreFilledButNotLit(t *testing.T) {
 	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
 	codes := sgrCodes(controlsLine(m))
-	if !codes["90"] {
-		t.Errorf("the idle row is not dimmed: %v", codes)
+	if !codes["100"] {
+		t.Errorf("an idle button is not filled: %v", codes)
 	}
-	if codes["44"] || codes["100"] {
-		t.Errorf("an idle button is filled: %v", codes)
+	if codes["44"] {
+		t.Errorf("an idle button is lit: %v", codes)
+	}
+}
+
+// The caps are what round the box off, and both ends have to be there or
+// the button looks cut.
+func TestButtonsHaveRoundedCaps(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	row := controlsLine(m)
+	left := strings.Count(row, buttonCapLeft)
+	right := strings.Count(row, buttonCapRight)
+	if left == 0 {
+		t.Fatal("no rounded caps on the buttons")
+	}
+	if left != right {
+		t.Errorf("%d left caps and %d right caps", left, right)
+	}
+	if want := len(m.controlButtons()); left != want {
+		t.Errorf("%d capped buttons, want %d", left, want)
+	}
+	// A cap is the fill as foreground, so the shape sits on whatever is
+	// behind the row rather than on a block of its own.
+	if codes := sgrCodes(row); !codes["90"] {
+		t.Errorf("the caps are not drawn in the fill colour: %v", codes)
+	}
+}
+
+// What is drawn has to be as wide as what is clicked, or a click lands on
+// the wrong button.
+func TestAButtonIsAsWideAsItsHitbox(t *testing.T) {
+	for _, lit := range []bool{false, true} {
+		if got := lipgloss.Width(renderButton(iconPlay, lit)); got != buttonWidth {
+			t.Errorf("lit=%v: the button draws %d cells, buttonWidth is %d",
+				lit, got, buttonWidth)
+		}
 	}
 }
 

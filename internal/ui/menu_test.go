@@ -827,9 +827,10 @@ func TestTheModalTitleIsCentred(t *testing.T) {
 	next, cmd := m.Update(keyPress("enter"))
 	m = drain(t, next.(Model), cmd)
 	header = plain(strings.Split(m.renderModal(), "\n")[1])
-	// Border, padding, then the button's own leading cell.
-	if at, want := column(header, iconBack), modalChrome/2+1; at != want {
-		t.Errorf("the button is at column %d, want %d: %q", at, want, header)
+	// The button's own left edge is its cap, and that sits just inside the
+	// popover's border and padding.
+	if at, want := column(header, buttonCapLeft), modalChrome/2; at != want {
+		t.Errorf("the button starts at column %d, want %d: %q", at, want, header)
 	}
 	if off := centreOffset(header, iconAlbum, "Cherry"); off > 1 {
 		t.Errorf("off centre by %d with a button: %q", off, header)

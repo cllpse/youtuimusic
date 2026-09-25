@@ -94,7 +94,7 @@ func (m Model) modalHeader(inner int) string {
 		// belongs, and gives way to the button rather than under it.
 		back, taken := "", 0
 		if len(m.history) > 0 {
-			back = buttonLitStyle.Render(" " + iconBack + " ")
+			back = renderButton(iconBack, true)
 			taken = buttonWidth
 		}
 		prefix := m.modalIcon() + menuGap + m.modalKind() + menuGap

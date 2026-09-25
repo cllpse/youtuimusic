@@ -69,23 +69,50 @@ type button struct {
 	start, end int // half-open columns
 }
 
-// A button is three cells — the icon with one either side — all of which
-// answer to a click. The gap is two so a row of them does not run together.
+// A button is five cells — a rounded cap, the icon with a space either
+// side, another cap — all of which answer to a click. The gap is two so a
+// row of them does not run together.
 const (
-	buttonWidth = 3
+	buttonWidth = 5
 	buttonGap   = 2
 )
 
+// The caps are the Powerline half circles, drawn in the fill colour as
+// foreground against whatever is behind the row. That is the only way to
+// round a filled shape on a character grid: the cell is either filled or it
+// is not, so the curve has to come from the glyph. Both fonts here carry
+// them.
+const (
+	buttonCapLeft  = "\ue0b6"
+	buttonCapRight = "\ue0b4"
+)
+
 var (
-	// Idle, a button is only its icon, dimmed: there is nothing to press.
-	buttonStyle = lipgloss.NewStyle().Foreground(muted)
+	// Idle, a button is a filled box in grey: there is nothing to press,
+	// but it is still a button, and a row of bare symbols did not look like
+	// one.
+	buttonFill  = muted
+	buttonStyle = lipgloss.NewStyle().
+			Background(muted).
+			Foreground(contrast)
 	// Live, it fills with the accent, which is what makes it look pressable
 	// rather than printed.
+	buttonLitFill  = accent
 	buttonLitStyle = lipgloss.NewStyle().
 			Background(accent).
 			Foreground(contrast).
 			Bold(true)
 )
+
+// renderButton draws one button: the body filled, the caps rounding it off.
+func renderButton(icon string, lit bool) string {
+	body, fill := buttonStyle, buttonFill
+	if lit {
+		body, fill = buttonLitStyle, buttonLitFill
+	}
+	cap := lipgloss.NewStyle().Foreground(fill)
+	return cap.Render(buttonCapLeft) + body.Render(" "+icon+" ") + cap.Render(buttonCapRight)
+}
 
 // groupWidth is what a run of buttons occupies, gaps between them included.
 func groupWidth(n int) int {
@@ -181,11 +208,7 @@ func (m Model) renderControls() string {
 		if btn.start > at {
 			b.WriteString(strings.Repeat(" ", btn.start-at))
 		}
-		style := buttonStyle
-		if btn.lit {
-			style = buttonLitStyle
-		}
-		b.WriteString(style.Render(" " + btn.icon + " "))
+		b.WriteString(renderButton(btn.icon, btn.lit))
 		at = btn.end
 	}
 	if end := contentLeft + width; at < end {
