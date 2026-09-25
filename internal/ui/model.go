@@ -885,6 +885,10 @@ var (
 	alert = lipgloss.Red
 	// contrast is what goes on top of the accent when the accent is a fill.
 	contrast = lipgloss.BrightWhite
+	// panel is the player's fill. Black and not muted, so that the muted
+	// things drawn on it — the idle buttons, the bar's unplayed part — are
+	// still visible against it.
+	panel = lipgloss.Black
 	// played is the paused bar's filled part: neutral, so nothing about it
 	// reads as playing, but lighter than muted so it is still visible
 	// against the groove behind it.
@@ -1057,7 +1061,7 @@ func (m Model) controlsRow() int { return m.barRow() + 2 }
 func (m Model) barGeometry() (start, width int) {
 	// Never wider than the box: a floor here would push the border out and
 	// take the whole frame with it.
-	return contentLeft, m.contentWidth()
+	return m.contentLeft(), m.contentWidth()
 }
 
 // fraction is how far through the track the position is.
@@ -1349,24 +1353,50 @@ func fillRow(segments []statusSegment, width int) string {
 	return b.String()
 }
 
-// playerBox is the frame around the bar and the controls. Its border
-// replaces the blank lines that used to separate them from the list, so it
-// costs no height.
-var playerBox = lipgloss.NewStyle().
-	Border(lipgloss.RoundedBorder()).
-	BorderForeground(muted).
-	Padding(0, playerPadding)
+// playerBox is the panel the bar and the controls sit in: filled, with its
+// corners rounded, and floated off the edges of the screen.
+//
+// The fill stops at the border rather than running through it, which is what
+// lets the corners read as curved — a filled cell is a square, so the curve
+// has to be a glyph drawn on whatever is behind it. Giving the border a
+// background of its own would square the panel off again.
+func (m Model) playerBox() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(muted).
+		Background(panel).
+		Padding(0, playerPadding).
+		Margin(0, m.inset())
+}
 
 const (
 	playerBorder  = 1
 	playerPadding = 1
-	// contentLeft is the first column inside the box, and contentWidth what
-	// is left of the row once both sides are taken. The bar and the buttons
-	// are laid out from it, and the border and padding put it there.
-	contentLeft = playerBorder + playerPadding
+	// playerInset floats the panel off the edges of the screen, which is
+	// what makes it a panel on the frame rather than another band of it.
+	// Equal either side, so it is centred by construction.
+	playerInset = 2
+	// playerFurniture is what the box costs on one side before any content.
+	playerFurniture = playerBorder + playerPadding
 )
 
-func (m Model) contentWidth() int { return max(0, m.width-2*contentLeft) }
+// inset is how far the panel is floated off the edges. It gives way on a
+// terminal too narrow to hold both it and a single column of content: the
+// buttons fitting matters more than the panel being inset, and a row wider
+// than the terminal would take the whole frame with it.
+func (m Model) inset() int {
+	if m.width < 2*playerInset+2*playerFurniture+1 {
+		return 0
+	}
+	return playerInset
+}
+
+// contentLeft is the first column inside the box, and contentWidth what is
+// left of the row once both sides are taken. The bar and the buttons are
+// laid out from it, and the inset, border and padding put it there.
+func (m Model) contentLeft() int { return m.inset() + playerFurniture }
+
+func (m Model) contentWidth() int { return max(0, m.width-2*m.contentLeft()) }
 
 func (m Model) renderPlayer() string {
 	// One blank line, under the bar, so it is not wedged against the
@@ -1376,7 +1406,7 @@ func (m Model) renderPlayer() string {
 		strings.Repeat(" ", m.contentWidth()),
 		m.renderControls(),
 	)
-	return playerBox.Render(inner)
+	return m.playerBox().Render(inner)
 }
 
 // barRamp is the bar's gradient, as ANSI palette entries. Naming the

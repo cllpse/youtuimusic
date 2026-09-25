@@ -109,9 +109,14 @@ func TestTheMenuOverlaysWithoutReflowing(t *testing.T) {
 			t.Errorf("line %d is %d cells, past the terminal's %d", i, w, m.width)
 		}
 	}
-	// The player box below is untouched.
-	if plain(after[m.controlsRow()]) != plain(before[m.controlsRow()]) {
-		t.Error("the bottom of the player moved")
+	// The player below is untouched. Trailing spaces are trimmed off the
+	// comparison: the panel is inset, so the row ends in margin, and
+	// compositing drops trailing spaces that an uncomposited frame keeps.
+	row := func(lines []string) string {
+		return strings.TrimRight(plain(lines[m.controlsRow()]), " ")
+	}
+	if row(after) != row(before) {
+		t.Error("the player moved")
 	}
 	// And the menu really is drawn.
 	if !strings.Contains(plain(strings.Join(after, "\n")), "Go to album") {
@@ -217,9 +222,14 @@ func TestThePopoverIsInsetAndOverlays(t *testing.T) {
 	if !strings.Contains(plain(strings.Join(after, "\n")), "Cherry Track") {
 		t.Error("the popover's tracks are not on the frame")
 	}
-	// The player box below it is untouched. Not the status bar: opening a
-	// popover sets something loading, which is its job to say.
-	if plain(after[m.statusRow()-1]) != plain(before[m.statusRow()-1]) {
+	// The player below it is untouched. Not the status bar: opening a
+	// popover sets something loading, which is its job to say. Trailing
+	// spaces are trimmed because compositing drops them and the inset
+	// panel leaves margin at the end of the row.
+	row := func(lines []string) string {
+		return strings.TrimRight(plain(lines[m.statusRow()-1]), " ")
+	}
+	if row(after) != row(before) {
 		t.Error("the bottom of the player moved")
 	}
 }
@@ -466,7 +476,7 @@ func TestThePopoverStaysInsideTheList(t *testing.T) {
 		}
 		// The player's bottom border is still drawn.
 		lines := strings.Split(m.View().Content, "\n")
-		if last := plain(lines[m.statusRow()-1]); !strings.HasSuffix(last, "╯") {
+		if last := strings.TrimRight(plain(lines[m.statusRow()-1]), " "); !strings.HasSuffix(last, "╯") {
 			t.Errorf("%dx%d: the player box is broken: %q", size.w, size.h, last)
 		}
 	}

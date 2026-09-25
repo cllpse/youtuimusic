@@ -78,40 +78,37 @@ const (
 )
 
 // The caps are the Powerline half circles, drawn in the fill colour as
-// foreground against whatever is behind the row. That is the only way to
-// round a filled shape on a character grid: the cell is either filled or it
-// is not, so the curve has to come from the glyph. Both fonts here carry
-// them.
+// foreground against whatever is behind the button. That is the only way to
+// round a filled shape on a character grid: a cell is either filled or it is
+// not, so the curve has to come from the glyph. Both fonts here carry them.
 const (
 	buttonCapLeft  = "\ue0b6"
 	buttonCapRight = "\ue0b4"
 )
 
 var (
-	// Idle, a button is a filled box in grey: there is nothing to press,
-	// but it is still a button, and a row of bare symbols did not look like
-	// one.
-	buttonFill  = muted
-	buttonStyle = lipgloss.NewStyle().
-			Background(muted).
-			Foreground(contrast)
+	// Idle, a button is only its icon, dimmed: there is nothing to press.
+	buttonStyle = lipgloss.NewStyle().Foreground(muted)
 	// Live, it fills with the accent, which is what makes it look pressable
 	// rather than printed.
-	buttonLitFill  = accent
 	buttonLitStyle = lipgloss.NewStyle().
 			Background(accent).
 			Foreground(contrast).
 			Bold(true)
 )
 
-// renderButton draws one button: the body filled, the caps rounding it off.
+// renderButton draws one button. Lit, it is a filled box with the caps
+// rounding it off. Idle there is no fill, so there is no shape to round and
+// the caps give way to spaces — what is drawn has to stay as wide as what
+// answers a click.
 func renderButton(icon string, lit bool) string {
-	body, fill := buttonStyle, buttonFill
-	if lit {
-		body, fill = buttonLitStyle, buttonLitFill
+	if !lit {
+		return " " + buttonStyle.Render(" "+icon+" ") + " "
 	}
-	cap := lipgloss.NewStyle().Foreground(fill)
-	return cap.Render(buttonCapLeft) + body.Render(" "+icon+" ") + cap.Render(buttonCapRight)
+	cap := lipgloss.NewStyle().Foreground(accent)
+	return cap.Render(buttonCapLeft) +
+		buttonLitStyle.Render(" "+icon+" ") +
+		cap.Render(buttonCapRight)
 }
 
 // groupWidth is what a run of buttons occupies, gaps between them included.
@@ -133,7 +130,7 @@ func (m Model) controlButtons() []button {
 	}
 	// Columns are counted across the whole row, so a span can be compared
 	// against a click without anyone remembering the border is there.
-	right := contentLeft + width
+	right := m.contentLeft() + width
 	playing := m.playing.VideoID != ""
 
 	leftGroup := []button{
@@ -156,10 +153,10 @@ func (m Model) controlButtons() []button {
 		{control: controlRepeat, icon: m.repeat.icon(), lit: m.repeat != RepeatOff},
 	}
 
-	at := lay(leftGroup, contentLeft)
+	at := lay(leftGroup, m.contentLeft())
 
 	// Centred on the row, but never on top of the transport.
-	centreStart := max(contentLeft+(width-groupWidth(len(centre)))/2, at+buttonGap)
+	centreStart := max(m.contentLeft()+(width-groupWidth(len(centre)))/2, at+buttonGap)
 	if centreStart+groupWidth(len(centre)) > right {
 		centre = nil
 	} else {
@@ -203,7 +200,7 @@ func (m Model) renderControls() string {
 		return strings.Repeat(" ", width)
 	}
 	var b strings.Builder
-	at := contentLeft
+	at := m.contentLeft()
 	for _, btn := range buttons {
 		if btn.start > at {
 			b.WriteString(strings.Repeat(" ", btn.start-at))
@@ -211,7 +208,7 @@ func (m Model) renderControls() string {
 		b.WriteString(renderButton(btn.icon, btn.lit))
 		at = btn.end
 	}
-	if end := contentLeft + width; at < end {
+	if end := m.contentLeft() + width; at < end {
 		b.WriteString(strings.Repeat(" ", end-at))
 	}
 	return b.String()

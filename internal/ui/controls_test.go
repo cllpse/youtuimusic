@@ -53,7 +53,7 @@ func TestControlsSitLeftCentreAndRight(t *testing.T) {
 		if !ok {
 			t.Fatalf("control %v is missing", c)
 		}
-		if want := contentLeft + i*(buttonWidth+buttonGap); b.start != want {
+		if want := m.contentLeft() + i*(buttonWidth+buttonGap); b.start != want {
 			t.Errorf("control %v starts at %d, want %d", c, b.start, want)
 		}
 	}
@@ -64,13 +64,13 @@ func TestControlsSitLeftCentreAndRight(t *testing.T) {
 	// Within a cell: a group an odd number of columns wide cannot straddle
 	// the middle exactly.
 	span := down.end - up.start
-	if middle, want := up.start+span/2, contentLeft+m.contentWidth()/2; middle < want-1 || middle > want+1 {
+	if middle, want := up.start+span/2, m.contentLeft()+m.contentWidth()/2; middle < want-1 || middle > want+1 {
 		t.Errorf("the thumbs are centred on %d, want %d", middle, want)
 	}
 
 	// Repeat against the right edge.
 	rep, _ := buttonAt(m, controlRepeat)
-	if want := contentLeft + m.contentWidth(); rep.end != want {
+	if want := m.contentLeft() + m.contentWidth(); rep.end != want {
 		t.Errorf("repeat ends at %d, want the inside of the right border %d", rep.end, want)
 	}
 
@@ -377,7 +377,7 @@ func TestNarrowRowsDegradeCleanly(t *testing.T) {
 			t.Errorf("width %d: the row renders %d cells", width, got)
 		}
 		for _, b := range m.controlButtons() {
-			if b.start < contentLeft {
+			if b.start < m.contentLeft() {
 				t.Errorf("width %d: %v starts on the border", width, b.control)
 			}
 		}
@@ -516,39 +516,39 @@ func TestButtonsFillWhenLive(t *testing.T) {
 	}
 }
 
-// Idle, a button is still a button: a filled box, in grey rather than the
-// accent. A row of bare symbols did not read as pressable.
-func TestIdleButtonsAreFilledButNotLit(t *testing.T) {
+// Idle, a button is its icon and nothing else — there is nothing to press,
+// so there is no box to fill and no corners to round.
+func TestIdleButtonsAreOnlyDimIcons(t *testing.T) {
 	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
-	codes := sgrCodes(controlsLine(m))
-	if !codes["100"] {
-		t.Errorf("an idle button is not filled: %v", codes)
+	row := controlsLine(m)
+	codes := sgrCodes(row)
+	if !codes["90"] {
+		t.Errorf("the idle row is not dimmed: %v", codes)
 	}
 	if codes["44"] {
 		t.Errorf("an idle button is lit: %v", codes)
 	}
+	if strings.Contains(row, buttonCapLeft) || strings.Contains(row, buttonCapRight) {
+		t.Error("an idle button is capped, but it has no fill to round")
+	}
 }
 
-// The caps are what round the box off, and both ends have to be there or
-// the button looks cut.
-func TestButtonsHaveRoundedCaps(t *testing.T) {
+// Lit, it is a filled box, and both caps have to be there or it looks cut.
+func TestALitButtonIsCapped(t *testing.T) {
 	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
-	row := controlsLine(m)
-	left := strings.Count(row, buttonCapLeft)
-	right := strings.Count(row, buttonCapRight)
-	if left == 0 {
-		t.Fatal("no rounded caps on the buttons")
+	next, _ := m.Update(keyPress("r")) // repeat on lights its button
+	row := controlsLine(next.(Model))
+
+	if got := strings.Count(row, buttonCapLeft); got != 1 {
+		t.Errorf("%d left caps, want one: %q", got, plain(row))
 	}
-	if left != right {
-		t.Errorf("%d left caps and %d right caps", left, right)
+	if got := strings.Count(row, buttonCapRight); got != 1 {
+		t.Errorf("%d right caps, want one: %q", got, plain(row))
 	}
-	if want := len(m.controlButtons()); left != want {
-		t.Errorf("%d capped buttons, want %d", left, want)
-	}
-	// A cap is the fill as foreground, so the shape sits on whatever is
-	// behind the row rather than on a block of its own.
-	if codes := sgrCodes(row); !codes["90"] {
-		t.Errorf("the caps are not drawn in the fill colour: %v", codes)
+	// The caps are the fill as foreground, so the curve sits on the panel
+	// rather than on a block of its own.
+	if codes := sgrCodes(row); !codes["34"] || !codes["44"] {
+		t.Errorf("the cap and the fill are not both the accent: %v", codes)
 	}
 }
 

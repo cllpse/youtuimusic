@@ -326,9 +326,9 @@ func TestThePlayerHoldsOnlyTheBarAndButtons(t *testing.T) {
 	if !strings.Contains(lines[m.controlsRow()], iconPrevious) {
 		t.Errorf("no controls on row %d", m.controlsRow())
 	}
-	// And the box still ends above the status bar.
-	if !strings.HasSuffix(plain(lines[m.statusRow()-1]), "╯") {
-		t.Errorf("the box does not close above the status bar: %q", plain(lines[m.statusRow()-1]))
+	// And the box still closes above the status bar, inside its margin.
+	if bottom := strings.TrimRight(plain(lines[m.statusRow()-1]), " "); !strings.HasSuffix(bottom, "╯") {
+		t.Errorf("the box does not close above the status bar: %q", bottom)
 	}
 }
 
@@ -456,38 +456,74 @@ func TestTabRowIsThreeLines(t *testing.T) {
 	}
 }
 
-// The bar and the controls sit in one box, and it costs no height: its
-// border takes the rows the blank lines used to.
-func TestThePlayerIsBoxed(t *testing.T) {
+// The bar and the controls sit in one filled panel, floated off the edges
+// of the screen. It costs no height: its border takes the rows the blank
+// lines used to.
+func TestThePlayerIsAnInsetPanel(t *testing.T) {
 	m := sample()
 	lines := strings.Split(m.View().Content, "\n")
 	if len(lines) != 20 {
 		t.Fatalf("view is %d lines, want 20", len(lines))
 	}
 
-	// The bar sits directly under the border: no blank line above it, one
-	// below, separating it from the buttons.
-	top, bottom := lines[m.barRow()-1], lines[m.barRow()+3]
-	if !strings.HasPrefix(plain(top), "╭") || !strings.HasSuffix(plain(top), "╮") {
-		t.Errorf("no top border: %q", plain(top))
+	top, bottom := plain(lines[m.barRow()-1]), plain(lines[m.barRow()+3])
+	// Inset by the same amount either side, which is what centres it.
+	for _, line := range []string{top, bottom} {
+		left := len(line) - len(strings.TrimLeft(line, " "))
+		right := len(line) - len(strings.TrimRight(line, " "))
+		if left != m.inset() || right != m.inset() {
+			t.Errorf("inset %d left and %d right, want %d both: %q",
+				left, right, m.inset(), line)
+		}
 	}
-	if !strings.HasSuffix(plain(bottom), "╯") {
-		t.Errorf("no bottom border: %q", plain(bottom))
+	if !strings.HasPrefix(strings.TrimSpace(top), "╭") ||
+		!strings.HasSuffix(strings.TrimSpace(top), "╮") {
+		t.Errorf("the top corners are not rounded: %q", top)
 	}
-	if inner := strings.TrimSpace(plain(lines[m.barRow()])[1:]); inner == "" {
+	if !strings.HasPrefix(strings.TrimSpace(bottom), "╰") ||
+		!strings.HasSuffix(strings.TrimSpace(bottom), "╯") {
+		t.Errorf("the bottom corners are not rounded: %q", bottom)
+	}
+
+	// The bar sits directly under the border, one blank line below it.
+	if inner := strings.Trim(plain(lines[m.barRow()]), "│ "); inner == "" {
 		t.Error("the row under the border is blank; the bar should be there")
 	}
 	if inner := strings.Trim(plain(lines[m.barRow()+1]), "│ "); inner != "" {
 		t.Errorf("the row under the bar is not blank: %q", inner)
 	}
-	// Every row inside it is bounded by the sides, blank lines included.
+
+	// Every row of it is bounded by the sides and fills the terminal, and
+	// the inside is filled rather than left open.
 	for _, row := range []int{m.barRow(), m.barRow() + 1, m.barRow() + 2} {
-		line := plain(lines[row])
+		line := strings.TrimSpace(plain(lines[row]))
 		if !strings.HasPrefix(line, "│") || !strings.HasSuffix(line, "│") {
-			t.Errorf("row %d is not inside the box: %q", row, line)
+			t.Errorf("row %d is not inside the panel: %q", row, line)
 		}
-		if lipgloss.Width(lines[row]) != m.width {
-			t.Errorf("row %d is %d cells, want %d", row, lipgloss.Width(lines[row]), m.width)
+		if got := lipgloss.Width(lines[row]); got != m.width {
+			t.Errorf("row %d is %d cells, want %d", row, got, m.width)
+		}
+		if codes := sgrCodes(lines[row]); !codes["40"] {
+			t.Errorf("row %d is not filled: %v", row, codes)
+		}
+	}
+}
+
+// A terminal too narrow for the panel drops the inset rather than drawing
+// a row wider than the screen, which would take the whole frame with it.
+func TestANarrowTerminalDropsTheInset(t *testing.T) {
+	// Four is the floor the rest of the suite works to: the border and the
+	// padding cost that much on their own, inset or not.
+	for _, width := range []int{4, 8, 9, 20, 80} {
+		m := New(Services{})
+		sized, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 20})
+		m = sized.(Model)
+
+		if got := lipgloss.Width(plain(m.renderPlayer())); got > width {
+			t.Errorf("width %d: the player renders %d cells", width, got)
+		}
+		if m.inset() > 0 && width < 2*playerInset+2*playerFurniture+1 {
+			t.Errorf("width %d: still inset by %d", width, m.inset())
 		}
 	}
 }
