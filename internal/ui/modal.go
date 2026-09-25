@@ -25,10 +25,10 @@ const (
 	albumInsetY = 1
 )
 
-// iconClose closes the popover it is drawn on, stepping back to whatever was
-// behind it. It is the times sign, which every font has and nobody has to
-// learn.
-const iconClose = "×"
+// labelClose closes the popover it is drawn on, stepping back to whatever was
+// behind it. It is named for the key that does the same thing, which is more
+// use than a times sign: one of them says how to do it without the mouse.
+const labelClose = "esc"
 
 // The way back and the way out are the same inside-out fill the transport's
 // buttons use when they are live.
@@ -37,10 +37,10 @@ var modalBackStyle = lipgloss.NewStyle().
 	Foreground(background).
 	Bold(true)
 
-// Each is its character with a cell either side, all of it clickable.
+// Each is its mark with a cell either side, all of it clickable.
 const (
 	modalBackWidth  = 3
-	modalCloseWidth = 3
+	modalCloseWidth = len(labelClose) + 2
 )
 
 var modalBox = lipgloss.NewStyle().
@@ -130,7 +130,7 @@ func (m Model) modalHeader(inner int) string {
 		}
 		// And the way out stays against the right, which is where a window
 		// keeps it.
-		close := modalBackStyle.Render(" " + iconClose + " ")
+		close := modalBackStyle.Render(padded(labelClose))
 		right := modalCloseWidth
 
 		prefix := m.modalIcon() + menuGap + m.modalKind() + menuGap

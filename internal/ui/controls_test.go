@@ -46,7 +46,9 @@ func buttonAt(m Model, c control) (button, bool) {
 	return button{}, false
 }
 
-func TestControlsSitLeftCentreAndRight(t *testing.T) {
+// Two groups: the transport with repeat on the end against the left, the
+// ratings against the right.
+func TestControlsSitLeftAndRight(t *testing.T) {
 	m, _, _, _ := playingModel(t)
 	row := plain(controlsLine(m))
 
@@ -55,10 +57,12 @@ func TestControlsSitLeftCentreAndRight(t *testing.T) {
 		t.Fatalf("the controls row is %d cells, want %d", got, m.width)
 	}
 
-	// Transport against the left edge of the box, in order. The buttons are
-	// their labels wide, so where each one starts depends on the last.
+	// Against the left edge of the box, in order, repeat last. The buttons
+	// are their labels wide, so where each starts depends on the last.
 	at := contentLeft
-	for _, c := range []control{controlPrevious, controlPlayPause, controlNext} {
+	for _, c := range []control{
+		controlPrevious, controlPlayPause, controlNext, controlRepeat,
+	} {
 		b, ok := buttonAt(m, c)
 		if !ok {
 			t.Fatalf("control %v is missing", c)
@@ -73,29 +77,20 @@ func TestControlsSitLeftCentreAndRight(t *testing.T) {
 		at = b.end + buttonGap
 	}
 
-	// Thumbs centred on the row.
+	// The ratings end against the inside of the right border, in order, and
+	// clear of the transport.
 	up, _ := buttonAt(m, controlThumbUp)
 	down, _ := buttonAt(m, controlThumbDown)
-	// Centred is a preference, not a promise. The labels make the transport
-	// wide, so on a row without the room for all three groups the middle one
-	// gives way to the transport rather than overlapping it.
-	span := down.end - up.start
-	next, _ := buttonAt(m, controlNext)
-	if up.start < next.end+buttonGap {
-		t.Errorf("the middle group runs into the transport: %d < %d",
-			up.start, next.end+buttonGap)
+	if want := contentLeft + m.contentWidth(); down.end != want {
+		t.Errorf("dislike ends at %d, want the inside of the border %d", down.end, want)
 	}
-	middle, want := up.start+span/2, contentLeft+m.contentWidth()/2
-	pushed := up.start == next.end+buttonGap
-	if !pushed && (middle < want-1 || middle > want+1) {
-		t.Errorf("the thumbs are centred on %d, want %d, and had room to be",
-			middle, want)
+	if want := down.start - buttonGap; up.end != want {
+		t.Errorf("like ends at %d, want %d", up.end, want)
 	}
-
-	// Repeat against the right edge.
 	rep, _ := buttonAt(m, controlRepeat)
-	if want := contentLeft + m.contentWidth(); rep.end != want {
-		t.Errorf("repeat ends at %d, want the inside of the right border %d", rep.end, want)
+	if up.start < rep.end+buttonGap {
+		t.Errorf("the ratings run into the transport: %d < %d",
+			up.start, rep.end+buttonGap)
 	}
 
 	// And they are where the row actually draws them. The label is compared
@@ -755,9 +750,14 @@ func TestTheThumbsFollowTheTrack(t *testing.T) {
 	if got := label(m, controlThumbDown); got != labelDislike {
 		t.Errorf("liked changed the other one to %q", got)
 	}
+	// Dislike keeps its name in both states: English has no word for taking
+	// one off. The fill is what says it is in force.
 	m.playing.Rating = RatingDown
-	if got := label(m, controlThumbDown); got != labelUndislike {
-		t.Errorf("disliked says %q, want %q", got, labelUndislike)
+	if got := label(m, controlThumbDown); got != labelDislike {
+		t.Errorf("disliked says %q, want %q", got, labelDislike)
+	}
+	if b, _ := buttonAt(m, controlThumbDown); !b.lit {
+		t.Error("a disliked track does not light the button")
 	}
 	if got := label(m, controlThumbUp); got != labelLike {
 		t.Errorf("disliked changed the other one to %q", got)

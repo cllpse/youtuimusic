@@ -22,15 +22,21 @@ const (
 // Each carries the key that works it, so the row doubles as the help for
 // itself. Space is spelled out; a single blank in brackets would read as a
 // typo.
+// Prev is the dictionary's abbreviation of previous; the rest are already
+// the shortest words for what they do.
+//
+// There is no label for taking a dislike off, because English has no word
+// for it: unlike is one, undislike is not. So the dislike button keeps its
+// name in both states and the fill says which one it is in, the way it
+// always did.
 const (
-	labelPrevious  = "Previous (p)"
+	labelPrevious  = "Prev (p)"
 	labelPlay      = "Play (space)"
 	labelPause     = "Pause (space)"
 	labelNext      = "Next (n)"
 	labelLike      = "Like (+)"
 	labelUnlike    = "Unlike (+)"
 	labelDislike   = "Dislike (-)"
-	labelUndislike = "Undislike (-)"
 	labelRepeatOff = "Repeat off (r)"
 	labelRepeatOn  = "Repeat on (r)"
 	labelRepeatOne = "Repeat one (r)"
@@ -42,7 +48,6 @@ var (
 	repeatLabels  = []string{labelRepeatOff, labelRepeatOn, labelRepeatOne}
 	playingLabels = []string{labelPlay, labelPause}
 	likeLabels    = []string{labelLike, labelUnlike}
-	dislikeLabels = []string{labelDislike, labelUndislike}
 )
 
 // playPauseLabel says what pressing it will do, which is the convention every
@@ -192,50 +197,38 @@ func (m Model) controlButtons() []button {
 		{control: controlPrevious, label: labelPrevious, lit: playing},
 		{control: controlPlayPause, label: m.playPauseLabel(), lit: playing},
 		{control: controlNext, label: labelNext, lit: playing},
+		{control: controlRepeat, label: m.repeat.label(), lit: m.repeat != RepeatOff},
 	}
 	if width < groupWidth(leftGroup) {
 		return nil
 	}
-	// The thumbs follow the track rather than the playlist. Pressing one on
-	// a track that already carries that rating takes it off, so the label
-	// says which of the two it will do.
+	// The thumbs follow the track. Pressing like on a track that already
+	// carries it takes it off, so that label says which of the two it will
+	// do; dislike has no second word to say it with.
 	liked := m.playing.Rating == RatingUp
-	disliked := m.playing.Rating == RatingDown
-	like, dislike := labelLike, labelDislike
+	like := labelLike
 	if liked {
 		like = labelUnlike
 	}
-	if disliked {
-		dislike = labelUndislike
-	}
-	centre := []button{
+	rightGroup := []button{
 		{control: controlThumbUp, label: steady(like, likeLabels),
 			lit: playing && liked},
-		{control: controlThumbDown, label: steady(dislike, dislikeLabels),
-			lit: playing && disliked},
-	}
-	repeatGroup := []button{
-		{control: controlRepeat, label: m.repeat.label(), lit: m.repeat != RepeatOff},
+		{control: controlThumbDown, label: labelDislike,
+			lit: playing && m.playing.Rating == RatingDown},
 	}
 
 	at := lay(leftGroup, contentLeft)
 
-	// Centred on the row, but never on top of the transport.
-	centreStart := max(contentLeft+(width-groupWidth(centre))/2, at+buttonGap)
-	if centreStart+groupWidth(centre) > right {
-		centre = nil
+	// The ratings go against the right, and give way to the transport rather
+	// than overlapping it.
+	rightStart := right - groupWidth(rightGroup)
+	if rightStart < at+buttonGap {
+		rightGroup = nil
 	} else {
-		at = lay(centre, centreStart)
+		lay(rightGroup, rightStart)
 	}
 
-	repeatStart := right - groupWidth(repeatGroup)
-	if repeatStart < at+buttonGap {
-		repeatGroup = nil
-	} else {
-		lay(repeatGroup, repeatStart)
-	}
-
-	return append(append(leftGroup, centre...), repeatGroup...)
+	return append(leftGroup, rightGroup...)
 }
 
 // lay assigns columns to a group and returns where the last button ends.

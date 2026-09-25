@@ -717,7 +717,7 @@ func TestAnAlbumShowsNoWayBack(t *testing.T) {
 		t.Error("the album answers clicks on a button it does not draw")
 	}
 	// It still says what it is showing, and still offers the way out.
-	for _, want := range []string{"Album", iconClose} {
+	for _, want := range []string{"Album", labelClose} {
 		if !strings.Contains(header, want) {
 			t.Errorf("the header is missing %q: %q", want, header)
 		}
@@ -932,7 +932,7 @@ func TestTheModalTitleIsCentred(t *testing.T) {
 	if off := centreOffset(header, iconAlbum, "Cherry"); off > 1 {
 		t.Errorf("off centre by %d: %q", off, header)
 	}
-	if column(header, iconAlbum) > column(header, iconClose) {
+	if column(header, iconAlbum) > column(header, labelClose) {
 		t.Errorf("the title runs past the way out: %q", header)
 	}
 }
@@ -1006,7 +1006,7 @@ func TestTheCloseButtonShutsThePopover(t *testing.T) {
 
 	// Drawn on the header, to the right of what the popover is showing.
 	header := plain(strings.Split(m.renderModal(), "\n")[1])
-	if at := column(header, iconClose); at < 0 {
+	if at := column(header, labelClose); at < 0 {
 		t.Fatalf("the close button is not drawn: %q", header)
 	} else if title := column(header, "DAPHNI"); at < title {
 		t.Errorf("the close button is left of the title: %q", header)
