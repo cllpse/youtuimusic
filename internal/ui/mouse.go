@@ -17,7 +17,6 @@ type region int
 const (
 	regionNone region = iota
 	regionTabs
-	regionHeader
 	regionTracks
 	regionScrollbar
 	regionBar
@@ -37,15 +36,6 @@ func (m Model) hit(x, y int) (region, int) {
 		for _, s := range m.tabSpans() {
 			if x >= s.start && x < s.end {
 				return regionTabs, s.index
-			}
-		}
-		return regionNone, 0
-
-	case y == tabsHeight:
-		// The line naming the columns, which is where they are sorted by.
-		for _, span := range m.table(m.width, m.bodyHeight()).headerSpans() {
-			if x >= span.start && x < span.end {
-				return regionHeader, int(span.by)
 			}
 		}
 		return regionNone, 0
@@ -178,9 +168,6 @@ func (m Model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	m.lastClickAt, m.lastClickRegion, m.lastClickRow = m.clock(), where, n
 
 	switch where {
-	case regionHeader:
-		return m.sortBy(m.sort.on(sortColumn(n)))
-
 	case regionTabs:
 		if m.detour.active {
 			return m.leaveDetour()

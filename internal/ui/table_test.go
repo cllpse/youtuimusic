@@ -235,37 +235,6 @@ func TestACompleteListingOffersNothing(t *testing.T) {
 	}
 }
 
-// The header names the columns and marks the one in use.
-func TestTheHeaderNamesTheColumns(t *testing.T) {
-	table := trackTable{tracks: tableTracks(), width: 70, height: 6, showRating: true,
-		sortable: true}
-	header := plain(table.rows()[0])
-
-	for _, want := range []string{"Title", "Artist", "Length"} {
-		if !strings.Contains(header, want) {
-			t.Errorf("header is missing %q: %q", want, header)
-		}
-	}
-	if strings.Contains(header, "Added") {
-		t.Errorf("the Added column is back: %q", header)
-	}
-	if lipgloss.Width(header) != 70 {
-		t.Errorf("header is %d cells, want 70", lipgloss.Width(header))
-	}
-	if strings.ContainsAny(header, "↑↓") {
-		t.Errorf("an unsorted table marks a column: %q", header)
-	}
-
-	table.sort = sortSpec{by: sortArtist}
-	if got := plain(table.rows()[0]); !strings.Contains(got, "Artist ↑") {
-		t.Errorf("the sorted column is not marked: %q", got)
-	}
-	table.sort = sortSpec{by: sortArtist, desc: true}
-	if got := plain(table.rows()[0]); !strings.Contains(got, "Artist ↓") {
-		t.Errorf("the direction is not shown: %q", got)
-	}
-}
-
 func TestSortTracks(t *testing.T) {
 
 	tracks := []Track{
@@ -317,31 +286,6 @@ func TestSortOnAColumn(t *testing.T) {
 	}
 	if spec = spec.on(sortTitle); spec.by != sortTitle || spec.desc {
 		t.Errorf("moving to another column kept the direction: %+v", spec)
-	}
-}
-
-// A column's label has to fit with its arrow, or the header says which
-// column is sorted but not which way.
-func TestEveryHeaderLabelFitsWithItsArrow(t *testing.T) {
-	tracks := tableTracks()
-	for _, by := range []sortColumn{sortTitle, sortArtist, sortLength} {
-		for _, desc := range []bool{false, true} {
-			table := trackTable{
-				tracks: tracks, width: 80, height: 6, sortable: true,
-				sort: sortSpec{by: by, desc: desc}, now: time.Now(),
-			}
-			header := plain(table.rows()[0])
-			if strings.Contains(header, "…") {
-				t.Errorf("sorting by %v cut a label short: %q", by, header)
-			}
-			arrow := "↑"
-			if desc {
-				arrow = "↓"
-			}
-			if !strings.Contains(header, arrow) {
-				t.Errorf("sorting by %v lost its arrow: %q", by, header)
-			}
-		}
 	}
 }
 
@@ -429,22 +373,16 @@ func TestAnAlbumsTableIsTitlesOnly(t *testing.T) {
 	tracks := tableTracks()
 
 	full := trackTable{tracks: tracks, width: 70, height: 6, showRating: true,
-		sortable: true, now: time.Now()}
+		now: time.Now()}
 	album := full
 	album.titleOnly = true
 
-	header := plain(album.rows()[0])
-	if !strings.Contains(header, "Title") {
-		t.Errorf("no title column: %q", header)
+	// One column takes the whole width, where the full table shares it out.
+	if got, want := album.layout(70).title, 70-markWidth; got != want {
+		t.Errorf("the title column is %d wide, want all %d of it", got, want)
 	}
-	for _, gone := range []string{"Artist", "Length"} {
-		if strings.Contains(header, gone) {
-			t.Errorf("%s is still a column: %q", gone, header)
-		}
-	}
-	// The full table still has them, so the comparison means something.
-	if got := plain(full.rows()[0]); !strings.Contains(got, "Artist") {
-		t.Fatalf("the full table lost its columns too: %q", got)
+	if full.layout(70).artist == 0 {
+		t.Fatal("the full table has no artist column, so this proves nothing")
 	}
 
 	// The rows carry only the title, and still fill the width.
@@ -456,64 +394,11 @@ func TestAnAlbumsTableIsTitlesOnly(t *testing.T) {
 	// Exactly the mark and the title, and nothing after them. Checked whole
 	// rather than by substring: the artist here is "A", which is inside
 	// "Alpha".
-	first := plain(album.rows()[1])
+	first := plain(album.rows()[0])
 	if got, want := strings.TrimSpace(first), iconThumbUp+" Alpha"; got != want {
 		t.Errorf("row reads %q, want %q", got, want)
 	}
 
-	// And only that column answers to a click.
-	spans := album.headerSpans()
-	if len(spans) != 1 || spans[0].by != sortTitle {
-		t.Errorf("header spans = %+v", spans)
-	}
-}
-
-// The flag is the whole point of it: the same table, sortable or not.
-func TestSortingCanBeTurnedOff(t *testing.T) {
-	tracks := tableTracks()
-	base := trackTable{tracks: tracks, width: 70, height: 6, showRating: true,
-		sort: sortSpec{by: sortArtist}, now: time.Now()}
-
-	on := base
-	on.sortable = true
-	if got := plain(on.rows()[0]); !strings.Contains(got, "Artist ↑") {
-		t.Errorf("a sortable table does not mark its column: %q", got)
-	}
-	if len(on.headerSpans()) == 0 {
-		t.Error("a sortable table offers no columns to click")
-	}
-
-	off := base
-	if got := plain(off.rows()[0]); strings.ContainsAny(got, "↑↓") {
-		t.Errorf("an unsortable table still marks a column: %q", got)
-	}
-	// Still a header, just not a control.
-	if got := plain(off.rows()[0]); !strings.Contains(got, "Artist") {
-		t.Errorf("an unsortable table lost its labels: %q", got)
-	}
-	if spans := off.headerSpans(); spans != nil {
-		t.Errorf("an unsortable table answers clicks: %+v", spans)
-	}
-	// Both are the same width, so turning sorting off shifts nothing.
-	if a, b := lipgloss.Width(plain(on.rows()[0])), lipgloss.Width(plain(off.rows()[0])); a != b {
-		t.Errorf("the header is %d cells sortable and %d not", a, b)
-	}
-}
-
-// The arrow is a mark beside the name, not another letter of it.
-func TestTheArrowIsSpacedFromTheLabel(t *testing.T) {
-	for _, by := range []sortColumn{sortTitle, sortArtist, sortLength} {
-		table := trackTable{tracks: tableTracks(), width: 80, height: 6,
-			sortable: true, sort: sortSpec{by: by}, now: time.Now()}
-		header := plain(table.rows()[0])
-		at := strings.IndexAny(header, "↑↓")
-		if at <= 0 {
-			t.Fatalf("no arrow for %v: %q", by, header)
-		}
-		if header[at-1] != ' ' {
-			t.Errorf("the arrow is against the label: %q", header)
-		}
-	}
 }
 
 // An order is asked for about one listing. It does not follow the reader to
@@ -545,11 +430,6 @@ func TestSwitchingPlaylistsClearsTheSort(t *testing.T) {
 	}
 	if m.Tracks[0].Title != "Zeta" {
 		t.Errorf("the listing is not in its own order: %v", titles(m.Tracks))
-	}
-	// The header stops saying it is sorted, too.
-	header := plain(m.table(m.width, m.bodyHeight()).rows()[0])
-	if strings.ContainsAny(header, "↑↓") {
-		t.Errorf("the header still marks a column: %q", header)
 	}
 }
 
@@ -693,5 +573,73 @@ func TestTheMarkAndTheThumbShareACell(t *testing.T) {
 	// Below the thumb the trough is its ordinary self.
 	if got := plain(bar[height-1]); !strings.Contains(got, "│") {
 		t.Errorf("the bottom of the trough is %q", got)
+	}
+}
+
+// The columns are shares of what is left once the mark and the separators
+// are taken: most of it to the title, a third of the rest to the artist, the
+// remainder to the length.
+func TestTheColumnsAreSharedSixtyThirtyTen(t *testing.T) {
+	for _, width := range []int{40, 60, 80, 100, 120} {
+		table := trackTable{tracks: tableTracks(), width: width, height: 6}
+		cols := table.layout(width)
+		spare := width - markWidth - 2
+
+		if want := spare * titleShare / 100; cols.title != want {
+			t.Errorf("%d: title is %d, want %d", width, cols.title, want)
+		}
+		if want := spare * lengthShare / 100; cols.length != want && cols.length != minLength {
+			t.Errorf("%d: length is %d, want %d or the %d floor",
+				width, cols.length, want, minLength)
+		}
+		if cols.length < minLength {
+			t.Errorf("%d: length is %d, too narrow for MM:SS", width, cols.length)
+		}
+		// Nothing is lost or invented between them.
+		if got := cols.title + cols.artist + cols.length; got != spare {
+			t.Errorf("%d: the columns come to %d, want %d", width, got, spare)
+		}
+		// And the row that comes out is exactly the width asked for.
+		for i, row := range table.rows() {
+			if got := lipgloss.Width(plain(row)); got != width {
+				t.Errorf("%d: row %d is %d cells", width, i, got)
+			}
+		}
+	}
+}
+
+// One column takes all of it, because there is nothing to share with.
+func TestASingleColumnTakesTheWholeWidth(t *testing.T) {
+	table := trackTable{tracks: tableTracks(), width: 80, height: 6, titleOnly: true}
+	cols := table.layout(80)
+	if want := 80 - markWidth; cols.title != want {
+		t.Errorf("title is %d, want %d", cols.title, want)
+	}
+	if cols.artist != 0 || cols.length != 0 {
+		t.Errorf("the other columns are %d and %d", cols.artist, cols.length)
+	}
+}
+
+// The columns are not named. A table of songs is legible without being told
+// that the titles are titles, and the row it cost was the row it cost.
+func TestTheTableHasNoHeader(t *testing.T) {
+	tracks := tableTracks()
+	table := trackTable{tracks: tracks, width: 80, height: len(tracks), showRating: true}
+
+	rows := table.rows()
+	if len(rows) != len(tracks) {
+		t.Fatalf("%d rows for %d tracks", len(rows), len(tracks))
+	}
+	// The first row is a track, not a word about one.
+	if got := plain(rows[0]); !strings.Contains(got, tracks[0].Title) {
+		t.Errorf("the first row is %q, want the first track", got)
+	}
+	for _, word := range []string{"Title", "Artist", "Length"} {
+		if strings.Contains(plain(strings.Join(rows, "\n")), word) {
+			t.Errorf("the table still names %q", word)
+		}
+	}
+	if headerRows != 0 {
+		t.Errorf("headerRows is %d", headerRows)
 	}
 }

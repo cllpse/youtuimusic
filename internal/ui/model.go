@@ -921,7 +921,12 @@ var (
 	// way round the theme has them.
 	background = lipgloss.Black
 	foreground = lipgloss.White
-	// muted is the dim foreground: on the page, but not what is being read.
+	// muted is only ever a background. As a foreground it does not clear any
+	// contrast worth having: a light theme has to spend colour 8 on being a
+	// shade of its own page, and #BDBDBD on #FFFFFF is about 1.8:1, which is
+	// not text and is not a border either. Dim text is the terminal's own
+	// faint instead, and anything that has to hold a line takes the
+	// foreground.
 	muted = lipgloss.BrightBlack
 	// emphasis is the far end of the foreground. It is what the accent used
 	// to be — the strongest thing available — and doubles as the fill under
@@ -1063,13 +1068,14 @@ func tabBorder(left, middle, right string) lipgloss.Border {
 var (
 	inactiveTabStyle = lipgloss.NewStyle().
 				Border(tabBorder("┴", "─", "┴"), true).
-				BorderForeground(muted).
-				Foreground(muted).
+				BorderForeground(foreground).
+				Faint(true).
 				Padding(0, 1)
 	activeTabStyle = inactiveTabStyle.
 			Border(tabBorder("╯", " ", "╰"), true).
 			BorderForeground(emphasis).
 			Foreground(emphasis).
+			Faint(false).
 			Bold(true)
 	// The gap is the rule that carries on past the last tab. It inherits the
 	// tab's padding unless that is cleared, which would push the row two
@@ -1233,7 +1239,8 @@ func (m Model) renderTabs() string {
 		// With no tabs the row still has to be exactly as tall, or
 		// everything below it moves up and the mouse lands on the wrong
 		// thing. Two empty lines and the rule the tabs would have sat on.
-		return "\n\n" + dim.Render(strings.Repeat("─", max(0, m.width)))
+		return "\n\n" + lipgloss.NewStyle().Foreground(foreground).
+			Render(strings.Repeat("─", max(0, m.width)))
 	}
 	rendered := make([]string, 0, len(spans))
 	for _, s := range spans {
@@ -1260,7 +1267,6 @@ func (m Model) renderTracks(width, height int) string {
 func (m Model) table(width, height int) trackTable {
 	return trackTable{
 		sort:        m.sort,
-		sortable:    true,
 		highlight:   m.highlightColor(),
 		now:         m.clock(),
 		tracks:      m.Tracks,
@@ -1435,9 +1441,12 @@ func fillRow(segments []statusSegment, fill lipgloss.Style, width int) string {
 // playerBox is the frame around the bar and the controls. Its border
 // replaces the blank lines that used to separate them from the list, so it
 // costs no height.
+// Its border is the foreground and not the dim colour: lipgloss draws a
+// border as a colour and cannot draw one faint, and the dim colour is too
+// close to a light page to be a line at all.
 var playerBox = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
-	BorderForeground(muted).
+	BorderForeground(foreground).
 	Padding(0, playerPadding)
 
 const (

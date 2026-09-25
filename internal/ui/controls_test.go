@@ -558,17 +558,18 @@ func TestButtonsFillWhenLive(t *testing.T) {
 	if !codes[onFillFG] {
 		t.Errorf("a filled button has no contrasting text on it: %v", codes)
 	}
-	// The repeat button is off, so it is dim rather than filled.
-	if !codes["90"] {
+	// The repeat button is off, so it is dimmed rather than filled. Dimmed
+	// is the terminal's own faint: colour 8 on a light page is not text.
+	if !codes[faintSGR] {
 		t.Errorf("nothing on the row is dimmed: %v", codes)
 	}
 }
 
-// Idle, a button is only its icon, dimmed: there is nothing to press.
-func TestIdleButtonsAreOnlyDimIcons(t *testing.T) {
+// Idle, a button is only its label, dimmed: there is nothing to press.
+func TestIdleButtonsAreOnlyDimLabels(t *testing.T) {
 	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
 	codes := sgrCodes(controlsLine(m))
-	if !codes["90"] {
+	if !codes[faintSGR] {
 		t.Errorf("the idle row is not dimmed: %v", codes)
 	}
 	if codes[fillBG] {

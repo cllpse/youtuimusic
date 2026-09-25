@@ -773,41 +773,6 @@ func TestAHighlightedRowDoesNotMuteItsColumns(t *testing.T) {
 	}
 }
 
-// Clicking a column header orders by it; clicking again reverses.
-func TestClickingTheHeaderSorts(t *testing.T) {
-	m := sample()
-	m.setTracks([]Track{
-		{VideoID: "a", Title: "Zulu", Artist: "Zappa", Duration: 3 * time.Minute},
-		{VideoID: "b", Title: "Alpha", Artist: "abba", Duration: time.Minute},
-	})
-
-	spans := m.table(m.width, m.bodyHeight()).headerSpans()
-	var artist int
-	for _, span := range spans {
-		if span.by == sortArtist {
-			artist = span.start + 1
-		}
-	}
-	if artist == 0 {
-		t.Fatal("no artist column on the header")
-	}
-
-	next, _ := m.Update(click(artist, tabsHeight))
-	m = next.(Model)
-	if m.sort.by != sortArtist || m.sort.desc {
-		t.Fatalf("sort = %+v", m.sort)
-	}
-	if m.Tracks[0].Title != "Alpha" {
-		t.Errorf("the list was not reordered: %q first", m.Tracks[0].Title)
-	}
-
-	next, _ = m.Update(click(artist, tabsHeight))
-	m = next.(Model)
-	if !m.sort.desc || m.Tracks[0].Title != "Zulu" {
-		t.Errorf("the second click did not reverse: %+v, %q", m.sort, m.Tracks[0].Title)
-	}
-}
-
 // s cycles the column and S reverses, without either needing the mouse.
 func TestSortKeys(t *testing.T) {
 	m := sample()
@@ -1172,5 +1137,58 @@ func TestNothingIsColouredButTrouble(t *testing.T) {
 	codes := sgrCodes(m.View().Content)
 	if !codes["41"] && !codes["31"] {
 		t.Errorf("an error is not red: %v", codes)
+	}
+}
+
+// Colour 8 is not a foreground for anything that has to be read or has to
+// hold a line. A light theme has to spend it on being a shade of its own page
+// — #BDBDBD on #FFFFFF is about 1.8:1 — so dim text is the terminal's own
+// faint instead, and borders take the foreground.
+//
+// The two exceptions are the scrollbar and the bar's groove. Those are the
+// row highlight, which is a surface and is meant to be near the page; where
+// the terminal does not say what colour it is, colour 8 is the nearest thing
+// the scheme has to that. Neither is text.
+func TestTheDimColourIsNotDrawnAsText(t *testing.T) {
+	m := sample()
+	m.Tracks = rows(100)
+	m.playing, m.Length, m.Position = m.Tracks[3], time.Minute, 20*time.Second
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
+
+	for _, state := range []struct {
+		name  string
+		setup func(Model) Model
+	}{
+		{"playing", func(m Model) Model { return m }},
+		{"idle", func(m Model) Model { m.playing = Track{}; return m }},
+		{"paused", func(m Model) Model { m.Paused = true; return m }},
+	} {
+		t.Run(state.name, func(t *testing.T) {
+			at := state.setup(m)
+			lines := strings.Split(at.View().Content, "\n")
+
+			rows := map[string]int{
+				"the tab row":             1,
+				"the rule under the tabs": tabsHeight - 1,
+				"the player's top border": at.barRow() - 1,
+				"the buttons":             at.controlsRow(),
+				"the status bar":          at.statusRow(),
+			}
+			for what, row := range rows {
+				if sgrCodes(lines[row])["90"] {
+					t.Errorf("%s draws the dim colour: %q", what, plain(lines[row]))
+				}
+			}
+			// Where it is dimmed, it is dimmed with faint.
+			if !sgrCodes(lines[at.controlsRow()])[faintSGR] &&
+				!sgrCodes(lines[1])[faintSGR] {
+				t.Error("nothing is dimmed at all, so this proves nothing")
+			}
+		})
+	}
+
+	// It is still a background, which is the one thing it is good for.
+	if !sgrCodes(sample().View().Content)[highlightSGR] {
+		t.Error("it stopped being a background too")
 	}
 }

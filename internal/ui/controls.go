@@ -118,8 +118,9 @@ const (
 func buttonWidth(label string) int { return lipgloss.Width(label) }
 
 var (
-	// Idle, a button is an outline: there is nothing to press.
-	buttonStyle = lipgloss.NewStyle().Foreground(muted)
+	// Idle, a button is its label dimmed: there is nothing to press. Faint
+	// and not the dim colour, which against a light page is not text.
+	buttonStyle = lipgloss.NewStyle().Faint(true)
 	// Live, it is turned inside out — the foreground as a fill, the
 	// background as its text — which is what makes it look pressable rather
 	// than printed, without reaching for a second hue.

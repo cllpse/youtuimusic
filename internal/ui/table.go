@@ -30,10 +30,6 @@ type trackTable struct {
 	// titleOnly drops every column but the first. An album is one artist's
 	// record, so naming them down the page says the same thing each time.
 	titleOnly bool
-	// sortable offers the columns as sort controls. A popover is a detour
-	// into one record or one artist, where the order is the thing being
-	// looked at, so it says no and the header stops being a control.
-	sortable bool
 	// playing is the video id to colour, and is empty when nothing is.
 	playing string
 	// highlight is the selected row's fill, derived from the terminal's own
@@ -51,17 +47,23 @@ type trackTable struct {
 }
 
 const (
-	// headerRows is the one line naming the columns.
-	headerRows = 1
+	// headerRows is zero: the columns are not named. A table of songs is
+	// legible without being told that the titles are titles, and the row it
+	// cost was the row it cost.
+	headerRows = 0
 	// scrollbarWidth is the bar itself plus a blank column to its right, so
 	// it does not sit against whatever is beside it.
 	scrollbarWidth = 2
 
 	markWidth = 2
-	// lengthWidth fits "Length", the space before the arrow, and the arrow
-	// that marks it as the column in use. Cutting either off leaves the
-	// header saying which column is sorted but not which way.
-	lengthWidth = 8
+	// The columns are shares of what is left once the mark and the two
+	// separators are taken: most of it to the title, a third of what remains
+	// to the artist, the rest to the length.
+	titleShare  = 60
+	lengthShare = 10
+	// minLength still fits "MM:SS", because a duration cut short is a
+	// different duration rather than a shorter one.
+	minLength = 5
 )
 
 // rowsHeight is how many tracks the block has room for.
@@ -101,16 +103,18 @@ func (t trackTable) hasScrollbar() bool {
 
 // layout is the width of each column, given what the table has to work with.
 type layout struct {
-	title, artist int
+	title, artist, length int
 }
 
 func (t trackTable) layout(width int) layout {
 	if t.titleOnly {
+		// One column takes all of it. There is nothing to share with.
 		return layout{title: max(width-markWidth, 0)}
 	}
-	spare := max(width-markWidth-lengthWidth-2, 0)
-	title := spare / 2
-	return layout{title: title, artist: spare - title}
+	spare := max(width-markWidth-2, 0)
+	title := spare * titleShare / 100
+	length := min(max(spare*lengthShare/100, minLength), max(spare-title, 0))
+	return layout{title: title, artist: spare - title - length, length: length}
 }
 
 // rows renders the block one line at a time, so a caller can put something
@@ -124,8 +128,6 @@ func (t trackTable) rows() []string {
 	cols := t.layout(width)
 
 	out := make([]string, 0, t.height)
-	out = append(out, pad(t.header(cols), t.width))
-
 	for i := range t.rowsHeight() {
 		index := i + t.offset
 		var line string
@@ -151,87 +153,6 @@ func (t trackTable) rows() []string {
 }
 
 func (t trackTable) render() string { return strings.Join(t.rows(), "\n") }
-
-// header names the columns and marks the one the table is ordered by.
-func (t trackTable) header(cols layout) string {
-	if cols.title+cols.artist < 4 {
-		// Too narrow for columns, so naming them would run past the edge.
-		return strings.Repeat(" ", max(t.width, 0))
-	}
-	if t.titleOnly {
-		return strings.Repeat(" ", markWidth) +
-			t.headerCell(sortTitle, "Title", cols.title)
-	}
-	cells := []struct {
-		by    sortColumn
-		label string
-		width int
-	}{
-		{sortTitle, "Title", cols.title},
-		{sortArtist, "Artist", cols.artist},
-		{sortLength, "Length", lengthWidth},
-	}
-
-	out := strings.Repeat(" ", markWidth)
-	for i, cell := range cells {
-		if i > 0 {
-			out += " "
-		}
-		out += t.headerCell(cell.by, cell.label, cell.width)
-	}
-	return out
-}
-
-// headerCell names one column, marked when it is the one in use.
-func (t trackTable) headerCell(by sortColumn, label string, width int) string {
-	style := dim
-	if t.sortable && t.sort.by == by {
-		// A space so the arrow reads as a mark beside the name rather
-		// than as another letter of it.
-		label += " " + t.sort.arrow()
-		style = active
-	}
-	return style.Render(pad(truncate(label, width), width))
-}
-
-// headerSpans is where each column sits on the header row, so that clicking
-// one can sort by it. A table that cannot be sorted offers none, so the
-// header is a label rather than a row of controls that do nothing.
-func (t trackTable) headerSpans() []struct {
-	by         sortColumn
-	start, end int
-} {
-	if !t.sortable {
-		return nil
-	}
-	width := t.width
-	if t.hasScrollbar() {
-		width -= scrollbarWidth
-	}
-	cols := t.layout(width)
-
-	type span = struct {
-		by         sortColumn
-		start, end int
-	}
-	widths := []span{{sortTitle, 0, cols.title}}
-	if !t.titleOnly {
-		widths = append(widths,
-			span{sortArtist, 0, cols.artist},
-			span{sortLength, 0, lengthWidth})
-	}
-
-	at := markWidth
-	out := make([]span, 0, len(widths))
-	for i, w := range widths {
-		if i > 0 {
-			at++
-		}
-		out = append(out, span{by: w.by, start: at, end: at + w.end})
-		at += w.end
-	}
-	return out
-}
 
 // moreRow is the last line of a listing that has more to fetch.
 func (t trackTable) moreRow(width int) string {
@@ -293,9 +214,9 @@ func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string
 	}
 
 	artist := pad(truncate(track.Artist, cols.artist), cols.artist)
-	length := strings.Repeat(" ", lengthWidth)
+	length := strings.Repeat(" ", cols.length)
 	if !track.isRelease() {
-		length = pad(formatDuration(track.Duration), lengthWidth)
+		length = pad(truncate(formatDuration(track.Duration), cols.length), cols.length)
 	}
 	if !highlighted {
 		artist, length = dim.Render(artist), dim.Render(length)
