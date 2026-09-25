@@ -1020,8 +1020,8 @@ var (
 
 const (
 	tabsHeight = 3 // border, label, border
-	// playerRows is the rule, a blank line, the bar, the buttons and a
-	// blank line under them.
+	// playerRows is the box: border, bar, blank, controls, border. The
+	// title that used to sit in it is the status bar's now.
 	playerRows = 5
 	statusRows = 1
 	// progressRows is everything below the list.
@@ -1041,16 +1041,15 @@ func (m Model) bodyHeight() int {
 	return 1
 }
 
-// barRow is the line the progress bar is drawn on: past the list, the rule
-// under it and the blank line under that.
-func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 2 }
+// barRow is the line the progress bar is drawn on: past the list and the
+// box's own border.
+func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 1 }
 
 // statusRow is the bar under the player.
 func (m Model) statusRow() int { return tabsHeight + m.bodyHeight() + playerRows }
 
-// controlsRow is the line of buttons, directly under the bar: they are one
-// thing, and a gap between them made them read as two.
-func (m Model) controlsRow() int { return m.barRow() + 1 }
+// controlsRow is the line of buttons, a blank line below the bar.
+func (m Model) controlsRow() int { return m.barRow() + 2 }
 
 // barGeometry is the column the progress bar starts at and how wide it is.
 // Rendering and hit-testing both go through this, so a click lands where the
@@ -1350,37 +1349,34 @@ func fillRow(segments []statusSegment, width int) string {
 	return b.String()
 }
 
-const (
-	// contentLeft is the gutter the bar and the buttons start at. It is the
-	// list's gutter, so the player lines up with what is above it rather
-	// than sitting in a frame of its own.
-	contentLeft = 2
-)
+// playerBox is the frame around the bar and the controls. Its border
+// replaces the blank lines that used to separate them from the list, so it
+// costs no height.
+var playerBox = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(muted).
+	Padding(0, playerPadding)
 
-// separator is the rule that divides the list from the player. A line is
-// enough to say where one ends and the other begins; a box around the
-// player said it four times and boxed in something that is not a panel.
-func (m Model) separator() string {
-	return dim.Render(strings.Repeat("─", max(m.width, 0)))
-}
+const (
+	playerBorder  = 1
+	playerPadding = 1
+	// contentLeft is the first column inside the box, and contentWidth what
+	// is left of the row once both sides are taken. The bar and the buttons
+	// are laid out from it, and the border and padding put it there.
+	contentLeft = playerBorder + playerPadding
+)
 
 func (m Model) contentWidth() int { return max(0, m.width-2*contentLeft) }
 
 func (m Model) renderPlayer() string {
-	// The bar and the buttons are both laid out from contentLeft, so the
-	// gutter is written here rather than by either of them — it used to be
-	// the box's border and padding supplying it.
-	gutter := strings.Repeat(" ", min(contentLeft, max(m.width, 0)))
-	// The bar and the buttons sit together, with air above and below the
-	// pair of them rather than between them.
-	blank := strings.Repeat(" ", max(m.width, 0))
-	return lipgloss.JoinVertical(lipgloss.Left,
-		m.separator(),
-		blank,
-		gutter+m.renderBar(),
-		gutter+m.renderControls(),
-		blank,
+	// One blank line, under the bar, so it is not wedged against the
+	// buttons. Above it the box's own border is separation enough.
+	inner := lipgloss.JoinVertical(lipgloss.Left,
+		m.renderBar(),
+		strings.Repeat(" ", m.contentWidth()),
+		m.renderControls(),
 	)
+	return playerBox.Render(inner)
 }
 
 // barRamp is the bar's gradient, as ANSI palette entries. Naming the

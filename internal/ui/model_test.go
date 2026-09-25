@@ -315,7 +315,7 @@ func TestThePlayerHoldsOnlyTheBarAndButtons(t *testing.T) {
 
 	lines := strings.Split(m.View().Content, "\n")
 	for _, row := range []int{m.barRow() - 1, m.barRow() + 1} {
-		if got := plain(lines[row]); strings.ContainsAny(got, "PolyCherry") {
+		if got := strings.Trim(plain(lines[row]), "│ "); strings.ContainsAny(got, "PolyCherry") {
 			t.Errorf("row %d still holds the track: %q", row, got)
 		}
 	}
@@ -326,13 +326,9 @@ func TestThePlayerHoldsOnlyTheBarAndButtons(t *testing.T) {
 	if !strings.Contains(lines[m.controlsRow()], iconPrevious) {
 		t.Errorf("no controls on row %d", m.controlsRow())
 	}
-	// And the buttons are directly under the bar, with the blank line the
-	// player ends on between them and the status bar.
-	if !strings.Contains(plain(lines[m.controlsRow()]), iconPrevious) {
-		t.Errorf("the buttons are not under the bar: %q", plain(lines[m.controlsRow()]))
-	}
-	if got := strings.TrimSpace(plain(lines[m.statusRow()-1])); got != "" {
-		t.Errorf("the player does not end on a blank line: %q", got)
+	// And the box still ends above the status bar.
+	if !strings.HasSuffix(plain(lines[m.statusRow()-1]), "╯") {
+		t.Errorf("the box does not close above the status bar: %q", plain(lines[m.statusRow()-1]))
 	}
 }
 
@@ -460,49 +456,39 @@ func TestTabRowIsThreeLines(t *testing.T) {
 	}
 }
 
-// A rule divides the list from the player. The player is not a panel, so
-// it is not boxed in like one.
-func TestThePlayerSitsUnderARule(t *testing.T) {
+// The bar and the controls sit in one box, and it costs no height: its
+// border takes the rows the blank lines used to.
+func TestThePlayerIsBoxed(t *testing.T) {
 	m := sample()
 	lines := strings.Split(m.View().Content, "\n")
 	if len(lines) != 20 {
 		t.Fatalf("view is %d lines, want 20", len(lines))
 	}
 
-	if got, want := plain(lines[m.barRow()-2]), strings.Repeat("─", m.width); got != want {
-		t.Errorf("the rule above the player is %q", got)
+	// The bar sits directly under the border: no blank line above it, one
+	// below, separating it from the buttons.
+	top, bottom := lines[m.barRow()-1], lines[m.barRow()+3]
+	if !strings.HasPrefix(plain(top), "╭") || !strings.HasSuffix(plain(top), "╮") {
+		t.Errorf("no top border: %q", plain(top))
 	}
-	// Nothing in the player carries a frame any more.
-	for _, row := range []int{m.barRow() - 2, m.barRow() - 1, m.barRow(),
-		m.barRow() + 1, m.barRow() + 2} {
-		if line := plain(lines[row]); strings.ContainsAny(line, "│╭╮╰╯") {
-			t.Errorf("row %d is still boxed: %q", row, line)
+	if !strings.HasSuffix(plain(bottom), "╯") {
+		t.Errorf("no bottom border: %q", plain(bottom))
+	}
+	if inner := strings.TrimSpace(plain(lines[m.barRow()])[1:]); inner == "" {
+		t.Error("the row under the border is blank; the bar should be there")
+	}
+	if inner := strings.Trim(plain(lines[m.barRow()+1]), "│ "); inner != "" {
+		t.Errorf("the row under the bar is not blank: %q", inner)
+	}
+	// Every row inside it is bounded by the sides, blank lines included.
+	for _, row := range []int{m.barRow(), m.barRow() + 1, m.barRow() + 2} {
+		line := plain(lines[row])
+		if !strings.HasPrefix(line, "│") || !strings.HasSuffix(line, "│") {
+			t.Errorf("row %d is not inside the box: %q", row, line)
 		}
-		if w := lipgloss.Width(lines[row]); w != m.width {
-			t.Errorf("row %d is %d cells, want %d", row, w, m.width)
+		if lipgloss.Width(lines[row]) != m.width {
+			t.Errorf("row %d is %d cells, want %d", row, lipgloss.Width(lines[row]), m.width)
 		}
-	}
-
-	// Air above the bar and below the buttons, none between them: they are
-	// one control, not two.
-	if got := strings.TrimSpace(plain(lines[m.barRow()-1])); got != "" {
-		t.Errorf("the line under the rule is not blank: %q", got)
-	}
-	if got := strings.TrimSpace(plain(lines[m.barRow()+2])); got != "" {
-		t.Errorf("the line under the buttons is not blank: %q", got)
-	}
-	if !strings.Contains(plain(lines[m.barRow()+1]), iconPrevious) {
-		t.Errorf("the buttons are not directly under the bar: %q", plain(lines[m.barRow()+1]))
-	}
-
-	// The bar is at the list's gutter.
-	bar := plain(lines[m.barRow()])
-	if strings.TrimSpace(bar) == "" {
-		t.Error("no bar under the rule")
-	}
-	if start, _ := m.barGeometry(); !strings.HasPrefix(bar, strings.Repeat(" ", start)) ||
-		bar[start] == ' ' {
-		t.Errorf("the bar does not start at column %d: %q", start, bar)
 	}
 }
 
@@ -606,7 +592,7 @@ func TestTheScrollbarThumbFollowsTheWindow(t *testing.T) {
 	height := m.listHeight()
 
 	thumbTop := func(m Model) int {
-		for i, cell := range scrollbarFor(len(m.Tracks), m.trackOffset, height) {
+		for i, cell := range scrollbarFor(len(m.Tracks), m.trackOffset, height, -1) {
 			if strings.Contains(cell, "█") {
 				return i
 			}

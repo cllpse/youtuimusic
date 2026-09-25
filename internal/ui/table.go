@@ -76,6 +76,21 @@ func (t trackTable) rowCount() int {
 // not made narrower for nothing.
 func needsScrollbar(total, height int) bool { return height > 0 && total > height }
 
+// playingRow is where the playing track is in this listing, or -1 when it
+// is not in this one at all — which is the ordinary case for every tab but
+// the one it was started from.
+func (t trackTable) playingRow() int {
+	if t.playing == "" {
+		return -1
+	}
+	for i, track := range t.tracks {
+		if track.VideoID == t.playing {
+			return i
+		}
+	}
+	return -1
+}
+
 func (t trackTable) hasScrollbar() bool {
 	return needsScrollbar(t.rowCount(), t.rowsHeight())
 }
@@ -98,7 +113,7 @@ func (t trackTable) layout(width int) layout {
 // above it without splitting a string apart again.
 func (t trackTable) rows() []string {
 	width := t.width
-	bar := scrollbarFor(t.rowCount(), t.offset, t.rowsHeight())
+	bar := scrollbarFor(t.rowCount(), t.offset, t.rowsHeight(), t.playingRow())
 	if bar != nil {
 		width -= scrollbarWidth
 	}
@@ -285,7 +300,17 @@ func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string
 // scrollbarFor draws a trough and thumb for a list. The thumb is the same
 // grey as the trough: the glyphs carry the difference, as they do on the
 // progress bar.
-func scrollbarFor(total, offset, height int) []string {
+// playingMark says where in the whole list the playing track is, which the
+// list itself can only say about the part of it on screen.
+//
+// A dot and not a block: the thumb is a block already, and the mark has to
+// stay legible where the two land on the same cell. Both fonts here carry
+// U+25CF, which is more than can be said for most of the geometric shapes.
+const playingMark = "●"
+
+// scrollbarFor draws a trough and thumb for a list, with the playing track
+// marked in it. playingAt is that track's index, or -1 for none.
+func scrollbarFor(total, offset, height, playingAt int) []string {
 	if !needsScrollbar(total, height) {
 		return nil
 	}
@@ -295,13 +320,31 @@ func scrollbarFor(total, offset, height int) []string {
 		start = min(offset*span/furthest, span)
 	}
 
+	// The trough stands for the whole list, so the mark is placed by the
+	// same proportion the thumb is.
+	mark := -1
+	if playingAt >= 0 && playingAt < total {
+		mark = min(playingAt*height/total, height-1)
+	}
+
 	out := make([]string, height)
 	for i := range out {
-		if i >= start && i < start+thumb {
+		onThumb := i >= start && i < start+thumb
+		switch {
+		case i == mark && onThumb:
+			// Both at once, which is the ordinary case while the playing
+			// track is on screen. The block stays, so the thumb does not
+			// disappear behind the mark — a long list moves its thumb by
+			// less than a cell per row, and a one-cell thumb would be
+			// swallowed whole. The colour carries the mark instead.
+			out[i] = active.Render("█") + " "
+		case i == mark:
+			out[i] = active.Render(playingMark) + " "
+		case onThumb:
 			out[i] = dim.Render("█") + " "
-			continue
+		default:
+			out[i] = dim.Render("│") + " "
 		}
-		out[i] = dim.Render("│") + " "
 	}
 	return out
 }

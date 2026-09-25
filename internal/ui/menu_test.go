@@ -109,14 +109,9 @@ func TestTheMenuOverlaysWithoutReflowing(t *testing.T) {
 			t.Errorf("line %d is %d cells, past the terminal's %d", i, w, m.width)
 		}
 	}
-	// The buttons below are untouched. Trailing spaces are trimmed off
-	// the comparison: compositing drops them, so the same row comes back
-	// shorter with the menu open than without.
-	row := func(lines []string) string {
-		return strings.TrimRight(plain(lines[m.controlsRow()]), " ")
-	}
-	if row(after) != row(before) {
-		t.Error("the buttons moved")
+	// The player box below is untouched.
+	if plain(after[m.controlsRow()]) != plain(before[m.controlsRow()]) {
+		t.Error("the bottom of the player moved")
 	}
 	// And the menu really is drawn.
 	if !strings.Contains(plain(strings.Join(after, "\n")), "Go to album") {
@@ -222,14 +217,10 @@ func TestThePopoverIsInsetAndOverlays(t *testing.T) {
 	if !strings.Contains(plain(strings.Join(after, "\n")), "Cherry Track") {
 		t.Error("the popover's tracks are not on the frame")
 	}
-	// The buttons below it are untouched. Not the status bar: opening a
-	// popover sets something loading, which is its job to say. Trailing
-	// spaces are trimmed because compositing drops them.
-	row := func(lines []string) string {
-		return strings.TrimRight(plain(lines[m.controlsRow()]), " ")
-	}
-	if row(after) != row(before) {
-		t.Error("the buttons moved")
+	// The player box below it is untouched. Not the status bar: opening a
+	// popover sets something loading, which is its job to say.
+	if plain(after[m.statusRow()-1]) != plain(before[m.statusRow()-1]) {
+		t.Error("the bottom of the player moved")
 	}
 }
 
@@ -473,13 +464,10 @@ func TestThePopoverStaysInsideTheList(t *testing.T) {
 		if x < 0 || x+width > m.width {
 			t.Errorf("%dx%d: the popover spans %d..%d", size.w, size.h, x, x+width)
 		}
-		// The player below it is still drawn.
+		// The player's bottom border is still drawn.
 		lines := strings.Split(m.View().Content, "\n")
-		if rule := plain(lines[m.barRow()-2]); !strings.Contains(rule, "─") {
-			t.Errorf("%dx%d: the rule above the player is gone: %q", size.w, size.h, rule)
-		}
-		if row := plain(lines[m.controlsRow()]); !strings.Contains(row, iconPrevious) {
-			t.Errorf("%dx%d: the buttons are gone: %q", size.w, size.h, row)
+		if last := plain(lines[m.statusRow()-1]); !strings.HasSuffix(last, "╯") {
+			t.Errorf("%dx%d: the player box is broken: %q", size.w, size.h, last)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -572,5 +573,127 @@ func TestReturningToAPlaylistDoesNotKeepItsOldSort(t *testing.T) {
 	}
 	if m.Tracks[0].Title != "Alpha" {
 		t.Errorf("the listing is not in its own order: %v", titles(m.Tracks))
+	}
+}
+
+// A long list can only colour the playing row while it is on screen. The
+// scrollbar says where it is the rest of the time.
+func TestTheScrollbarMarksThePlayingTrack(t *testing.T) {
+	var tracks []Track
+	for i := range 100 {
+		tracks = append(tracks, Track{
+			VideoID: fmt.Sprintf("v%d", i), Title: "Track", Duration: time.Minute,
+		})
+	}
+	const height = 10
+	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
+		playing: "v50"}
+
+	bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow())
+	if len(bar) != height {
+		t.Fatalf("the scrollbar is %d cells", len(bar))
+	}
+
+	at := -1
+	for i, cell := range bar {
+		if strings.Contains(plain(cell), playingMark) {
+			if at >= 0 {
+				t.Errorf("the mark is on rows %d and %d", at, i)
+			}
+			at = i
+		}
+	}
+	if at < 0 {
+		t.Fatalf("no mark in the scrollbar: %q", plainAll(bar))
+	}
+	// Halfway down the list, so halfway down the trough.
+	if want := 5; at != want {
+		t.Errorf("the mark is at %d, want %d", at, want)
+	}
+	// And it is the accent, so it reads as the playing track and not as
+	// another piece of furniture.
+	if codes := sgrCodes(bar[at]); !codes["34"] {
+		t.Errorf("the mark is not the accent: %v", codes)
+	}
+}
+
+// The ends of the list are reachable: a mark must never fall off the trough.
+func TestThePlayingMarkStaysOnTheTrough(t *testing.T) {
+	var tracks []Track
+	for i := range 37 {
+		tracks = append(tracks, Track{VideoID: fmt.Sprintf("v%d", i), Title: "T"})
+	}
+	const height = 8
+	for _, at := range []int{0, 1, 18, 35, 36} {
+		table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
+			playing: fmt.Sprintf("v%d", at)}
+		bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow())
+		// Found by colour, not by glyph: on the thumb the mark is the
+		// block, off it the dot.
+		found := -1
+		for i, cell := range bar {
+			if sgrCodes(cell)["34"] {
+				found = i
+			}
+		}
+		if found < 0 || found >= height {
+			t.Errorf("track %d marked at %d, outside 0..%d", at, found, height-1)
+		}
+	}
+}
+
+// Nothing playing, or playing something from another tab, means no mark.
+func TestNoMarkForATrackThatIsNotInTheList(t *testing.T) {
+	var tracks []Track
+	for i := range 40 {
+		tracks = append(tracks, Track{VideoID: fmt.Sprintf("v%d", i), Title: "T"})
+	}
+	for _, playing := range []string{"", "somewhere-else"} {
+		table := trackTable{tracks: tracks, width: 60, height: 10 + headerRows,
+			playing: playing}
+		if got := table.playingRow(); got != -1 {
+			t.Errorf("playing %q gave row %d", playing, got)
+		}
+		bar := scrollbarFor(table.rowCount(), table.offset, 10, table.playingRow())
+		for i, cell := range bar {
+			if strings.Contains(plain(cell), playingMark) {
+				t.Errorf("playing %q still marked row %d", playing, i)
+			}
+		}
+	}
+}
+
+func plainAll(cells []string) []string {
+	out := make([]string, len(cells))
+	for i, c := range cells {
+		out[i] = plain(c)
+	}
+	return out
+}
+
+// The mark and the thumb land on the same cell whenever the playing track
+// is on screen. Neither may swallow the other.
+func TestTheMarkAndTheThumbShareACell(t *testing.T) {
+	var tracks []Track
+	for i := range 300 {
+		tracks = append(tracks, Track{VideoID: fmt.Sprintf("v%d", i), Title: "T"})
+	}
+	const height = 10
+	// A long list moves its thumb by well under a cell per row, so at the
+	// top both the thumb and a mark for an early track are on row 0.
+	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
+		playing: "v0"}
+	bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow())
+
+	cell := bar[0]
+	if !strings.Contains(plain(cell), "█") {
+		t.Errorf("the thumb was swallowed by the mark: %q", plain(cell))
+	}
+	if codes := sgrCodes(cell); !codes["34"] {
+		t.Errorf("the shared cell does not say the track is there: %v", codes)
+	}
+	// Below the thumb the trough is its ordinary self.
+	if got := plain(bar[height-1]); !strings.Contains(got, "│") {
+		t.Errorf("the bottom of the trough is %q", got)
 	}
 }
