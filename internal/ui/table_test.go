@@ -199,7 +199,7 @@ func TestTheTableOffersTheNextPage(t *testing.T) {
 	}
 	rows := table.rows()
 	last := plain(rows[len(tracks)+headerRows])
-	if !strings.Contains(last, "load more") {
+	if !strings.Contains(last, labelLoadMore) {
 		t.Fatalf("the last row is %q", last)
 	}
 	if lipgloss.Width(last) != 40 {
@@ -216,7 +216,7 @@ func TestTheTableOffersTheNextPage(t *testing.T) {
 	if !strings.Contains(waiting, loaderLabel) || !strings.Contains(waiting, "▒") {
 		t.Errorf("the row does not say it is waiting: %q", waiting)
 	}
-	if strings.Contains(waiting, "load more") {
+	if strings.Contains(waiting, labelLoadMore) {
 		t.Errorf("it still offers what it is already fetching: %q", waiting)
 	}
 }
@@ -229,7 +229,7 @@ func TestACompleteListingOffersNothing(t *testing.T) {
 		t.Fatalf("row count = %d", table.rowCount())
 	}
 	for _, row := range table.rows() {
-		if strings.Contains(plain(row), "load more") {
+		if strings.Contains(plain(row), labelLoadMore) {
 			t.Errorf("a complete listing offers more: %q", plain(row))
 		}
 	}

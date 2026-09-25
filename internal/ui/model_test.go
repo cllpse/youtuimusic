@@ -1232,3 +1232,65 @@ func TestTheStateBlockIsAsWideAsItsWord(t *testing.T) {
 			widths["READY"], widths["PLAYING"])
 	}
 }
+
+// The highlight is derived from the page, so a theme change leaves it
+// describing a page that is no longer there. There is no notice of one to
+// hang a refresh on, so the two moments that usually accompany it re-ask.
+func TestTheBackgroundIsAskedForAgainOnFocusAndResize(t *testing.T) {
+	m := sample()
+	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0x00, 0x00, 0x00, 0xFF}})
+	m = next.(Model)
+	dark := m.highlightColor()
+
+	for _, tc := range []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{"focus", tea.FocusMsg{}},
+		{"resize", tea.WindowSizeMsg{Width: m.width, Height: m.height}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next, cmd := m.Update(tc.msg)
+			if cmd == nil {
+				t.Fatal("it did not ask the terminal anything")
+			}
+			// The command is the question. Its message is bubbletea's own
+			// unexported request type, so the name is all there is to go on;
+			// the answer comes back as the exported BackgroundColorMsg.
+			if got := fmt.Sprintf("%T", cmd()); !strings.Contains(got, "backgroundColor") {
+				t.Fatalf("it asked something else: %s", got)
+			}
+			lit, _ := next.(Model).Update(
+				tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
+			if got := lit.(Model).highlightColor(); got == dark {
+				t.Error("the tint did not follow the new page")
+			}
+		})
+	}
+}
+
+// And the frame asks the terminal to report focus, or the question above is
+// never put.
+func TestTheViewAsksForFocusReports(t *testing.T) {
+	if !sample().View().ReportFocus {
+		t.Error("focus reporting is off, so a theme change goes unnoticed")
+	}
+}
+
+// The view drawn before the first resize is what the renderer compares the
+// next one against, so a mode missing from it is a mode never asked for. The
+// mouse was lost that way once already.
+func TestTheFirstViewDeclaresEveryMode(t *testing.T) {
+	first := New(Services{}).View()
+	sized := sample().View()
+
+	if first.AltScreen != sized.AltScreen {
+		t.Errorf("alt screen: %v then %v", first.AltScreen, sized.AltScreen)
+	}
+	if first.MouseMode != sized.MouseMode {
+		t.Errorf("mouse mode: %v then %v", first.MouseMode, sized.MouseMode)
+	}
+	if first.ReportFocus != sized.ReportFocus {
+		t.Errorf("focus reporting: %v then %v", first.ReportFocus, sized.ReportFocus)
+	}
+}

@@ -1068,3 +1068,64 @@ func TestTheCloseButtonStepsBackFromAStack(t *testing.T) {
 		t.Error("the last popover did not close")
 	}
 }
+
+// A rating has to land everywhere the track is, not only where it was made.
+// The popover behind the front one is on the screen — that is what the inset
+// is for — and a listing already fetched is what a later visit is served.
+func TestARatingReachesEveryListTheTrackIsIn(t *testing.T) {
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	const shared = "shared"
+	lib.tracks["LM"] = []ytm.Track{
+		{VideoID: shared, Title: "Shared", Artist: "DAPHNI"},
+		{VideoID: "other", Title: "Other", Artist: "B"},
+	}
+	lib.tracks["PL1"] = []ytm.Track{{VideoID: shared, Title: "Shared", Artist: "DAPHNI"}}
+	lib.tracks["UCdaphni"] = []ytm.Track{
+		{VideoID: shared, Title: "Shared", Artist: "DAPHNI"},
+		{Title: "Cherry", AlbumID: "MPREbCherry"},
+	}
+	lib.tracks["MPREbCherry"] = []ytm.Track{{VideoID: shared, Title: "Shared", Artist: "DAPHNI"}}
+
+	m := wired(t, lib, st, au)
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+
+	// Fetch the other tab so it is cached, then come back.
+	m.tabCursor = 1
+	tabbed, cmd := m.showTab()
+	m = drain(t, tabbed, cmd)
+	m.tabCursor = 0
+	tabbed, cmd = m.showTab()
+	m = drain(t, tabbed, cmd)
+	if _, ok := m.cache["PL1"]; !ok {
+		t.Fatal("the other playlist was not cached")
+	}
+
+	// An artist, then an album stacked on it.
+	next, cmd := m.goTo(Playlist{ID: "UCdaphni", Title: "DAPHNI", kind: tabArtist})
+	m = drain(t, next.(Model), cmd)
+	next, cmd = m.goTo(Playlist{ID: "MPREbCherry", Title: "Cherry", kind: tabAlbum})
+	m = drain(t, next.(Model), cmd)
+	if len(m.history) != 1 {
+		t.Fatalf("history is %d deep", len(m.history))
+	}
+
+	// Rate it from the album at the front.
+	next, cmd = m.rateTrack(m.detour.tracks[0], RatingUp)
+	m = drain(t, next.(Model), cmd)
+
+	rated := func(what string, rows []Track) {
+		for _, tr := range rows {
+			if tr.VideoID == shared && tr.Rating != RatingUp {
+				t.Errorf("%s still has it unrated", what)
+			}
+		}
+	}
+	rated("the album in front", m.detour.tracks)
+	rated("the artist behind it", m.history[0].tracks)
+	rated("the artist's arrival order", m.history[0].arrival)
+	rated("the list underneath", m.Tracks)
+	rated("its arrival order", m.arrival)
+	rated("the other cached playlist", m.cache["PL1"].tracks)
+}

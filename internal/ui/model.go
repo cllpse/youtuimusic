@@ -540,7 +540,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.bar.SetWidth(barWidth)
 		m.pausedBar.SetWidth(barWidth)
 		m.scroll()
-		return m, nil
+		// The page may be a different colour than it was; ask again.
+		return m, tea.RequestBackgroundColor
+
+	case tea.FocusMsg:
+		// Coming back to the terminal is the closest thing to notice that the
+		// theme changed while we were not looking.
+		return m, tea.RequestBackgroundColor
 
 	case tea.KeyPressMsg:
 		if m.menu.open {
@@ -858,9 +864,21 @@ func (m *Model) setRating(videoID string, r Rating) {
 	if m.playing.VideoID == videoID {
 		m.playing.Rating = r
 	}
-	// The same track can be in the list, in the popover over it, or both —
-	// and in the order each arrived in, which is what a sort rebuilds from.
-	for _, rows := range [][]Track{m.Tracks, m.arrival, m.detour.tracks, m.detour.arrival} {
+	// The same track can be anywhere: in the list, in the popover over it, in
+	// a popover stacked behind that one — which the inset leaves showing, so
+	// a stale mark there is a stale mark on the screen — and in any listing
+	// already fetched and kept, which is what a later visit is served from.
+	//
+	// Each in the order it arrived in as well as the order it is shown in,
+	// because that is what a sort rebuilds from.
+	lists := [][]Track{m.Tracks, m.arrival, m.detour.tracks, m.detour.arrival}
+	for _, behind := range m.history {
+		lists = append(lists, behind.tracks, behind.arrival)
+	}
+	for _, entry := range m.cache {
+		lists = append(lists, entry.tracks)
+	}
+	for _, rows := range lists {
 		for i := range rows {
 			if rows[i].VideoID == videoID {
 				rows[i].Rating = r
@@ -1156,9 +1174,12 @@ func (m Model) View() tea.View {
 	if m.width == 0 {
 		// Before the first resize there is nothing to draw, but the terminal
 		// modes still have to be declared or the frame turns them back off.
+		// Every one of them: this view is what the renderer compares the
+		// next against, and a mode missing here is a mode never asked for.
 		v := tea.NewView("")
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
+		v.ReportFocus = true
 		return v
 	}
 
@@ -1205,6 +1226,9 @@ func (m Model) View() tea.View {
 	v.WindowTitle = "youtuimusic"
 	// Cell motion reports drags, which is what scrubbing the bar needs.
 	v.MouseMode = tea.MouseModeCellMotion
+	// Focus is the only notice of a theme change there is — see the comment
+	// on highlightColor.
+	v.ReportFocus = true
 	return v
 }
 
@@ -1463,6 +1487,28 @@ func (m Model) contentWidth() int { return max(0, m.width-2*contentLeft) }
 // highlightTint is how far the highlight moves off the page. Enough to see,
 // little enough that a row of text still reads as text on it.
 const highlightTint = 0.10
+
+// A note on switching themes underneath a running app.
+//
+// Everything drawn in a named palette entry follows a theme change on its
+// own: 0 to 15 are resolved by the terminal on every repaint, so the moment
+// the palette changes the next frame is in the new colours. That is most of
+// the interface — the filled buttons, the status block, every border, the
+// faint text.
+//
+// The highlight cannot. It is not a palette entry: it is the terminal's own
+// background moved a tenth of the way towards its foreground, which has to
+// be asked for and arrives as a message. Asked once at startup, it is a
+// concrete colour from then on, and a theme change leaves it describing the
+// old page — the selected row, the wide half of the status bar, the bar's
+// groove and the scrollbar all keep the tint of a page that is no longer
+// there.
+//
+// There is no notice of a theme change to hang a refresh on. The mode that
+// would provide one, DEC 2031, is not implemented anywhere in this stack, so
+// the terminal is never asked to report and never does. What is left is
+// focus and resize: switching a theme usually means leaving the terminal and
+// coming back to it, and often changes the window. Both re-ask.
 
 // highlightColor is the selected row's fill. Until the terminal says what
 // its background is — and some never answer — the scheme's own grey stands

@@ -154,12 +154,16 @@ func (t trackTable) rows() []string {
 
 func (t trackTable) render() string { return strings.Join(t.rows(), "\n") }
 
+// labelLoadMore ends in an ellipsis, which is what says the row is a door
+// rather than a statement.
+const labelLoadMore = "Load more…"
+
 // moreRow is the last line of a listing that has more to fetch.
 func (t trackTable) moreRow(width int) string {
 	if t.loadingMore {
 		return lipgloss.PlaceHorizontal(width, lipgloss.Center, t.loader)
 	}
-	centred := lipgloss.PlaceHorizontal(width, lipgloss.Center, "load more")
+	centred := lipgloss.PlaceHorizontal(width, lipgloss.Center, labelLoadMore)
 	if t.cursor == len(t.tracks) {
 		return rowSelected(t.highlight).Render(centred)
 	}
