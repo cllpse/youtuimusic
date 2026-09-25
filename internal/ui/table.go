@@ -246,9 +246,12 @@ func (t trackTable) moreRow(width int) string {
 // background says the second, so a row can say both at once — which it has
 // to, since the cursor is usually on the track that is playing.
 var (
-	rowPlaying  = lipgloss.NewStyle().Bold(true).Foreground(accent)
-	rowSelected = lipgloss.NewStyle().Background(muted)
-	rowBoth     = lipgloss.NewStyle().Bold(true).Foreground(accent).Background(muted)
+	rowPlaying = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	// The same surface the player is filled with, so a selected row reads as
+	// raised rather than as its own kind of thing. Its text is dark, because
+	// the surface is light.
+	rowSelected = lipgloss.NewStyle().Background(panel).Foreground(onPanel)
+	rowBoth     = lipgloss.NewStyle().Bold(true).Foreground(accent).Background(panel)
 )
 
 // rowStyle picks how a row is drawn, and reports whether it is styled at

@@ -885,14 +885,19 @@ var (
 	alert = lipgloss.Red
 	// contrast is what goes on top of the accent when the accent is a fill.
 	contrast = lipgloss.BrightWhite
-	// panel is the player's fill. Black and not muted, so that the muted
-	// things drawn on it — the idle buttons, the bar's unplayed part — are
-	// still visible against it.
-	panel = lipgloss.Black
+	// panel is the raised surface: the player's fill, and the background of
+	// a selected row. The lightest grey the scheme has that is not white
+	// itself, and one colour for both so the two read as the same material.
+	panel = lipgloss.White
+	// onPanel is what text on that surface is drawn in. The surface is
+	// light, so the default foreground — light, on a dark terminal — would
+	// vanish into it.
+	onPanel = lipgloss.Black
 	// played is the paused bar's filled part: neutral, so nothing about it
-	// reads as playing, but lighter than muted so it is still visible
-	// against the groove behind it.
-	played = lipgloss.White
+	// reads as playing, but darker than the muted groove so the playhead is
+	// still visible. Darker and not lighter because the panel behind it is
+	// the light surface now, and a light fill would vanish into it.
+	played = lipgloss.Black
 )
 
 var (
@@ -1437,9 +1442,9 @@ func rampAt(_, position float64) color.Color {
 
 // mutedRamp drains the colour out of the played part without draining the
 // information: paused, the bar stops being the one lit thing on the screen
-// but still says where the playhead is. It has to be a lighter neutral than
-// the groove rather than the same one — matching it hid the position, which
-// is the one thing the bar is for.
+// but still says where the playhead is. It has to differ from the groove
+// rather than match it — matching hid the position, which is the one thing
+// the bar is for.
 func mutedRamp(_, _ float64) color.Color { return played }
 
 // emptyCell is what the bar has not reached yet: a solid block in the

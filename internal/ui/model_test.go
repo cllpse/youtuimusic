@@ -459,6 +459,11 @@ func TestTabRowIsThreeLines(t *testing.T) {
 // The bar and the controls sit in one filled panel, floated off the edges
 // of the screen. It costs no height: its border takes the rows the blank
 // lines used to.
+// panelSGR is the background code the raised surface renders as — the
+// player's fill and a selected row both. Named once so the two cannot be
+// asserted apart by accident.
+const panelSGR = "47"
+
 func TestThePlayerIsAnInsetPanel(t *testing.T) {
 	m := sample()
 	lines := strings.Split(m.View().Content, "\n")
@@ -503,7 +508,7 @@ func TestThePlayerIsAnInsetPanel(t *testing.T) {
 		if got := lipgloss.Width(lines[row]); got != m.width {
 			t.Errorf("row %d is %d cells, want %d", row, got, m.width)
 		}
-		if codes := sgrCodes(lines[row]); !codes["40"] {
+		if codes := sgrCodes(lines[row]); !codes[panelSGR] {
 			t.Errorf("row %d is not filled: %v", row, codes)
 		}
 	}
@@ -722,7 +727,7 @@ func TestPlayingAndSelectedAreSeparate(t *testing.T) {
 	alpha, beta, gamma := lines[tabsHeight+headerRows], lines[tabsHeight+headerRows+1], lines[tabsHeight+headerRows+2]
 
 	// The cursor is a filled background and nothing else.
-	if !sgrCodes(alpha)["100"] {
+	if !sgrCodes(alpha)[panelSGR] {
 		t.Errorf("the selected row is not highlighted: %v", sgrCodes(alpha))
 	}
 	if sgrCodes(alpha)["34"] {
@@ -733,19 +738,19 @@ func TestPlayingAndSelectedAreSeparate(t *testing.T) {
 	if !sgrCodes(beta)["34"] {
 		t.Errorf("the playing row is not coloured: %v", sgrCodes(beta))
 	}
-	if sgrCodes(beta)["100"] {
+	if sgrCodes(beta)[panelSGR] {
 		t.Errorf("the playing row is highlighted as if selected: %v", sgrCodes(beta))
 	}
 
 	// A row that is neither is left alone.
-	if sgrCodes(gamma)["100"] || sgrCodes(gamma)["34"] {
+	if sgrCodes(gamma)[panelSGR] || sgrCodes(gamma)["34"] {
 		t.Errorf("an ordinary row is styled: %v", sgrCodes(gamma))
 	}
 
 	// And a row that is both says both.
 	m.trackCursor = 1
 	both := strings.Split(m.View().Content, "\n")[tabsHeight+headerRows+1]
-	if !sgrCodes(both)["34"] || !sgrCodes(both)["100"] {
+	if !sgrCodes(both)["34"] || !sgrCodes(both)[panelSGR] {
 		t.Errorf("the playing row under the cursor says %v, want both", sgrCodes(both))
 	}
 }
@@ -779,7 +784,7 @@ func TestAHighlightedRowDoesNotMuteItsColumns(t *testing.T) {
 	if strings.Contains(artist[:len("DAPHNI")], "\x1b[") {
 		t.Errorf("the artist is styled separately on a highlighted row: %q", row)
 	}
-	if !sgrCodes(row)["100"] {
+	if !sgrCodes(row)[panelSGR] {
 		t.Fatalf("the row is not highlighted at all: %v", sgrCodes(row))
 	}
 }
