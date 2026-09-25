@@ -90,15 +90,28 @@ type button struct {
 	start, end int // half-open columns
 }
 
-// A button is a labelled box: its word with a rounded border straight around
-// it, no padding between the two. Every cell of it answers to a click, all
-// three rows. The gap is two so a row of them does not run together.
+// A button is a labelled box one row tall: its word with a rounded cap
+// either side. Three rows of border, label, border was the obvious way to
+// round a box and it cost the list two rows to say one word; these caps are
+// a rounded edge that fits in the row the label is already on.
+//
+// They are the Powerline half circles — the thin pair for an outline, the
+// solid pair for a fill. One row tall, a half circle is a cap rather than
+// the pill it reads as when it is wrapping three.
+const (
+	capOutlineLeft  = "\ue0b5"
+	capOutlineRight = "\ue0b7"
+	capSolidLeft    = "\ue0b6"
+	capSolidRight   = "\ue0b4"
+)
+
+// The caps cost a cell each. The gap is two so a row of them does not run
+// together. Every cell of a button answers to a click.
 const (
 	buttonBorder = 1
 	buttonGap    = 2
-	// controlsRows is how tall the row of them is: a border, the labels,
-	// a border.
-	controlsRows = 3
+	// controlsRows is how tall the row of them is.
+	controlsRows = 1
 )
 
 // buttonWidth is what one label occupies once it is boxed.
@@ -108,29 +121,28 @@ func buttonWidth(label string) int {
 
 var (
 	// Idle, a button is an outline: there is nothing to press.
-	buttonStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(muted).
-			Foreground(muted)
+	buttonStyle = lipgloss.NewStyle().Foreground(muted)
 	// Live, it is turned inside out — the foreground as a fill, the
 	// background as its text — which is what makes it look pressable rather
-	// than printed, without reaching for a second hue. Its border takes the
-	// fill as well, so the box reads as one solid rounded thing.
-	buttonLitStyle = buttonStyle.
-			BorderForeground(emphasis).
-			BorderBackground(emphasis).
+	// than printed, without reaching for a second hue.
+	buttonLitStyle = lipgloss.NewStyle().
 			Background(emphasis).
 			Foreground(background).
 			Bold(true)
 )
 
-// renderButton draws one button, three lines tall.
+// renderButton draws one button. The caps are drawn in the body's own colour
+// as a foreground, so an idle button is a thin outline of it and a live one
+// is a solid shape of it — the curve is the glyph either way, which is the
+// only way a character grid rounds anything.
 func renderButton(label string, lit bool) string {
-	style := buttonStyle
-	if lit {
-		style = buttonLitStyle
+	if !lit {
+		return buttonStyle.Render(capOutlineLeft + label + capOutlineRight)
 	}
-	return style.Render(label)
+	cap := lipgloss.NewStyle().Foreground(emphasis)
+	return cap.Render(capSolidLeft) +
+		buttonLitStyle.Render(label) +
+		cap.Render(capSolidRight)
 }
 
 // groupWidth is what a run of buttons occupies, gaps between them included.

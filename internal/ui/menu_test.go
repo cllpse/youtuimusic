@@ -309,11 +309,6 @@ func TestThePopoverOwnsNavigationButNotTransport(t *testing.T) {
 func TestClickingInsidethePopover(t *testing.T) {
 	m, lib, st, au := menuModel(t)
 	lib.tracks["MPREbCherry"] = fromUI(rows(20))
-	// Tall enough for the popover to show three tracks. The labelled buttons
-	// cost the player three rows where the icons cost one, and the list and
-	// anything over it pay for that.
-	sized, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 26})
-	m = sized.(Model)
 	now := time.Unix(1000, 0)
 	m = frozen(m, &now)
 	m = openVia(t, m, menuAlbum)

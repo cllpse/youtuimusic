@@ -1081,9 +1081,8 @@ var (
 
 const (
 	tabsHeight = 3 // border, label, border
-	// playerRows is the box: border, bar, blank, the three rows the labelled
-	// buttons take, border. The title that used to sit in it is the status
-	// bar's now.
+	// playerRows is the box: border, bar, blank, the buttons, border. The
+	// title that used to sit in it is the status bar's now.
 	playerRows = 4 + controlsRows
 	statusRows = 1
 	// progressRows is everything below the list.

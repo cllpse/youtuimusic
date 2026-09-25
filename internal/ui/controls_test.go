@@ -24,10 +24,10 @@ func playingModel(t *testing.T) (Model, *fakeLibrary, *fakeStreams, *fakeAudio) 
 	return m, lib, st, au
 }
 
-// controlsLine is the row the labels sit on: the middle of the three the
-// boxed buttons take.
+// controlsLine is the row the labels sit on, which is the middle of however
+// many rows the buttons take.
 func controlsLine(m Model) string {
-	return strings.Split(m.View().Content, "\n")[m.controlsRow()+1]
+	return strings.Split(m.View().Content, "\n")[m.controlsRow()+controlsRows/2]
 }
 
 // controlsBlock is all three rows of them.
@@ -540,11 +540,11 @@ func TestButtonsFillWhenLive(t *testing.T) {
 	if strings.ContainsAny(row, "[]") {
 		t.Errorf("brackets are drawn: %q", row)
 	}
-	if !strings.Contains(row, "│"+labelPrevious+"│") {
-		t.Errorf("the label is not boxed, or is padded off its border: %q", row)
+	if !strings.Contains(row, labelPrevious) {
+		t.Errorf("the label is not drawn: %q", row)
 	}
-	if strings.Contains(row, labelPrevious+"││") {
-		t.Errorf("buttons are touching: %q", row)
+	if !strings.Contains(row, capSolidLeft+labelPrevious+capSolidRight) {
+		t.Errorf("a live button is not capped: %q", row)
 	}
 
 	codes := sgrCodes(controlsLine(m))
@@ -597,10 +597,14 @@ func TestAButtonIsAsWideAsItsHitbox(t *testing.T) {
 						label, lit, i, got, buttonWidth(label))
 				}
 			}
-			// And it is rounded, with the tight arc rather than a pill.
-			if !strings.HasPrefix(plain(lines[0]), "╭") ||
-				!strings.HasSuffix(plain(lines[len(lines)-1]), "╯") {
-				t.Errorf("%q is not rounded: %q", label, plain(lines[0]))
+			// And it is capped at both ends, whichever pair it uses.
+			left, right := capOutlineLeft, capOutlineRight
+			if lit {
+				left, right = capSolidLeft, capSolidRight
+			}
+			if !strings.HasPrefix(plain(lines[0]), left) ||
+				!strings.HasSuffix(plain(lines[0]), right) {
+				t.Errorf("%q lit=%v is not capped: %q", label, lit, plain(lines[0]))
 			}
 		}
 	}

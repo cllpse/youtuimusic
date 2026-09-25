@@ -327,8 +327,8 @@ func TestThePlayerHoldsOnlyTheBarAndButtons(t *testing.T) {
 	if !strings.ContainsAny(plain(lines[m.barRow()]), "▌"+string(emptyCell)) {
 		t.Errorf("no progress bar on row %d: %q", m.barRow(), plain(lines[m.barRow()]))
 	}
-	if !strings.Contains(lines[m.controlsRow()+1], labelPrevious) {
-		t.Errorf("no controls on row %d", m.controlsRow()+1)
+	if !strings.Contains(lines[m.controlsRow()], labelPrevious) {
+		t.Errorf("no controls on row %d", m.controlsRow())
 	}
 	// And the box still closes above the status bar, inside its margin.
 	if bottom := strings.TrimRight(plain(lines[m.statusRow()-1]), " "); !strings.HasSuffix(bottom, "╯") {
