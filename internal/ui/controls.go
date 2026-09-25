@@ -90,34 +90,21 @@ type button struct {
 	start, end int // half-open columns
 }
 
-// A button is a labelled box one row tall: its word with a rounded cap
-// either side. Three rows of border, label, border was the obvious way to
-// round a box and it cost the list two rows to say one word; these caps are
-// a rounded edge that fits in the row the label is already on.
+// A button is its label and nothing else: one row, no border around it, no
+// padding inside it. It went through a bordered box three rows tall and a
+// pair of rounded caps on the way here, and both were bigger than what they
+// were wrapping. A word with a fill under it is a button.
 //
-// They are the Powerline half circles — the thin pair for an outline, the
-// solid pair for a fill. One row tall, a half circle is a cap rather than
-// the pill it reads as when it is wrapping three.
+// The gap is two, which is the only separation there is now, and every cell
+// of a label answers to a click.
 const (
-	capOutlineLeft  = "\ue0b5"
-	capOutlineRight = "\ue0b7"
-	capSolidLeft    = "\ue0b6"
-	capSolidRight   = "\ue0b4"
-)
-
-// The caps cost a cell each. The gap is two so a row of them does not run
-// together. Every cell of a button answers to a click.
-const (
-	buttonBorder = 1
-	buttonGap    = 2
+	buttonGap = 2
 	// controlsRows is how tall the row of them is.
 	controlsRows = 1
 )
 
-// buttonWidth is what one label occupies once it is boxed.
-func buttonWidth(label string) int {
-	return lipgloss.Width(label) + 2*buttonBorder
-}
+// buttonWidth is what one button occupies, which is its label and no more.
+func buttonWidth(label string) int { return lipgloss.Width(label) }
 
 var (
 	// Idle, a button is an outline: there is nothing to press.
@@ -131,18 +118,13 @@ var (
 			Bold(true)
 )
 
-// renderButton draws one button. The caps are drawn in the body's own colour
-// as a foreground, so an idle button is a thin outline of it and a live one
-// is a solid shape of it — the curve is the glyph either way, which is the
-// only way a character grid rounds anything.
+// renderButton draws one button: its label, dimmed when there is nothing to
+// press and turned inside out when there is.
 func renderButton(label string, lit bool) string {
-	if !lit {
-		return buttonStyle.Render(capOutlineLeft + label + capOutlineRight)
+	if lit {
+		return buttonLitStyle.Render(label)
 	}
-	cap := lipgloss.NewStyle().Foreground(emphasis)
-	return cap.Render(capSolidLeft) +
-		buttonLitStyle.Render(label) +
-		cap.Render(capSolidRight)
+	return buttonStyle.Render(label)
 }
 
 // groupWidth is what a run of buttons occupies, gaps between them included.

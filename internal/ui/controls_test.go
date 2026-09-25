@@ -543,8 +543,10 @@ func TestButtonsFillWhenLive(t *testing.T) {
 	if !strings.Contains(row, labelPrevious) {
 		t.Errorf("the label is not drawn: %q", row)
 	}
-	if !strings.Contains(row, capSolidLeft+labelPrevious+capSolidRight) {
-		t.Errorf("a live button is not capped: %q", row)
+	// Nothing wraps it: no border, no cap, no bracket. The gap between
+	// buttons is the only separation, so it has to actually be there.
+	if strings.Contains(row, labelPrevious+labelPlayPause) {
+		t.Errorf("buttons are touching: %q", row)
 	}
 
 	codes := sgrCodes(controlsLine(m))
@@ -597,14 +599,9 @@ func TestAButtonIsAsWideAsItsHitbox(t *testing.T) {
 						label, lit, i, got, buttonWidth(label))
 				}
 			}
-			// And it is capped at both ends, whichever pair it uses.
-			left, right := capOutlineLeft, capOutlineRight
-			if lit {
-				left, right = capSolidLeft, capSolidRight
-			}
-			if !strings.HasPrefix(plain(lines[0]), left) ||
-				!strings.HasSuffix(plain(lines[0]), right) {
-				t.Errorf("%q lit=%v is not capped: %q", label, lit, plain(lines[0]))
+			// And it is the label itself, with nothing wrapped round it.
+			if got := plain(lines[0]); got != label {
+				t.Errorf("%q lit=%v draws %q", label, lit, got)
 			}
 		}
 	}
