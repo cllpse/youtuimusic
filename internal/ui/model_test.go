@@ -2,7 +2,10 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"image/color"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1051,5 +1054,47 @@ func TestAnUnusableBackgroundAnswerIsIgnored(t *testing.T) {
 				t.Errorf("the fallback was lost: %v", got)
 			}
 		})
+	}
+}
+
+// colorTriples is every truecolor parameter in a rendered line, foreground
+// and background alike.
+func colorTriples(s string) []string {
+	var out []string
+	for _, m := range regexp.MustCompile(`[34]8;2;(\d+;\d+;\d+)`).FindAllStringSubmatch(s, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// The bar's groove, the wide half of the status bar and the selected row are
+// one surface. Whatever the highlight turns out to be, all three take it —
+// they were three separate colours once, and it looked like three things.
+func TestOneSurfaceForTheGrooveTheStatusBarAndTheSelection(t *testing.T) {
+	m := sample()
+	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
+	m = next.(Model)
+	m.playing = m.Tracks[0]
+	m.Length, m.Position = time.Minute, 30*time.Second
+	m.trackCursor = 1 // not the playing row, so the fill is the only styling
+
+	r, g, b, _ := m.highlightColor().RGBA()
+	want := fmt.Sprintf("%d;%d;%d", r>>8, g>>8, b>>8)
+	if want == "0;0;0" {
+		t.Fatalf("the highlight was not derived: %v", m.highlightColor())
+	}
+
+	lines := strings.Split(m.View().Content, "\n")
+	for _, tc := range []struct {
+		what string
+		row  int
+	}{
+		{"the bar's groove", m.barRow()},
+		{"the status bar", m.statusRow()},
+		{"the selected row", tabsHeight + headerRows + 1},
+	} {
+		if got := colorTriples(lines[tc.row]); !slices.Contains(got, want) {
+			t.Errorf("%s does not use the highlight %s: %v", tc.what, want, got)
+		}
 	}
 }

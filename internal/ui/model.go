@@ -1287,15 +1287,21 @@ func (m Model) showsRating() bool { return m.showingID != likedPlaylistID }
 // The status bar is two blocks: a small bright one saying what the app is
 // doing, and one holding what is playing that takes the rest of the row.
 var (
-	statusBarStyle = lipgloss.NewStyle().Background(surface).Foreground(onSurface)
 	statusKeyStyle = lipgloss.NewStyle().
 			Background(accent).
 			Foreground(contrast).
 			Bold(true).
 			Padding(0, 1)
 	statusAlertStyle = statusKeyStyle.Background(alert)
-	statusTextStyle  = statusBarStyle.Padding(0, 1)
 )
+
+// statusBarStyle fills the wide half of the bar with the row highlight, so
+// the two read as the same surface. No foreground with it: the highlight is
+// a tint of the terminal's own background, so the terminal's own text colour
+// still reads on it whatever the theme is.
+func (m Model) statusBarStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(m.highlightColor())
+}
 
 // statusSegment is a run of text on the bar with its own fill.
 //
@@ -1323,7 +1329,8 @@ func (m Model) renderStatusBar() string {
 	// the frame wider than the screen.
 	key = pad(key, min(widestStatusKey, max(m.width-2, 0)))
 	block := style.Render(truncate(key, max(m.width-2, 0)))
-	return block + fillRow(m.statusSegments(), max(m.width-lipgloss.Width(block), 0))
+	return block + fillRow(m.statusSegments(), m.statusBarStyle(),
+		max(m.width-lipgloss.Width(block), 0))
 }
 
 // statusKeys are every word the block can hold, and widestStatusKey is what
@@ -1358,7 +1365,7 @@ func (m Model) statusKey() string {
 
 // statusSegments is what the wide block holds: the trouble, or the track.
 func (m Model) statusSegments() []statusSegment {
-	fill := statusBarStyle
+	fill := m.statusBarStyle()
 	switch {
 	case m.Err != nil:
 		return []statusSegment{{m.Err.Error(), fill}}
@@ -1377,7 +1384,7 @@ func (m Model) statusSegments() []statusSegment {
 
 // fillRow lays segments across a width and pads to it with the same fill,
 // so the bar runs unbroken from one end of the row to the other.
-func fillRow(segments []statusSegment, width int) string {
+func fillRow(segments []statusSegment, fill lipgloss.Style, width int) string {
 	if width <= 0 {
 		return ""
 	}
@@ -1393,7 +1400,7 @@ func fillRow(segments []statusSegment, width int) string {
 		used += lipgloss.Width(text)
 	}
 
-	write(strings.Repeat(" ", min(padding, width)), statusBarStyle)
+	write(strings.Repeat(" ", min(padding, width)), fill)
 	for _, segment := range segments {
 		room := width - used - padding
 		if room <= 0 {
@@ -1402,7 +1409,7 @@ func fillRow(segments []statusSegment, width int) string {
 		write(truncate(segment.text, room), segment.style)
 	}
 	if used < width {
-		write(strings.Repeat(" ", width-used), statusBarStyle)
+		write(strings.Repeat(" ", width-used), fill)
 	}
 	return b.String()
 }
@@ -1484,9 +1491,10 @@ func rampAt(_, position float64) color.Color {
 // the bar is for.
 func mutedRamp(_, _ float64) color.Color { return played }
 
-// emptyCell is what the bar has not reached yet: a solid block in the muted
-// colour, so the track reads as a filled groove rather than as texture. The
-// played part is told apart by its colour, not by its weight.
+// emptyCell is what the bar has not reached yet: a solid block, so the track
+// reads as a filled groove rather than as texture. The played part is told
+// apart by its colour, not by its weight. The groove's colour is the row
+// highlight, set at render time — see renderBar.
 //
 // A perforated glyph would have been closer to the idea, but the ones that
 // exist — U+1FB95 CHECKER BOARD FILL, the crosshatched squares at
@@ -1500,17 +1508,26 @@ func newBar(fill progress.ColorFunc) progress.Model {
 		progress.WithColorFunc(fill),
 		progress.WithFillCharacters(progress.DefaultFullCharHalfBlock, emptyCell),
 	)
-	// The default is a fixed grey, which is off-scheme like the rest.
-	bar.EmptyColor = muted
+	// Overwritten per render with the row highlight; this is only what an
+	// unrendered bar holds.
+	bar.EmptyColor = surface
 	return bar
 }
 
 // renderBar draws the position, greyed out while playback is paused.
+//
+// The groove takes the row highlight, so the bar sits on the same surface
+// the selected row and the status bar do. It is set here rather than when the
+// bar is built because the highlight is not known until the terminal answers
+// for it; progress.Model is a value, so the copy carries the width already
+// set on the original.
 func (m Model) renderBar() string {
+	bar := m.bar
 	if m.Paused {
-		return m.pausedBar.ViewAs(m.fraction())
+		bar = m.pausedBar
 	}
-	return m.bar.ViewAs(m.fraction())
+	bar.EmptyColor = m.highlightColor()
+	return bar.ViewAs(m.fraction())
 }
 
 // truncate cuts a string to fit a number of screen cells, ending it with an
