@@ -23,9 +23,6 @@ type Track struct {
 	ArtistID string
 	// Rating is the thumbs state the server already has for this track.
 	Rating Rating
-	// Added is when the track joined the listing, and is the zero time
-	// where the listing does not say.
-	Added time.Time
 	// SetVideoID identifies this track's occurrence within a playlist, which
 	// is what a removal has to target — the same song can appear twice.
 	SetVideoID string
@@ -254,7 +251,6 @@ func (c *Client) parseTracks(raw json.RawMessage) ([]Track, error) {
 			AlbumID:  browseTarget(item, pageTypeAlbum),
 			ArtistID: browseTarget(item, pageTypeArtist),
 			Rating:   ratingOf(item),
-			Added:    addedOn(item, c.Now),
 		}
 		t.Title = tidy(t.Title)
 		t.Artist, t.Album = artistAndAlbum(item)

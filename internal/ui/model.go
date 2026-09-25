@@ -72,9 +72,6 @@ type Track struct {
 	Artist   string
 	Duration time.Duration
 	Rating   Rating
-	// Added is when the track joined the listing it came from, and is the
-	// zero time where the listing does not say.
-	Added time.Time
 	// Album names the tab the menu opens; AlbumID and ArtistID are where
 	// its "go to" rows lead, and are empty when a row leads nowhere.
 	Album    string
@@ -386,6 +383,10 @@ func (m Model) selectTab(i int) (Model, tea.Cmd) {
 // time it is opened and serving them from memory after that.
 func (m Model) showTab() (Model, tea.Cmd) {
 	m.trackCursor, m.trackOffset = 0, 0
+	// An order was asked for about one listing, so it does not follow the
+	// reader to the next: arriving at a playlist shows the playlist's own
+	// order, which is how it reads in the app it came from.
+	m.sort, m.autoPages = sortSpec{}, 0
 	tab := m.tabAt(m.tabCursor)
 
 	if entry, ok := m.cache[tab.ID]; ok {
@@ -756,7 +757,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.detour.active {
 			return m, nil
 		}
-		return m.sortBy(m.sort.next(m.table(m.width, m.bodyHeight()).showsAdded()))
+		return m.sortBy(m.sort.next())
 	case "S":
 		if m.detour.active {
 			return m, nil
@@ -1019,9 +1020,8 @@ var (
 
 const (
 	tabsHeight = 3 // border, label, border
-	// playerRows is the box: border, bar, blank, controls, border. The
-	// title that used to sit in it is the status bar's now.
-	playerRows = 5
+	// playerRows is the rule, the bar, a blank line and the buttons.
+	playerRows = 4
 	statusRows = 1
 	// progressRows is everything below the list.
 	progressRows = playerRows + statusRows
@@ -1041,7 +1041,7 @@ func (m Model) bodyHeight() int {
 }
 
 // barRow is the line the progress bar is drawn on: past the list and the
-// box's own border.
+// rule under it.
 func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 1 }
 
 // statusRow is the bar under the player.
@@ -1348,33 +1348,35 @@ func fillRow(segments []statusSegment, width int) string {
 	return b.String()
 }
 
-// playerBox is the frame around the title, the bar and the controls. Its
-// border replaces the blank lines that used to separate them from the list,
-// so it costs no height.
-var playerBox = lipgloss.NewStyle().
-	Border(lipgloss.RoundedBorder()).
-	BorderForeground(muted).
-	Padding(0, playerPadding)
-
 const (
-	playerBorder  = 1
-	playerPadding = 1
-	// contentLeft is the first column inside the box, and contentWidth what
-	// is left of the row once both sides are taken.
-	contentLeft = playerBorder + playerPadding
+	// contentLeft is the gutter the bar and the buttons start at. It is the
+	// list's gutter, so the player lines up with what is above it rather
+	// than sitting in a frame of its own.
+	contentLeft = 2
 )
+
+// separator is the rule that divides the list from the player. A line is
+// enough to say where one ends and the other begins; a box around the
+// player said it four times and boxed in something that is not a panel.
+func (m Model) separator() string {
+	return dim.Render(strings.Repeat("─", max(m.width, 0)))
+}
 
 func (m Model) contentWidth() int { return max(0, m.width-2*contentLeft) }
 
 func (m Model) renderPlayer() string {
-	// One blank line, under the bar, so it is not wedged against the
-	// buttons. Above it the box's own border is separation enough.
-	inner := lipgloss.JoinVertical(lipgloss.Left,
-		m.renderBar(),
-		strings.Repeat(" ", m.contentWidth()),
-		m.renderControls(),
+	// The bar and the buttons are both laid out from contentLeft, so the
+	// gutter is written here rather than by either of them — it used to be
+	// the box's border and padding supplying it.
+	gutter := strings.Repeat(" ", min(contentLeft, max(m.width, 0)))
+	// One blank line under the bar, so it is not wedged against the
+	// buttons. Above it the rule is separation enough.
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.separator(),
+		gutter+m.renderBar(),
+		strings.Repeat(" ", max(m.width, 0)),
+		gutter+m.renderControls(),
 	)
-	return playerBox.Render(inner)
 }
 
 // barRamp is the bar's gradient, as ANSI palette entries. Naming the

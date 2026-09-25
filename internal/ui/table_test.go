@@ -7,7 +7,18 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/cllpse/youtuimusic/internal/ytm"
 )
+
+// titles is what a list reads as, for comparing orders.
+func titles(ts []Track) []string {
+	out := make([]string, len(ts))
+	for i, t := range ts {
+		out[i] = t.Title
+	}
+	return out
+}
 
 func tableTracks() []Track {
 	return []Track{
@@ -235,7 +246,7 @@ func TestTheHeaderNamesTheColumns(t *testing.T) {
 		}
 	}
 	if strings.Contains(header, "Added") {
-		t.Errorf("an undated list has an Added column: %q", header)
+		t.Errorf("the Added column is back: %q", header)
 	}
 	if lipgloss.Width(header) != 70 {
 		t.Errorf("header is %d cells, want 70", lipgloss.Width(header))
@@ -254,73 +265,13 @@ func TestTheHeaderNamesTheColumns(t *testing.T) {
 	}
 }
 
-// A dated listing gets the extra column; an undated one does not, because a
-// column of blanks is worse than no column.
-func TestTheAddedColumnAppearsOnlyWhenThereAreDates(t *testing.T) {
-	tracks := tableTracks()
-	plainTable := trackTable{tracks: tracks, width: 80, height: 6}
-	if plainTable.showsAdded() {
-		t.Error("an undated list shows the column")
-	}
-
-	tracks[1].Added = time.Date(2024, 8, 2, 0, 0, 0, 0, time.UTC)
-	dated := trackTable{tracks: tracks, width: 80, height: 6,
-		now: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}
-	if !dated.showsAdded() {
-		t.Fatal("a dated list does not show the column")
-	}
-	header := plain(dated.rows()[0])
-	if !strings.Contains(header, "Added") {
-		t.Errorf("header is missing the column: %q", header)
-	}
-	if got := plain(dated.rows()[1+1]); !strings.Contains(got, "2 Aug 2024") {
-		t.Errorf("the date is not on its row: %q", got)
-	}
-	// Every row is still exactly the width.
-	for i, row := range dated.rows() {
-		if w := lipgloss.Width(plain(row)); w != 80 {
-			t.Errorf("row %d is %d cells", i, w)
-		}
-	}
-}
-
-func TestHumanDate(t *testing.T) {
-	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
-	for _, tc := range []struct {
-		in   time.Time
-		want string
-	}{
-		{time.Time{}, ""},
-		{now, "today"},
-		{now.Add(-25 * time.Hour), "yesterday"},
-		{now.Add(-3 * 24 * time.Hour), "3 days ago"},
-		{now.Add(-9 * 24 * time.Hour), "last week"},
-		{now.Add(-21 * 24 * time.Hour), "3 weeks ago"},
-		{now.Add(-200 * 24 * time.Hour), "8 Mar 2026"},
-		{time.Date(2024, 8, 2, 0, 0, 0, 0, time.UTC), "2 Aug 2024"},
-	} {
-		if got := humanDate(tc.in, now); got != tc.want {
-			t.Errorf("humanDate(%v) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
 func TestSortTracks(t *testing.T) {
-	jan := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	feb := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+
 	tracks := []Track{
-		{Title: "beta", Artist: "Zappa", Duration: 3 * time.Minute, Added: feb},
-		{Title: "Alpha", Artist: "abba", Duration: time.Minute, Added: jan},
+		{Title: "beta", Artist: "Zappa", Duration: 3 * time.Minute},
+		{Title: "Alpha", Artist: "abba", Duration: time.Minute},
 		{Title: "Gamma", Artist: "Móna", Duration: 2 * time.Minute},
 	}
-	titles := func(ts []Track) []string {
-		out := make([]string, len(ts))
-		for i, t := range ts {
-			out[i] = t.Title
-		}
-		return out
-	}
-
 	for _, tc := range []struct {
 		name string
 		spec sortSpec
@@ -331,7 +282,6 @@ func TestSortTracks(t *testing.T) {
 		{"title reversed", sortSpec{by: sortTitle, desc: true}, []string{"Gamma", "beta", "Alpha"}},
 		{"artist ignores case", sortSpec{by: sortArtist}, []string{"Alpha", "Gamma", "beta"}},
 		{"length", sortSpec{by: sortLength}, []string{"Alpha", "Gamma", "beta"}},
-		{"added, undated first", sortSpec{by: sortAdded}, []string{"Gamma", "Alpha", "beta"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := append([]Track(nil), tracks...)
@@ -348,15 +298,10 @@ func TestSortTracks(t *testing.T) {
 func TestSortCycles(t *testing.T) {
 	var spec sortSpec
 	for _, want := range []sortColumn{sortTitle, sortArtist, sortLength, sortNone} {
-		spec = spec.next(false)
+		spec = spec.next()
 		if spec.by != want {
 			t.Fatalf("cycled to %v, want %v", spec.by, want)
 		}
-	}
-	// With dates there is one more stop.
-	spec = sortSpec{by: sortLength}
-	if spec = spec.next(true); spec.by != sortAdded {
-		t.Errorf("a dated list skips Added: %v", spec.by)
 	}
 }
 
@@ -378,8 +323,7 @@ func TestSortOnAColumn(t *testing.T) {
 // column is sorted but not which way.
 func TestEveryHeaderLabelFitsWithItsArrow(t *testing.T) {
 	tracks := tableTracks()
-	tracks[0].Added = time.Now()
-	for _, by := range []sortColumn{sortTitle, sortArtist, sortLength, sortAdded} {
+	for _, by := range []sortColumn{sortTitle, sortArtist, sortLength} {
 		for _, desc := range []bool{false, true} {
 			table := trackTable{
 				tracks: tracks, width: 80, height: 6, sortable: true,
@@ -482,7 +426,6 @@ func TestRowsAreSquareWithWideCharacters(t *testing.T) {
 // same thing on every row.
 func TestAnAlbumsTableIsTitlesOnly(t *testing.T) {
 	tracks := tableTracks()
-	tracks[0].Added = time.Now()
 
 	full := trackTable{tracks: tracks, width: 70, height: 6, showRating: true,
 		sortable: true, now: time.Now()}
@@ -493,7 +436,7 @@ func TestAnAlbumsTableIsTitlesOnly(t *testing.T) {
 	if !strings.Contains(header, "Title") {
 		t.Errorf("no title column: %q", header)
 	}
-	for _, gone := range []string{"Artist", "Length", "Added"} {
+	for _, gone := range []string{"Artist", "Length"} {
 		if strings.Contains(header, gone) {
 			t.Errorf("%s is still a column: %q", gone, header)
 		}
@@ -569,5 +512,65 @@ func TestTheArrowIsSpacedFromTheLabel(t *testing.T) {
 		if header[at-1] != ' ' {
 			t.Errorf("the arrow is against the label: %q", header)
 		}
+	}
+}
+
+// An order is asked for about one listing. It does not follow the reader to
+// the next playlist, which has an order of its own.
+func TestSwitchingPlaylistsClearsTheSort(t *testing.T) {
+	lib := library()
+	lib.tracks["PL1"] = []ytm.Track{
+		{VideoID: "z", Title: "Zeta", Artist: "Z", Duration: time.Minute},
+		{VideoID: "a", Title: "Alpha", Artist: "A", Duration: time.Minute},
+	}
+	m := wired(t, lib, &fakeStreams{}, newFakeAudio())
+	m = drain(t, m, m.Init())
+
+	next, cmd := m.Update(keyPress("s"))
+	m = drain(t, next.(Model), cmd)
+	if m.sort.by != sortTitle {
+		t.Fatalf("the first list did not sort: %+v", m.sort)
+	}
+
+	next, cmd = m.Update(keyPress("l"))
+	m = drain(t, next.(Model), cmd)
+
+	if m.sort.by != sortNone {
+		t.Errorf("the order followed to the next playlist: %+v", m.sort)
+	}
+	// And the new listing really is in the order it arrived in.
+	if len(m.Tracks) != 2 {
+		t.Fatalf("the next playlist has %d tracks", len(m.Tracks))
+	}
+	if m.Tracks[0].Title != "Zeta" {
+		t.Errorf("the listing is not in its own order: %v", titles(m.Tracks))
+	}
+	// The header stops saying it is sorted, too.
+	header := plain(m.table(m.width, m.bodyHeight()).rows()[0])
+	if strings.ContainsAny(header, "↑↓") {
+		t.Errorf("the header still marks a column: %q", header)
+	}
+}
+
+// Coming back to a playlist shows it the way it arrives, not the way it was
+// last left.
+func TestReturningToAPlaylistDoesNotKeepItsOldSort(t *testing.T) {
+	lib := library()
+	lib.tracks["PL1"] = []ytm.Track{{VideoID: "z", Title: "Zeta", Duration: time.Minute}}
+	m := wired(t, lib, &fakeStreams{}, newFakeAudio())
+	m = drain(t, m, m.Init())
+
+	next, cmd := m.Update(keyPress("s"))
+	m = drain(t, next.(Model), cmd)
+	next, cmd = m.Update(keyPress("l"))
+	m = drain(t, next.(Model), cmd)
+	next, cmd = m.Update(keyPress("h"))
+	m = drain(t, next.(Model), cmd)
+
+	if m.sort.by != sortNone {
+		t.Errorf("the old order came back with the playlist: %+v", m.sort)
+	}
+	if m.Tracks[0].Title != "Alpha" {
+		t.Errorf("the listing is not in its own order: %v", titles(m.Tracks))
 	}
 }

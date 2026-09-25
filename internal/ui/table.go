@@ -58,7 +58,6 @@ const (
 	// that marks it as the column in use. Cutting either off leaves the
 	// header saying which column is sorted but not which way.
 	lengthWidth = 8
-	addedWidth  = 12
 )
 
 // rowsHeight is how many tracks the block has room for.
@@ -81,37 +80,18 @@ func (t trackTable) hasScrollbar() bool {
 	return needsScrollbar(t.rowCount(), t.rowsHeight())
 }
 
-// showsAdded reports whether any row knows when it was added. Most listings
-// do not say, and a column of blanks is worse than no column.
-func (t trackTable) showsAdded() bool {
-	if t.titleOnly {
-		return false
-	}
-	for _, track := range t.tracks {
-		if !track.Added.IsZero() {
-			return true
-		}
-	}
-	return false
-}
-
 // layout is the width of each column, given what the table has to work with.
 type layout struct {
-	title, artist, added int
+	title, artist int
 }
 
 func (t trackTable) layout(width int) layout {
 	if t.titleOnly {
 		return layout{title: max(width-markWidth, 0)}
 	}
-	spare := width - markWidth - lengthWidth - 2
-	added := 0
-	if t.showsAdded() {
-		added = addedWidth
-		spare -= added + 1
-	}
-	title := max(spare, 0) / 2
-	return layout{title: title, artist: max(spare, 0) - title, added: added}
+	spare := max(width-markWidth-lengthWidth-2, 0)
+	title := spare / 2
+	return layout{title: title, artist: spare - title}
 }
 
 // rows renders the block one line at a time, so a caller can put something
@@ -172,13 +152,6 @@ func (t trackTable) header(cols layout) string {
 		{sortArtist, "Artist", cols.artist},
 		{sortLength, "Length", lengthWidth},
 	}
-	if cols.added > 0 {
-		cells = append(cells, struct {
-			by    sortColumn
-			label string
-			width int
-		}{sortAdded, "Added", cols.added})
-	}
 
 	out := strings.Repeat(" ", markWidth)
 	for i, cell := range cells {
@@ -227,9 +200,6 @@ func (t trackTable) headerSpans() []struct {
 		widths = append(widths,
 			span{sortArtist, 0, cols.artist},
 			span{sortLength, 0, lengthWidth})
-		if cols.added > 0 {
-			widths = append(widths, span{sortAdded, 0, cols.added})
-		}
 	}
 
 	at := markWidth
@@ -305,39 +275,11 @@ func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string
 	if !track.isRelease() {
 		length = pad(formatDuration(track.Duration), lengthWidth)
 	}
-	added := ""
-	if cols.added > 0 {
-		added = " " + pad(truncate(humanDate(track.Added, t.now), cols.added), cols.added)
-	}
 	if !highlighted {
-		artist, length, added = dim.Render(artist), dim.Render(length), dim.Render(added)
+		artist, length = dim.Render(artist), dim.Render(length)
 	}
 	return prefix + pad(truncate(track.Title, cols.title), cols.title) +
-		" " + artist + " " + length + added
-}
-
-// humanDate says how long ago something was in the way a person would:
-// recently, in days; beyond that, by its date.
-func humanDate(when, now time.Time) string {
-	if when.IsZero() {
-		return ""
-	}
-	switch days := int(now.Sub(when).Hours() / 24); {
-	case days < 0:
-		return when.Format("2 Jan 2006")
-	case days == 0:
-		return "today"
-	case days == 1:
-		return "yesterday"
-	case days < 7:
-		return fmt.Sprintf("%d days ago", days)
-	case days < 14:
-		return "last week"
-	case days < 60:
-		return fmt.Sprintf("%d weeks ago", days/7)
-	default:
-		return when.Format("2 Jan 2006")
-	}
+		" " + artist + " " + length
 }
 
 // scrollbarFor draws a trough and thumb for a list. The thumb is the same
@@ -389,7 +331,6 @@ const (
 	sortTitle
 	sortArtist
 	sortLength
-	sortAdded
 )
 
 // sortSpec is an order: a column and a direction.
@@ -407,12 +348,8 @@ func (s sortSpec) arrow() string {
 
 // next moves to the following column, wrapping back through unsorted so
 // that the list can always be put back the way it arrived.
-func (s sortSpec) next(hasAdded bool) sortSpec {
-	last := sortLength
-	if hasAdded {
-		last = sortAdded
-	}
-	if s.by >= last {
+func (s sortSpec) next() sortSpec {
+	if s.by >= sortLength {
 		return sortSpec{}
 	}
 	return sortSpec{by: s.by + 1}
@@ -428,8 +365,7 @@ func (s sortSpec) on(by sortColumn) sortSpec {
 }
 
 // sortTracks orders a list in place. It is stable, so the order a listing
-// arrived in survives wherever the key is equal — which for a column of
-// blank dates is everywhere.
+// arrived in survives wherever the key is equal.
 func sortTracks(tracks []Track, spec sortSpec) {
 	if spec.by == sortNone {
 		return
@@ -451,8 +387,6 @@ func compareBy(a, b Track, by sortColumn) int {
 		return compareText(a.Artist, b.Artist)
 	case sortLength:
 		return int(a.Duration - b.Duration)
-	case sortAdded:
-		return a.Added.Compare(b.Added)
 	}
 	return 0
 }
