@@ -14,7 +14,8 @@ const (
 	iconRemove = "\U000f0156" // md-close
 )
 
-// menuGap is the space between a row's icon and its label. One reads as
+// menuGap separates one word from the next where two sit on a line — not an
+// icon from its label, which sit against each other. One reads as
 // cramped: these glyphs are drawn tight inside their cell.
 const menuGap = "  "
 
@@ -53,7 +54,7 @@ func (m Model) menuRows() []menuRow {
 	t := m.menu.track
 	// The row says what pressing it does, so a liked track offers to undo
 	// it rather than offering to do it again.
-	like := menuRow{menuLike, iconThumbUpOff, "Like track", true}
+	like := menuRow{menuLike, iconThumbUp, "Like track", true}
 	if t.Rating == RatingUp {
 		// A cross, because the row undoes something rather than doing it
 		// again; a filled thumb there reads as "this is liked", which is
@@ -107,8 +108,8 @@ func (m Model) menuSize() (width, height int) {
 	for _, row := range m.menuRows() {
 		longest = max(longest, lipgloss.Width(row.label))
 	}
-	// icon, gap, label, then padding and border either side.
-	return longest + 1 + len(menuGap) + 2 + 2, len(m.menuRows()) + 1 + 2
+	// icon, label, then padding and border either side.
+	return longest + 1 + 2 + 2, len(m.menuRows()) + 1 + 2
 }
 
 // openMenu puts the menu on screen at a point, nudged so that all of it
@@ -128,7 +129,7 @@ func (m Model) renderMenu() string {
 
 	lines := make([]string, 0, len(rows)+1)
 	for i, row := range rows {
-		line := pad(row.icon+menuGap+row.label, inner)
+		line := pad(row.icon+row.label, inner)
 		switch {
 		case !row.enabled:
 			line = dim.Render(line)
@@ -215,8 +216,7 @@ func (m Model) rateTrack(t Track, r Rating) (tea.Model, tea.Cmd) {
 	if previous == r {
 		r = RatingNone
 	}
-	m.setRating(t.VideoID, r)
-	return m, m.rate(t.VideoID, r, previous)
+	return m.rated(t.VideoID, r, previous)
 }
 
 // goTo shows an album or an artist. It takes over the view rather than

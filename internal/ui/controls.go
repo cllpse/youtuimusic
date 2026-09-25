@@ -10,11 +10,15 @@ import (
 // Material Design icons from Nerd Fonts, by the names glyphnames.json gives
 // them. The codepoints were checked against that file rather than typed from
 // memory, and against the installed fonts with fontconfig.
+// Filled, both of them. The outline pair — md-thumb_up_outline at U+F0514 and
+// md-thumb_down_outline at U+F0512 — was there to show an unrated track back
+// when the transport was icons; the transport is words now and the only thing
+// left drawing a thumb is a liked row, which is rated by definition. Checked
+// against Nerd Fonts glyphnames 3.5.1: these two were the only outlines in
+// the set.
 const (
-	iconThumbUp      = "\U000f0513" // md-thumb_up
-	iconThumbUpOff   = "\U000f0514" // md-thumb_up_outline
-	iconThumbDown    = "\U000f0511" // md-thumb_down
-	iconThumbDownOff = "\U000f0512" // md-thumb_down_outline
+	iconThumbUp   = "\U000f0513" // md-thumb_up
+	iconThumbDown = "\U000f0511" // md-thumb_down
 )
 
 // The transport is labelled rather than pictured. An icon has to be learned;
@@ -322,8 +326,7 @@ func (m Model) ratePlaying(r Rating) (tea.Model, tea.Cmd) {
 	if previous == r {
 		r = RatingNone
 	}
-	m.setRating(m.playing.VideoID, r)
-	return m, m.rate(m.playing.VideoID, r, previous)
+	return m.rated(m.playing.VideoID, r, previous)
 }
 
 // skip starts the next or previous track. With nothing playing yet there is

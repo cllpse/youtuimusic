@@ -818,3 +818,91 @@ func TestEveryButtonNamesItsKey(t *testing.T) {
 		t.Errorf("%v was not on the row", c)
 	}
 }
+
+// A dislike of what is playing moves on. Nothing honours "do not play this"
+// like not playing it.
+func TestDislikingWhatIsPlayingMovesOn(t *testing.T) {
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	m := wired(t, lib, st, au)
+	m.setTracks(fromAPI(lib.tracks["LM"]))
+	if len(m.Tracks) < 2 {
+		t.Fatalf("need two tracks, got %d", len(m.Tracks))
+	}
+	m.playing = m.Tracks[0]
+
+	next, cmd := m.press(controlThumbDown)
+	m = drain(t, next.(Model), cmd)
+
+	if m.playing.VideoID != m.Tracks[1].VideoID {
+		t.Errorf("playing %q, want it to have moved to %q",
+			m.playing.VideoID, m.Tracks[1].VideoID)
+	}
+	if m.Tracks[0].Rating != RatingDown {
+		t.Errorf("the dislike did not land: %v", m.Tracks[0].Rating)
+	}
+	if len(au.loaded) == 0 {
+		t.Error("nothing was loaded, so it did not really move on")
+	}
+}
+
+// Taking a dislike off is not a reason to skip anything.
+func TestUndislikingStaysPut(t *testing.T) {
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	m := wired(t, lib, st, au)
+	m.setTracks(fromAPI(lib.tracks["LM"]))
+	m.Tracks[0].Rating = RatingDown
+	m.playing = m.Tracks[0]
+
+	next, cmd := m.press(controlThumbDown)
+	m = drain(t, next.(Model), cmd)
+
+	if m.playing.VideoID != m.Tracks[0].VideoID {
+		t.Errorf("playing %q, want to have stayed on %q",
+			m.playing.VideoID, m.Tracks[0].VideoID)
+	}
+	if m.Tracks[0].Rating != RatingNone {
+		t.Errorf("the dislike was not taken off: %v", m.Tracks[0].Rating)
+	}
+}
+
+// Disliking a row further down the list says something about that row, not
+// about the next three minutes.
+func TestDislikingAnotherRowLeavesPlaybackAlone(t *testing.T) {
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	m := wired(t, lib, st, au)
+	m.setTracks(fromAPI(lib.tracks["LM"]))
+	m.playing = m.Tracks[0]
+	m.trackCursor = 1
+
+	next, cmd := m.Update(keyPress("-"))
+	m = drain(t, next.(Model), cmd)
+
+	if m.playing.VideoID != m.Tracks[0].VideoID {
+		t.Errorf("playing %q, want it untouched on %q",
+			m.playing.VideoID, m.Tracks[0].VideoID)
+	}
+	if m.Tracks[1].Rating != RatingDown {
+		t.Errorf("the dislike did not land on the cursor row: %v", m.Tracks[1].Rating)
+	}
+	if len(au.loaded) != 0 {
+		t.Errorf("it loaded %v", au.loaded)
+	}
+}
+
+// And a like never moves on, whatever it is on.
+func TestLikingWhatIsPlayingStaysPut(t *testing.T) {
+	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
+	m := wired(t, lib, st, au)
+	m.setTracks(fromAPI(lib.tracks["LM"]))
+	m.playing = m.Tracks[0]
+
+	next, cmd := m.press(controlThumbUp)
+	m = drain(t, next.(Model), cmd)
+
+	if m.playing.VideoID != m.Tracks[0].VideoID {
+		t.Errorf("a like moved playback to %q", m.playing.VideoID)
+	}
+	if len(au.loaded) != 0 {
+		t.Errorf("a like loaded %v", au.loaded)
+	}
+}

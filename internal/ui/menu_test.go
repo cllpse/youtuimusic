@@ -67,7 +67,7 @@ func TestRightClickOpensTheMenuOnThatTrack(t *testing.T) {
 			t.Errorf("menu is missing %q:\n%s", want, got)
 		}
 	}
-	for _, icon := range []string{iconThumbUpOff, iconAlbum, iconArtist} {
+	for _, icon := range []string{iconThumbUp, iconAlbum, iconArtist} {
 		if !strings.Contains(m.renderMenu(), icon) {
 			t.Errorf("menu is missing icon %q", icon)
 		}
@@ -515,15 +515,19 @@ func TestALikedTrackOffersToUnlikeWithACross(t *testing.T) {
 
 // One space reads as cramped against these glyphs, which sit tight in their
 // cell.
-func TestTheMenuSeparatesIconFromLabel(t *testing.T) {
+// An icon sits against its label, with nothing between them.
+func TestTheMenuPutsEachIconAgainstItsLabel(t *testing.T) {
 	m, _, _, _ := menuModel(t)
 	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
 	m = drain(t, next.(Model), cmd)
 
 	rendered := plain(m.renderMenu())
 	for _, row := range m.menuRows() {
-		if !strings.Contains(rendered, row.icon+menuGap+row.label) {
-			t.Errorf("%q is not separated from its icon:\n%s", row.label, rendered)
+		if !strings.Contains(rendered, row.icon+row.label) {
+			t.Errorf("%q is not against its icon:\n%s", row.label, rendered)
+		}
+		if strings.Contains(rendered, row.icon+" ") {
+			t.Errorf("%q has a gap after its icon:\n%s", row.label, rendered)
 		}
 	}
 	// And the box is wide enough for it, with the rule spanning the inside.

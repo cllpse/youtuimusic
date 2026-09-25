@@ -887,8 +887,24 @@ func (m Model) applyRating(r Rating) (tea.Model, tea.Cmd) {
 	if previous == r {
 		r = RatingNone
 	}
+	return m.rated(videoID, r, previous)
+}
+
+// rated applies a rating and, where it is a dislike of what is playing, moves
+// on. Nothing honours "do not play this" like not playing it.
+//
+// Only of what is playing: disliking a row further down the list says
+// something about that row, not about the next three minutes. And only a
+// dislike that lands — pressing it again takes the dislike off, which is not
+// a reason to skip anything.
+func (m Model) rated(videoID string, r, previous Rating) (tea.Model, tea.Cmd) {
 	m.setRating(videoID, r)
-	return m, m.rate(videoID, r, previous)
+	cmd := m.rate(videoID, r, previous)
+	if r != RatingDown || videoID != m.playing.VideoID {
+		return m, cmd
+	}
+	next, onward := m.skip(true)
+	return next, batch(cmd, onward)
 }
 
 // --------------------------------------------------------------- view ----

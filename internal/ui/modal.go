@@ -133,7 +133,7 @@ func (m Model) modalHeader(inner int) string {
 		close := modalBackStyle.Render(padded(labelClose))
 		right := modalCloseWidth
 
-		prefix := m.modalIcon() + menuGap + m.modalKind() + menuGap
+		prefix := m.modalIcon() + m.modalKind() + menuGap
 		room := max(inner-taken-right-lipgloss.Width(prefix), 0)
 		title := active.Render(prefix) + truncate(m.detour.tab.Title, room)
 
@@ -149,7 +149,8 @@ func (m Model) modalHeader(inner int) string {
 	} else if query == "" {
 		query = dim.Render("type to search")
 	}
-	return active.Render(iconSearch+menuGap) + pad(truncate(query, max(inner-3, 0)), inner-3)
+	room := max(inner-lipgloss.Width(iconSearch), 0)
+	return active.Render(iconSearch) + pad(truncate(query, room), room)
 }
 
 // typeInto runs the search box. Everything reaches it while it has focus,
