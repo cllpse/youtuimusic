@@ -3,13 +3,13 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	want := State{Playlist: "VLPL1", Cursor: 12, Offset: 4,
-		Sort: "artist", Descending: true, Repeat: "one"}
+	want := State{Playlist: "VLPL1", Playing: "dQw4w9WgXcQ"}
 	if err := Save(want); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -18,7 +18,29 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
-// Nothing remembered is the ordinary first run, not a failure.
+// A playlist was open but nothing was playing, which is an ordinary way to
+// close the app.
+func TestAPlaylistWithNothingPlaying(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := Save(State{Playlist: "LM"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got := Load()
+	if got.Playlist != "LM" || got.Playing != "" {
+		t.Errorf("got %+v", got)
+	}
+	// An empty field is left out of the file rather than written as "".
+	path, _ := Path()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "\"playing\""; strings.Contains(string(raw), want) {
+		t.Errorf("the file carries an empty %s: %s", want, raw)
+	}
+}
+
+// Nothing remembered is the first run, not a failure.
 func TestNothingRememberedIsTheZeroValue(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if got := Load(); got != (State{}) {
@@ -42,27 +64,6 @@ func TestARuinedFileIsIgnored(t *testing.T) {
 	}
 	if got := Load(); got != (State{}) {
 		t.Errorf("a ruined file produced %+v", got)
-	}
-}
-
-// Positions are hints, and a negative one would index out of a list.
-func TestNegativePositionsAreClamped(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	path, _ := Path()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path,
-		[]byte(`{"cursor":-5,"offset":-2,"playlist":"x"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got := Load()
-	if got.Cursor != 0 || got.Offset != 0 {
-		t.Errorf("cursor %d offset %d, want both clamped", got.Cursor, got.Offset)
-	}
-	if got.Playlist != "x" {
-		t.Errorf("the rest of the state was dropped: %+v", got)
 	}
 }
 

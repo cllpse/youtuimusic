@@ -131,9 +131,9 @@ type Model struct {
 	repeat  Repeat
 	loading bool
 
-	// restoring is where the last session left off, held until the pieces
-	// it names exist: the library for the tab, that tab's tracks for the
-	// position. Nil once there is nothing left to put back.
+	// restoring is what the last session was playing, held until the
+	// pieces it names exist: the library for the tab, that tab's listing
+	// for the track. Nil once there is nothing left to put back.
 	restoring *state.State
 
 	// cache is what each tab has fetched, so going back to one is instant.
@@ -392,7 +392,7 @@ func (m Model) showTab() (Model, tea.Cmd) {
 		m.arrival, m.more = entry.tracks, entry.next
 		m.Tracks, m.loading, m.Err = sorted(entry.tracks, m.sort), false, nil
 		m.showingID = tab.ID
-		m.restorePosition(tab.ID)
+		m.restorePlaying(tab.ID)
 		if len(m.Tracks) > 0 {
 			return m, m.prefetch(m.Tracks[0].VideoID)
 		}
@@ -633,7 +633,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.continueSort()
 		}
 		m.trackCursor, m.trackOffset = 0, 0
-		m.restorePosition(msg.id)
+		m.restorePlaying(msg.id)
 		if len(m.Tracks) > 0 {
 			return m, batch(m.prefetch(m.Tracks[0].VideoID), m.continueSort())
 		}
