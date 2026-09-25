@@ -352,14 +352,15 @@ func TestRowsThatLeadNowhereAreDisabled(t *testing.T) {
 			}
 		}
 	}
-	// And they are drawn greyed rather than looking available. Line 1 is
-	// the like row, 2 the rule, 3 the album row.
+	// And they are drawn dimmed rather than looking available. Dimming is
+	// the terminal's own faint, not a grey, so that it lands on any theme.
+	// Line 1 is the like row, 2 the rule, 3 the album row.
 	lines := strings.Split(m.renderMenu(), "\n")
-	if !sgrCodes(lines[3])["90"] {
-		t.Errorf("a dead row is not greyed: %v", sgrCodes(lines[3]))
+	if !sgrCodes(lines[3])[faintSGR] {
+		t.Errorf("a dead row is not dimmed: %v", sgrCodes(lines[3]))
 	}
-	if sgrCodes(lines[1])["90"] {
-		t.Errorf("the like row is greyed too; nothing distinguishes them")
+	if sgrCodes(lines[1])[faintSGR] {
+		t.Errorf("the like row is dimmed too; nothing distinguishes them")
 	}
 
 	// Clicking one does nothing at all, menu included.

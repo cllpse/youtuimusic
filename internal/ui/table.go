@@ -248,10 +248,9 @@ func (t trackTable) moreRow(width int) string {
 var (
 	rowPlaying = lipgloss.NewStyle().Bold(true).Foreground(accent)
 	// The same surface the player is filled with, so a selected row reads as
-	// raised rather than as its own kind of thing. Its text is dark, because
-	// the surface is light.
-	rowSelected = lipgloss.NewStyle().Background(panel).Foreground(onPanel)
-	rowBoth     = lipgloss.NewStyle().Bold(true).Foreground(accent).Background(panel)
+	// raised rather than as its own kind of thing.
+	rowSelected = lipgloss.NewStyle().Background(surface).Foreground(onSurface)
+	rowBoth     = lipgloss.NewStyle().Bold(true).Foreground(accent).Background(surface)
 )
 
 // rowStyle picks how a row is drawn, and reports whether it is styled at

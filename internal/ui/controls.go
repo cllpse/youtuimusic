@@ -87,8 +87,10 @@ const (
 )
 
 var (
-	// Idle, a button is only its icon, dimmed: there is nothing to press.
-	buttonStyle = lipgloss.NewStyle().Foreground(muted)
+	// Idle, a button is only its icon: there is nothing to press. It takes
+	// the surface's text colour and not the muted one, because muted is what
+	// the panel under it is filled with.
+	buttonStyle = lipgloss.NewStyle().Foreground(onSurface)
 	// Live, it fills with the accent, which is what makes it look pressable
 	// rather than printed.
 	buttonLitStyle = lipgloss.NewStyle().

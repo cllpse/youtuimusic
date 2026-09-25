@@ -459,10 +459,17 @@ func TestTabRowIsThreeLines(t *testing.T) {
 // The bar and the controls sit in one filled panel, floated off the edges
 // of the screen. It costs no height: its border takes the rows the blank
 // lines used to.
+// faintSGR is what dim text renders as: the terminal's own faint, so that
+// it follows the theme rather than naming a grey the theme may have spent
+// on being a shade of its background.
+const faintSGR = "2"
+
 // panelSGR is the background code the raised surface renders as — the
 // player's fill and a selected row both. Named once so the two cannot be
-// asserted apart by accident.
-const panelSGR = "47"
+// asserted apart by accident. 100 is the dim foreground used as a
+// background, which is one step off the terminal's own whichever way the
+// theme runs.
+const panelSGR = "100"
 
 func TestThePlayerIsAnInsetPanel(t *testing.T) {
 	m := sample()

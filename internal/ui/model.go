@@ -866,42 +866,63 @@ func (m Model) applyRating(r Rating) (tea.Model, tea.Cmd) {
 
 // --------------------------------------------------------------- view ----
 
-// Every colour in the interface comes from these three, so recolouring it
-// is one edit rather than a search.
+// Every colour in the interface comes from these, so recolouring it is one
+// edit rather than a search.
 //
 // They are named palette entries, not indices into the 256-colour cube:
 // 0-15 are the terminal's own scheme, and anything above that is a fixed
 // table that ignores it.
+//
+// The names below say what a colour is for and not what it looks like, and
+// that distinction is the whole of getting this right. A sixteen colour
+// scheme is not sixteen fixed colours: 0 is the end of the range the
+// background sits at and 7 the end the text sits at, so a light theme swaps
+// what those two literally are. One in use while this was written sets 0 to
+// #FFFFFF and 7 to #272727 — "black" is white and "white" is nearly black.
+// Pick a colour for its name and it inverts with the theme; pick it for its
+// role and it follows.
 var (
 	accent = lipgloss.Blue
 	// accentBright is the same hue, one slot up, which is how a sixteen
 	// colour palette does emphasis.
 	accentBright = lipgloss.BrightBlue
-	// muted is grey rather than blue on purpose: it is what the accent has
-	// to stand out against.
-	muted = lipgloss.BrightBlack
 	// alert is the one thing that is not the accent. An error announcing
 	// itself by colour is the point of colouring it.
 	alert = lipgloss.Red
-	// contrast is what goes on top of the accent when the accent is a fill.
+
+	// background and foreground are the terminal's own two ends, whichever
+	// way round the theme has them.
+	background = lipgloss.Black
+	foreground = lipgloss.White
+	// muted is the dim foreground: on the page, but not what is being read.
+	muted = lipgloss.BrightBlack
+	// contrast is the far end of the foreground, for text on a fill the
+	// ordinary one would not survive.
 	contrast = lipgloss.BrightWhite
-	// panel is the raised surface: the player's fill, and the background of
-	// a selected row. The lightest grey the scheme has that is not white
-	// itself, and one colour for both so the two read as the same material.
-	panel = lipgloss.White
-	// onPanel is what text on that surface is drawn in. The surface is
-	// light, so the default foreground — light, on a dark terminal — would
-	// vanish into it.
-	onPanel = lipgloss.Black
-	// played is the paused bar's filled part: neutral, so nothing about it
-	// reads as playing, but darker than the muted groove so the playhead is
-	// still visible. Darker and not lighter because the panel behind it is
-	// the light surface now, and a light fill would vanish into it.
-	played = lipgloss.Black
+
+	// surface is a raised background — the player's panel, a selected row.
+	// It is the dim foreground used the other way round, which puts it one
+	// step off the terminal's background in whichever direction that is.
+	surface = muted
+	// onSurface is text on that surface. It cannot be muted, because muted
+	// is the surface.
+	onSurface = foreground
+	// played is the paused bar's filled part: no colour, so nothing about it
+	// reads as playing, but the foreground against the groove's background,
+	// so the playhead is still there to see.
+	played = foreground
 )
 
 var (
-	dim    = lipgloss.NewStyle().Foreground(muted)
+	// dim is faint rather than a colour, and that is deliberate. Colour 8 is
+	// the only grey a sixteen colour scheme has for dim text, and a light
+	// theme has to spend it on being a shade of the background: the one in
+	// use while this was written sets it to #BDBDBD, which against a #FFFFFF
+	// page is around 1.8:1 and cannot be read. Faint asks the terminal to
+	// take its own foreground down instead, which lands right on any theme,
+	// and where it is not supported the text comes back at full strength —
+	// a flatter hierarchy rather than an invisible one.
+	dim    = lipgloss.NewStyle().Faint(true)
 	failed = lipgloss.NewStyle().Foreground(alert)
 	active = lipgloss.NewStyle().Foreground(accent)
 )
@@ -1238,7 +1259,7 @@ func (m Model) showsRating() bool { return m.showingID != likedPlaylistID }
 // The status bar is two blocks: a small bright one saying what the app is
 // doing, and one holding what is playing that takes the rest of the row.
 var (
-	statusBarStyle = lipgloss.NewStyle().Background(muted)
+	statusBarStyle = lipgloss.NewStyle().Background(surface).Foreground(onSurface)
 	statusKeyStyle = lipgloss.NewStyle().
 			Background(accent).
 			Foreground(contrast).
@@ -1368,8 +1389,8 @@ func fillRow(segments []statusSegment, width int) string {
 func (m Model) playerBox() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(muted).
-		Background(panel).
+		BorderForeground(surface).
+		Background(surface).
 		Padding(0, playerPadding).
 		Margin(0, m.inset())
 }
@@ -1448,8 +1469,9 @@ func rampAt(_, position float64) color.Color {
 func mutedRamp(_, _ float64) color.Color { return played }
 
 // emptyCell is what the bar has not reached yet: a solid block in the
-// muted colour, so the track reads as a filled groove rather than as
-// texture. The played part is told apart by its colour, not by its weight.
+// terminal's own background, so the unplayed part reads as a groove cut into
+// the panel. It cannot be the muted colour any more — that is what the panel
+// is filled with, and the groove would vanish into it.
 //
 // A perforated glyph would have been closer to the idea, but the ones that
 // exist — U+1FB95 CHECKER BOARD FILL, the crosshatched squares at
@@ -1464,7 +1486,7 @@ func newBar(fill progress.ColorFunc) progress.Model {
 		progress.WithFillCharacters(progress.DefaultFullCharHalfBlock, emptyCell),
 	)
 	// The default is a fixed grey, which is off-scheme like the rest.
-	bar.EmptyColor = muted
+	bar.EmptyColor = background
 	return bar
 }
 
