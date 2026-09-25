@@ -53,7 +53,7 @@ func TestTheMainViewAndThePopoverShareOneTable(t *testing.T) {
 	width, height := 60, len(tracks)+headerRows
 	want := trackTable{
 		tracks: tracks, cursor: 1, width: width, height: height,
-		showRating: true, playing: "c",
+		showRating: true, playing: "c", highlight: m.highlightColor(),
 	}.render()
 	if got := m.table(width, height).render(); got != want {
 		t.Errorf("the main view's rows differ from the table's:\n got %q\nwant %q", got, want)
@@ -63,7 +63,7 @@ func TestTheMainViewAndThePopoverShareOneTable(t *testing.T) {
 	inner, rows := m.modalContentWidth(), m.modalListHeight()
 	wantModal := trackTable{
 		tracks: tracks, cursor: 1, width: inner, height: rows,
-		showRating: true, playing: "c",
+		showRating: true, playing: "c", highlight: m.highlightColor(),
 	}.rows()
 	lines := strings.Split(m.renderModal(), "\n")
 	// Past the box's own border, its header and the blank line under it.

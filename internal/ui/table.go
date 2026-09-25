@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"slices"
 	"strings"
 	"time"
@@ -35,8 +36,11 @@ type trackTable struct {
 	sortable bool
 	// playing is the video id to colour, and is empty when nothing is.
 	playing string
-	sort    sortSpec
-	now     time.Time
+	// highlight is the selected row's fill, derived from the terminal's own
+	// background so that it follows the theme.
+	highlight color.Color
+	sort      sortSpec
+	now       time.Time
 
 	// more draws one extra row at the end, offering the next page. While
 	// that page is on its way it becomes the same loader the rest of the
@@ -131,7 +135,7 @@ func (t trackTable) rows() []string {
 		case index >= 0 && index < len(t.tracks):
 			track := t.tracks[index]
 			playing := t.playing != "" && track.VideoID == t.playing
-			style, styled := rowStyle(playing, index == t.cursor)
+			style, styled := rowStyle(playing, index == t.cursor, t.highlight)
 			line = t.trackLine(track, cols, styled)
 			if styled {
 				line = style.Render(line)
@@ -236,7 +240,7 @@ func (t trackTable) moreRow(width int) string {
 	}
 	centred := lipgloss.PlaceHorizontal(width, lipgloss.Center, "load more")
 	if t.cursor == len(t.tracks) {
-		return rowSelected.Render(centred)
+		return rowSelected(t.highlight).Render(centred)
 	}
 	return dim.Render(centred)
 }
@@ -245,25 +249,26 @@ func (t trackTable) moreRow(width int) string {
 // whether it is the one under the cursor. Colour says the first and a filled
 // background says the second, so a row can say both at once — which it has
 // to, since the cursor is usually on the track that is playing.
-var (
-	rowPlaying = lipgloss.NewStyle().Bold(true).Foreground(accent)
-	// The same surface the player is filled with, so a selected row reads as
-	// raised rather than as its own kind of thing.
-	rowSelected = lipgloss.NewStyle().Background(surface).Foreground(onSurface)
-	rowBoth     = lipgloss.NewStyle().Bold(true).Foreground(accent).Background(surface)
-)
+var rowPlaying = lipgloss.NewStyle().Bold(true).Foreground(accent)
+
+// rowSelected fills a row with the highlight. No foreground is set with it:
+// the highlight is a tint of the terminal's own background, so the
+// terminal's own text colour still reads on it whatever the theme is.
+func rowSelected(highlight color.Color) lipgloss.Style {
+	return lipgloss.NewStyle().Background(highlight)
+}
 
 // rowStyle picks how a row is drawn, and reports whether it is styled at
 // all. An unstyled row mutes its own columns; a styled one must not, since
-// grey on a filled background is nothing.
-func rowStyle(playing, selected bool) (lipgloss.Style, bool) {
+// dimmed text on a filled background is nothing.
+func rowStyle(playing, selected bool, highlight color.Color) (lipgloss.Style, bool) {
 	switch {
 	case playing && selected:
-		return rowBoth, true
+		return rowPlaying.Background(highlight), true
 	case playing:
 		return rowPlaying, true
 	case selected:
-		return rowSelected, true
+		return rowSelected(highlight), true
 	}
 	return lipgloss.Style{}, false
 }

@@ -128,6 +128,10 @@ type Model struct {
 	repeat  Repeat
 	loading bool
 
+	// highlight is the selected row's fill, asked of the terminal at
+	// startup. Nil until it answers, and some never do.
+	highlight color.Color
+
 	// restoring is what the last session was playing, held until the
 	// pieces it names exist: the library for the tab, that tab's listing
 	// for the track. Nil once there is nothing left to put back.
@@ -204,7 +208,7 @@ func New(s Services) Model {
 
 // Init starts the first fetch and opens the stream of player events.
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.fetchPlaylists(), m.watchEvents()}
+	cmds := []tea.Cmd{m.fetchPlaylists(), m.watchEvents(), tea.RequestBackgroundColor}
 	if m.loading {
 		cmds = append(cmds, m.spin.Tick)
 	}
@@ -507,6 +511,29 @@ func clamp(v, length int) int {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		// A tint of the page rather than an entry from the scheme. The
+		// sixteen colours have exactly one grey for a highlight, and a
+		// light theme has to spend it on being a shade of the background:
+		// #BDBDBD on a #FFFFFF page is a band, not a highlight. Nudging the
+		// terminal's own background toward its foreground gives a lighter
+		// mark than the scheme can name, and one that follows the theme.
+		// A terminal that does not know its own background can answer with
+		// nothing, and a tint of nothing is nothing: the row would be
+		// styled and invisible. Keep the fallback instead.
+		if msg.Color == nil {
+			return m, nil
+		}
+		if _, _, _, alpha := msg.RGBA(); alpha == 0 {
+			return m, nil
+		}
+		if msg.IsDark() {
+			m.highlight = lipgloss.Lighten(msg, highlightTint)
+		} else {
+			m.highlight = lipgloss.Darken(msg, highlightTint)
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		_, barWidth := m.barGeometry()
@@ -900,9 +927,9 @@ var (
 	// ordinary one would not survive.
 	contrast = lipgloss.BrightWhite
 
-	// surface is a raised background — the player's panel, a selected row.
-	// It is the dim foreground used the other way round, which puts it one
-	// step off the terminal's background in whichever direction that is.
+	// surface is a raised background — the status bar's band. It is the dim
+	// foreground used the other way round, which puts it one step off the
+	// terminal's background in whichever direction that is.
 	surface = muted
 	// onSurface is text on that surface. It cannot be muted, because muted
 	// is the surface.
@@ -1087,7 +1114,7 @@ func (m Model) controlsRow() int { return m.barRow() + 2 }
 func (m Model) barGeometry() (start, width int) {
 	// Never wider than the box: a floor here would push the border out and
 	// take the whole frame with it.
-	return m.contentLeft(), m.contentWidth()
+	return contentLeft, m.contentWidth()
 }
 
 // fraction is how far through the track the position is.
@@ -1216,6 +1243,7 @@ func (m Model) table(width, height int) trackTable {
 	return trackTable{
 		sort:        m.sort,
 		sortable:    true,
+		highlight:   m.highlightColor(),
 		now:         m.clock(),
 		tracks:      m.Tracks,
 		cursor:      m.trackCursor,
@@ -1379,50 +1407,38 @@ func fillRow(segments []statusSegment, width int) string {
 	return b.String()
 }
 
-// playerBox is the panel the bar and the controls sit in: filled, with its
-// corners rounded, and floated off the edges of the screen.
-//
-// The fill stops at the border rather than running through it, which is what
-// lets the corners read as curved — a filled cell is a square, so the curve
-// has to be a glyph drawn on whatever is behind it. Giving the border a
-// background of its own would square the panel off again.
-func (m Model) playerBox() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(surface).
-		Background(surface).
-		Padding(0, playerPadding).
-		Margin(0, m.inset())
-}
+// playerBox is the frame around the bar and the controls. Its border
+// replaces the blank lines that used to separate them from the list, so it
+// costs no height.
+var playerBox = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(muted).
+	Padding(0, playerPadding)
 
 const (
 	playerBorder  = 1
 	playerPadding = 1
-	// playerInset floats the panel off the edges of the screen, which is
-	// what makes it a panel on the frame rather than another band of it.
-	// Equal either side, so it is centred by construction.
-	playerInset = 2
-	// playerFurniture is what the box costs on one side before any content.
-	playerFurniture = playerBorder + playerPadding
+	// contentLeft is the first column inside the box, and contentWidth what
+	// is left of the row once both sides are taken. The bar and the buttons
+	// are laid out from it, and the border and padding put it there.
+	contentLeft = playerBorder + playerPadding
 )
 
-// inset is how far the panel is floated off the edges. It gives way on a
-// terminal too narrow to hold both it and a single column of content: the
-// buttons fitting matters more than the panel being inset, and a row wider
-// than the terminal would take the whole frame with it.
-func (m Model) inset() int {
-	if m.width < 2*playerInset+2*playerFurniture+1 {
-		return 0
+func (m Model) contentWidth() int { return max(0, m.width-2*contentLeft) }
+
+// highlightTint is how far the highlight moves off the page. Enough to see,
+// little enough that a row of text still reads as text on it.
+const highlightTint = 0.10
+
+// highlightColor is the selected row's fill. Until the terminal says what
+// its background is — and some never answer — the scheme's own grey stands
+// in, which is what this always used.
+func (m Model) highlightColor() color.Color {
+	if m.highlight != nil {
+		return m.highlight
 	}
-	return playerInset
+	return surface
 }
-
-// contentLeft is the first column inside the box, and contentWidth what is
-// left of the row once both sides are taken. The bar and the buttons are
-// laid out from it, and the inset, border and padding put it there.
-func (m Model) contentLeft() int { return m.inset() + playerFurniture }
-
-func (m Model) contentWidth() int { return max(0, m.width-2*m.contentLeft()) }
 
 func (m Model) renderPlayer() string {
 	// One blank line, under the bar, so it is not wedged against the
@@ -1432,7 +1448,7 @@ func (m Model) renderPlayer() string {
 		strings.Repeat(" ", m.contentWidth()),
 		m.renderControls(),
 	)
-	return m.playerBox().Render(inner)
+	return playerBox.Render(inner)
 }
 
 // barRamp is the bar's gradient, as ANSI palette entries. Naming the
@@ -1468,10 +1484,9 @@ func rampAt(_, position float64) color.Color {
 // the bar is for.
 func mutedRamp(_, _ float64) color.Color { return played }
 
-// emptyCell is what the bar has not reached yet: a solid block in the
-// terminal's own background, so the unplayed part reads as a groove cut into
-// the panel. It cannot be the muted colour any more — that is what the panel
-// is filled with, and the groove would vanish into it.
+// emptyCell is what the bar has not reached yet: a solid block in the muted
+// colour, so the track reads as a filled groove rather than as texture. The
+// played part is told apart by its colour, not by its weight.
 //
 // A perforated glyph would have been closer to the idea, but the ones that
 // exist — U+1FB95 CHECKER BOARD FILL, the crosshatched squares at
@@ -1486,7 +1501,7 @@ func newBar(fill progress.ColorFunc) progress.Model {
 		progress.WithFillCharacters(progress.DefaultFullCharHalfBlock, emptyCell),
 	)
 	// The default is a fixed grey, which is off-scheme like the rest.
-	bar.EmptyColor = background
+	bar.EmptyColor = muted
 	return bar
 }
 

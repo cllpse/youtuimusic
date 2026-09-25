@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"image/color"
 	"strings"
 	"testing"
 	"time"
@@ -456,86 +457,48 @@ func TestTabRowIsThreeLines(t *testing.T) {
 	}
 }
 
-// The bar and the controls sit in one filled panel, floated off the edges
-// of the screen. It costs no height: its border takes the rows the blank
-// lines used to.
-// faintSGR is what dim text renders as: the terminal's own faint, so that
-// it follows the theme rather than naming a grey the theme may have spent
-// on being a shade of its background.
+// highlightSGR is the background a selected row renders as when the
+// terminal has not said what its own background is — which it has not, in a
+// test. That fallback is the scheme's dim entry used as a background.
+const highlightSGR = "100"
+
+// faintSGR is what dim text renders as: the terminal's own faint, so that it
+// follows the theme rather than naming a grey the theme may have spent on
+// being a shade of its background.
 const faintSGR = "2"
 
-// panelSGR is the background code the raised surface renders as — the
-// player's fill and a selected row both. Named once so the two cannot be
-// asserted apart by accident. 100 is the dim foreground used as a
-// background, which is one step off the terminal's own whichever way the
-// theme runs.
-const panelSGR = "100"
-
-func TestThePlayerIsAnInsetPanel(t *testing.T) {
+// The bar and the controls sit in one box, and it costs no height: its
+// border takes the rows the blank lines used to.
+func TestThePlayerIsBoxed(t *testing.T) {
 	m := sample()
 	lines := strings.Split(m.View().Content, "\n")
 	if len(lines) != 20 {
 		t.Fatalf("view is %d lines, want 20", len(lines))
 	}
 
-	top, bottom := plain(lines[m.barRow()-1]), plain(lines[m.barRow()+3])
-	// Inset by the same amount either side, which is what centres it.
-	for _, line := range []string{top, bottom} {
-		left := len(line) - len(strings.TrimLeft(line, " "))
-		right := len(line) - len(strings.TrimRight(line, " "))
-		if left != m.inset() || right != m.inset() {
-			t.Errorf("inset %d left and %d right, want %d both: %q",
-				left, right, m.inset(), line)
-		}
+	// The bar sits directly under the border: no blank line above it, one
+	// below, separating it from the buttons.
+	top, bottom := lines[m.barRow()-1], lines[m.barRow()+3]
+	if !strings.HasPrefix(plain(top), "╭") || !strings.HasSuffix(plain(top), "╮") {
+		t.Errorf("no top border: %q", plain(top))
 	}
-	if !strings.HasPrefix(strings.TrimSpace(top), "╭") ||
-		!strings.HasSuffix(strings.TrimSpace(top), "╮") {
-		t.Errorf("the top corners are not rounded: %q", top)
+	if !strings.HasSuffix(plain(bottom), "╯") {
+		t.Errorf("no bottom border: %q", plain(bottom))
 	}
-	if !strings.HasPrefix(strings.TrimSpace(bottom), "╰") ||
-		!strings.HasSuffix(strings.TrimSpace(bottom), "╯") {
-		t.Errorf("the bottom corners are not rounded: %q", bottom)
-	}
-
-	// The bar sits directly under the border, one blank line below it.
-	if inner := strings.Trim(plain(lines[m.barRow()]), "│ "); inner == "" {
+	if inner := strings.TrimSpace(plain(lines[m.barRow()])[1:]); inner == "" {
 		t.Error("the row under the border is blank; the bar should be there")
 	}
 	if inner := strings.Trim(plain(lines[m.barRow()+1]), "│ "); inner != "" {
 		t.Errorf("the row under the bar is not blank: %q", inner)
 	}
-
-	// Every row of it is bounded by the sides and fills the terminal, and
-	// the inside is filled rather than left open.
+	// Every row inside it is bounded by the sides, blank lines included.
 	for _, row := range []int{m.barRow(), m.barRow() + 1, m.barRow() + 2} {
-		line := strings.TrimSpace(plain(lines[row]))
+		line := plain(lines[row])
 		if !strings.HasPrefix(line, "│") || !strings.HasSuffix(line, "│") {
-			t.Errorf("row %d is not inside the panel: %q", row, line)
+			t.Errorf("row %d is not inside the box: %q", row, line)
 		}
-		if got := lipgloss.Width(lines[row]); got != m.width {
-			t.Errorf("row %d is %d cells, want %d", row, got, m.width)
-		}
-		if codes := sgrCodes(lines[row]); !codes[panelSGR] {
-			t.Errorf("row %d is not filled: %v", row, codes)
-		}
-	}
-}
-
-// A terminal too narrow for the panel drops the inset rather than drawing
-// a row wider than the screen, which would take the whole frame with it.
-func TestANarrowTerminalDropsTheInset(t *testing.T) {
-	// Four is the floor the rest of the suite works to: the border and the
-	// padding cost that much on their own, inset or not.
-	for _, width := range []int{4, 8, 9, 20, 80} {
-		m := New(Services{})
-		sized, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 20})
-		m = sized.(Model)
-
-		if got := lipgloss.Width(plain(m.renderPlayer())); got > width {
-			t.Errorf("width %d: the player renders %d cells", width, got)
-		}
-		if m.inset() > 0 && width < 2*playerInset+2*playerFurniture+1 {
-			t.Errorf("width %d: still inset by %d", width, m.inset())
+		if lipgloss.Width(lines[row]) != m.width {
+			t.Errorf("row %d is %d cells, want %d", row, lipgloss.Width(lines[row]), m.width)
 		}
 	}
 }
@@ -734,7 +697,7 @@ func TestPlayingAndSelectedAreSeparate(t *testing.T) {
 	alpha, beta, gamma := lines[tabsHeight+headerRows], lines[tabsHeight+headerRows+1], lines[tabsHeight+headerRows+2]
 
 	// The cursor is a filled background and nothing else.
-	if !sgrCodes(alpha)[panelSGR] {
+	if !sgrCodes(alpha)[highlightSGR] {
 		t.Errorf("the selected row is not highlighted: %v", sgrCodes(alpha))
 	}
 	if sgrCodes(alpha)["34"] {
@@ -745,19 +708,19 @@ func TestPlayingAndSelectedAreSeparate(t *testing.T) {
 	if !sgrCodes(beta)["34"] {
 		t.Errorf("the playing row is not coloured: %v", sgrCodes(beta))
 	}
-	if sgrCodes(beta)[panelSGR] {
+	if sgrCodes(beta)[highlightSGR] {
 		t.Errorf("the playing row is highlighted as if selected: %v", sgrCodes(beta))
 	}
 
 	// A row that is neither is left alone.
-	if sgrCodes(gamma)[panelSGR] || sgrCodes(gamma)["34"] {
+	if sgrCodes(gamma)[highlightSGR] || sgrCodes(gamma)["34"] {
 		t.Errorf("an ordinary row is styled: %v", sgrCodes(gamma))
 	}
 
 	// And a row that is both says both.
 	m.trackCursor = 1
 	both := strings.Split(m.View().Content, "\n")[tabsHeight+headerRows+1]
-	if !sgrCodes(both)["34"] || !sgrCodes(both)[panelSGR] {
+	if !sgrCodes(both)["34"] || !sgrCodes(both)[highlightSGR] {
 		t.Errorf("the playing row under the cursor says %v, want both", sgrCodes(both))
 	}
 }
@@ -791,7 +754,7 @@ func TestAHighlightedRowDoesNotMuteItsColumns(t *testing.T) {
 	if strings.Contains(artist[:len("DAPHNI")], "\x1b[") {
 		t.Errorf("the artist is styled separately on a highlighted row: %q", row)
 	}
-	if !sgrCodes(row)[panelSGR] {
+	if !sgrCodes(row)[highlightSGR] {
 		t.Fatalf("the row is not highlighted at all: %v", sgrCodes(row))
 	}
 }
@@ -1002,5 +965,91 @@ func TestTheBarUsesOnlySafeGlyphs(t *testing.T) {
 	if lipgloss.Width(string(emptyCell)) != 1 {
 		t.Errorf("%q is %d cells wide; the bar is counted in single cells",
 			string(emptyCell), lipgloss.Width(string(emptyCell)))
+	}
+}
+
+// The highlight is derived from the page rather than named, because the
+// scheme has one grey for it and a light theme spends that on being a shade
+// of its own background.
+func TestTheHighlightIsATintOfTheTerminalsBackground(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		bg          color.Color
+		wantLighter bool
+	}{
+		{"a light page darkens", color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}, false},
+		{"a dark page lightens", color.RGBA{0x00, 0x00, 0x00, 0xFF}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sample()
+			next, _ := m.Update(tea.BackgroundColorMsg{Color: tc.bg})
+			m = next.(Model)
+
+			if m.highlight == nil {
+				t.Fatal("the terminal answered and nothing was derived")
+			}
+			got, page := luminance(m.highlight), luminance(tc.bg)
+			if tc.wantLighter && got <= page {
+				t.Errorf("highlight %v is not lighter than the page %v", got, page)
+			}
+			if !tc.wantLighter && got >= page {
+				t.Errorf("highlight %v is not darker than the page %v", got, page)
+			}
+			// Close to the page, or a row of text stops reading as text.
+			if diff := got - page; diff > 0.4 || diff < -0.4 {
+				t.Errorf("the highlight is %v off the page; too far", diff)
+			}
+		})
+	}
+}
+
+// Until the terminal answers — and some never do — the scheme's own grey
+// stands in, which is what this always used.
+func TestTheHighlightFallsBackToTheScheme(t *testing.T) {
+	m := sample()
+	if m.highlight != nil {
+		t.Fatal("something was derived without the terminal saying anything")
+	}
+	if got := m.highlightColor(); got != surface {
+		t.Errorf("the fallback is %v, want the scheme's own %v", got, surface)
+	}
+	// And a selected row still renders with it.
+	m.Tracks = []Track{{VideoID: "a", Title: "Alpha"}, {VideoID: "b", Title: "Beta"}}
+	m.trackCursor = 0
+	row := strings.Split(m.View().Content, "\n")[tabsHeight+headerRows]
+	if !sgrCodes(row)[highlightSGR] {
+		t.Errorf("the selected row is not filled: %v", sgrCodes(row))
+	}
+}
+
+// luminance is rough and only used to compare two shades of the same page.
+func luminance(c color.Color) float64 {
+	r, g, b, _ := c.RGBA()
+	return (0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(b)) / 65535
+}
+
+// A terminal that cannot say what colour it is must leave the fallback
+// alone. A tint of nothing is nothing, and the row would be styled and
+// invisible.
+func TestAnUnusableBackgroundAnswerIsIgnored(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		msg  tea.BackgroundColorMsg
+	}{
+		{"no colour at all", tea.BackgroundColorMsg{}},
+		{"fully transparent", tea.BackgroundColorMsg{Color: color.RGBA{0x20, 0x20, 0x20, 0x00}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sample()
+			next, _ := m.Update(tc.msg)
+			m = next.(Model)
+
+			if m.highlight != nil {
+				t.Errorf("derived %v from an answer that said nothing", m.highlight)
+			}
+			if got := m.highlightColor(); got != surface {
+				t.Errorf("the fallback was lost: %v", got)
+			}
+		})
 	}
 }

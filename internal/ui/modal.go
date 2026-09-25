@@ -174,6 +174,7 @@ func (m Model) renderModal() string {
 
 	lines = append(lines, trackTable{
 		sort:        m.sort,
+		highlight:   m.highlightColor(),
 		now:         m.clock(),
 		tracks:      m.detour.tracks,
 		cursor:      m.detour.cursor,

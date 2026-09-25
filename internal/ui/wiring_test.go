@@ -525,8 +525,12 @@ func TestAFailedFetchIsReported(t *testing.T) {
 // rather than a nil dereference.
 func TestZeroServicesIsInert(t *testing.T) {
 	m := New(Services{})
-	if cmd := m.Init(); cmd != nil {
-		t.Error("a model with no services should start nothing")
+	// It still asks the terminal what colour it is — that is about the
+	// display and not about the services — but nothing else. Draining it
+	// must not reach a service that is not there.
+	m = drain(t, m, m.Init())
+	if m.Err != nil {
+		t.Errorf("startup with no services failed: %v", m.Err)
 	}
 	m.Tracks = []Track{{VideoID: "a", Title: "Alpha"}}
 	for _, k := range []string{"enter", "+", "-", " ", "down", "/"} {
