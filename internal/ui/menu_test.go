@@ -67,9 +67,11 @@ func TestRightClickOpensTheMenuOnThatTrack(t *testing.T) {
 			t.Errorf("menu is missing %q:\n%s", want, got)
 		}
 	}
-	for _, icon := range []string{iconThumbUp, iconAlbum, iconArtist} {
-		if !strings.Contains(m.renderMenu(), icon) {
-			t.Errorf("menu is missing icon %q", icon)
+	// Words only: the thumbs are the one pair of icons left in the app, and
+	// they mark a rated row rather than a menu entry.
+	for _, icon := range []string{iconThumbUp, iconThumbDown} {
+		if strings.Contains(got, icon) {
+			t.Errorf("the menu draws an icon:\n%s", got)
 		}
 	}
 }
@@ -501,41 +503,8 @@ func TestALikedTrackOffersToUnlikeWithACross(t *testing.T) {
 	if rows[0].label != "Unlike track" {
 		t.Errorf("label = %q", rows[0].label)
 	}
-	if rows[0].icon != iconRemove {
-		t.Errorf("icon = %q, want the cross", rows[0].icon)
-	}
-	rendered := m.renderMenu()
-	if strings.Contains(rendered, iconThumbUp) {
-		t.Error("the filled thumb is still drawn")
-	}
-	if !strings.Contains(rendered, iconRemove) {
-		t.Error("the cross is not drawn")
-	}
-}
-
-// One space reads as cramped against these glyphs, which sit tight in their
-// cell.
-// An icon sits against its label, with nothing between them.
-func TestTheMenuPutsEachIconAgainstItsLabel(t *testing.T) {
-	m, _, _, _ := menuModel(t)
-	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
-	m = drain(t, next.(Model), cmd)
-
-	rendered := plain(m.renderMenu())
-	for _, row := range m.menuRows() {
-		if !strings.Contains(rendered, row.icon+row.label) {
-			t.Errorf("%q is not against its icon:\n%s", row.label, rendered)
-		}
-		if strings.Contains(rendered, row.icon+" ") {
-			t.Errorf("%q has a gap after its icon:\n%s", row.label, rendered)
-		}
-	}
-	// And the box is wide enough for it, with the rule spanning the inside.
-	width, _ := m.menuSize()
-	for i, line := range strings.Split(rendered, "\n") {
-		if lipgloss.Width(line) != width {
-			t.Errorf("menu line %d is %d cells, want %d: %q", i, lipgloss.Width(line), width, line)
-		}
+	if rendered := plain(m.renderMenu()); !strings.Contains(rendered, "Unlike track") {
+		t.Errorf("the row does not say what it does:\n%s", rendered)
 	}
 }
 
@@ -569,21 +538,17 @@ func TestEnterOnAReleaseOpensTheAlbum(t *testing.T) {
 func TestThePopoverNamesWhatItShows(t *testing.T) {
 	for _, tc := range []struct {
 		item  menuItem
-		icon  string
 		label string
 		title string
 	}{
-		{menuAlbum, iconAlbum, "Album", "Cherry"},
-		{menuArtist, iconArtist, "Artist", "DAPHNI"},
+		{menuAlbum, "Album", "Cherry"},
+		{menuArtist, "Artist", "DAPHNI"},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			m, _, _, _ := menuModel(t)
 			m = openVia(t, m, tc.item)
 
 			header := plain(strings.Split(m.renderModal(), "\n")[1])
-			if !strings.Contains(header, tc.icon) {
-				t.Errorf("no icon on %q", header)
-			}
 			if !strings.Contains(header, tc.label) {
 				t.Errorf("%q does not name what it is", header)
 			}
@@ -696,35 +661,33 @@ func TestClickingAwayClosesEveryPopover(t *testing.T) {
 	}
 }
 
-// An album shows no way back. It is inset on the artist it opened from and
-// the artist is still on the screen around it, so the way back is the thing
-// itself — clicking it, or esc.
-func TestAnAlbumShowsNoWayBack(t *testing.T) {
+// A popover has one button and it is the way out. There was a way back
+// beside it until the two came to do the same thing: closing a popover steps
+// back to whatever was behind it, and an album has its artist on the screen
+// around it to step back to.
+func TestAPopoverHasOneButton(t *testing.T) {
 	m, lib, _, _ := menuModel(t)
 	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
 
 	m = openVia(t, m, menuArtist)
-	if header := plain(strings.Split(m.renderModal(), "\n")[1]); strings.Contains(header, iconBack) {
-		t.Errorf("the first popover offers a way back: %q", header)
-	}
-
 	next, cmd := m.Update(keyPress("enter"))
 	m = drain(t, next.(Model), cmd)
 	if len(m.history) == 0 {
 		t.Fatal("the album did not stack on the artist")
 	}
 	header := plain(strings.Split(m.renderModal(), "\n")[1])
-	if strings.Contains(header, iconBack) {
-		t.Errorf("the album draws a way back: %q", header)
+
+	// One, and it is against the right.
+	if got := strings.Count(header, labelClose); got != 1 {
+		t.Errorf("%d buttons on %q", got, header)
 	}
-	if _, _, _, ok := m.modalBackButton(); ok {
-		t.Error("the album answers clicks on a button it does not draw")
+	// Past the box's own border and padding.
+	if !strings.HasSuffix(strings.TrimRight(header, " │"), labelClose) {
+		t.Errorf("the way out is not against the right: %q", header)
 	}
-	// It still says what it is showing, and still offers the way out.
-	for _, want := range []string{"Album", labelClose} {
-		if !strings.Contains(header, want) {
-			t.Errorf("the header is missing %q: %q", want, header)
-		}
+	// It still says what it is showing.
+	if !strings.Contains(header, "Album") {
+		t.Errorf("the header does not name what it shows: %q", header)
 	}
 	// And esc is still a step back rather than a dismissal.
 	next, cmd = m.Update(keyPress("esc"))
@@ -808,58 +771,6 @@ func TestSearchClearsWhatWasBehindIt(t *testing.T) {
 	}
 }
 
-// The way back is still a button where one is drawn, which is any stacked
-// popover that is not an album.
-func TestTheBackButtonIsAButtonAndWorks(t *testing.T) {
-	m, lib, _, _ := menuModel(t)
-	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
-
-	m = openVia(t, m, menuArtist)
-	if _, _, _, ok := m.modalBackButton(); ok {
-		t.Error("the first popover offers a way back")
-	}
-
-	// An album is the one stacked popover that does not draw one, because
-	// what it would point at is already on the screen.
-	next, cmd := m.Update(keyPress("enter"))
-	album := drain(t, next.(Model), cmd)
-	if !album.showsBack() {
-		if _, _, _, ok := album.modalBackButton(); ok {
-			t.Error("the album offers a button it says it does not show")
-		}
-	} else {
-		t.Error("the album shows a way back")
-	}
-
-	// Force the other case: a stacked popover of another kind does draw one,
-	// and every column of it goes back.
-	stacked := album
-	stacked.history = []detour{album.history[0]}
-	stacked.detour = detour{active: true,
-		tab: Playlist{ID: "UCother", Title: "Someone", kind: tabArtist}}
-	x, y, width, ok := stacked.modalBackButton()
-	if !ok {
-		t.Fatal("a stacked artist offers no way back")
-	}
-	header := strings.Split(stacked.renderModal(), "\n")[1]
-	if !sgrCodes(header)[fillBG] {
-		t.Errorf("the back button is not filled: %v", sgrCodes(header))
-	}
-	if !strings.Contains(plain(header), iconBack) {
-		t.Errorf("no back icon: %q", plain(header))
-	}
-	for offset := range width {
-		next, cmd := stacked.Update(click(x+offset, y))
-		back := drain(t, next.(Model), cmd)
-		if !back.detour.active {
-			t.Fatalf("column %d closed the popover instead of going back", x+offset)
-		}
-		if back.detour.tab.Title != "DAPHNI" {
-			t.Errorf("column %d went to %q", x+offset, back.detour.tab.Title)
-		}
-	}
-}
-
 // Working the transport while a popover is open should work the transport,
 // not dismiss what was opened.
 func TestThePlayerDoesNotDismissAPopover(t *testing.T) {
@@ -924,7 +835,7 @@ func TestTheModalTitleIsCentred(t *testing.T) {
 	// Without a way back, centred on the whole row.
 	m = openVia(t, m, menuArtist)
 	header := plain(strings.Split(m.renderModal(), "\n")[1])
-	if off := centreOffset(header, iconArtist, "DAPHNI"); off > 1 {
+	if off := centreOffset(header, "Artist", "DAPHNI"); off > 1 {
 		t.Errorf("off centre by %d without a button: %q", off, header)
 	}
 
@@ -933,18 +844,18 @@ func TestTheModalTitleIsCentred(t *testing.T) {
 	next, cmd := m.Update(keyPress("enter"))
 	m = drain(t, next.(Model), cmd)
 	header = plain(strings.Split(m.renderModal(), "\n")[1])
-	if off := centreOffset(header, iconAlbum, "Cherry"); off > 1 {
+	if off := centreOffset(header, "Album", "Cherry"); off > 1 {
 		t.Errorf("off centre by %d: %q", off, header)
 	}
-	if column(header, iconAlbum) > column(header, labelClose) {
+	if column(header, "Album") > column(header, labelClose) {
 		t.Errorf("the title runs past the way out: %q", header)
 	}
 }
 
 // centreOffset is how far a title's middle is from the row's, in cells. The
-// title runs from its icon to the end of its name.
-func centreOffset(header, icon, name string) int {
-	start := column(header, icon)
+// title runs from the word for what it is to the end of its name.
+func centreOffset(header, kind, name string) int {
+	start := column(header, kind)
 	end := column(header, name) + lipgloss.Width(name)
 	if start < 0 || end < start {
 		return 1 << 30
@@ -1128,4 +1039,46 @@ func TestARatingReachesEveryListTheTrackIsIn(t *testing.T) {
 	rated("the list underneath", m.Tracks)
 	rated("its arrival order", m.arrival)
 	rated("the other cached playlist", m.cache["PL1"].tracks)
+}
+
+// The search box is something being typed into and the rest of the popover
+// is the answer; a line is what says where one stops. It is there whether or
+// not there is an answer yet.
+func TestTheSearchBoxIsRuledOffFromItsResults(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.results = []ytm.Track{{VideoID: "z", Title: "Found", Artist: "Z"}}
+
+	next, cmd := m.openSearch()
+	m = drain(t, next.(Model), cmd)
+	inner := m.modalContentWidth()
+
+	rule := func(m Model, when string) {
+		line := plain(strings.Split(m.renderModal(), "\n")[2])
+		// Past the box's own border and padding either side.
+		body := strings.Trim(line, "│ ")
+		if body != strings.Repeat("─", inner) {
+			t.Errorf("%s: the rule is %q", when, body)
+		}
+	}
+	rule(m, "empty")
+
+	for _, key := range []string{"f", "o", "u", "n", "d"} {
+		next, cmd := m.Update(keyPress(key))
+		m = drain(t, next.(Model), cmd)
+	}
+	rule(m, "typing")
+
+	next, cmd = m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+	if len(m.detour.tracks) == 0 {
+		t.Fatal("nothing was found, so this proves nothing")
+	}
+	rule(m, "with results")
+
+	// And the other popovers keep the blank line there, which is not a rule.
+	artist := openVia(t, m, menuArtist)
+	line := plain(strings.Split(artist.renderModal(), "\n")[2])
+	if strings.Contains(line, "─") {
+		t.Errorf("an artist popover is ruled off too: %q", line)
+	}
 }

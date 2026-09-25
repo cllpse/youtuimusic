@@ -51,14 +51,15 @@ const (
 	// legible without being told that the titles are titles, and the row it
 	// cost was the row it cost.
 	headerRows = 0
-	// scrollbarWidth is the bar itself plus a blank column to its right, so
-	// it does not sit against whatever is beside it.
-	scrollbarWidth = 2
+	// scrollbarWidth is the bar itself with a blank column either side, so it
+	// sits against neither the last column nor the edge. It needed one on
+	// the left as soon as the last column was set against the right: a
+	// duration ending where the bar begins reads as one thing.
+	scrollbarWidth = 3
 
-	markWidth = 2
-	// The columns are shares of what is left once the mark and the two
-	// separators are taken: most of it to the title, a third of what remains
-	// to the artist, the rest to the length.
+	// The columns are shares of what is left once the two separators are
+	// taken: most of it to the title, a third of what remains to the artist,
+	// the rest to the length.
 	titleShare  = 60
 	lengthShare = 10
 	// minLength still fits "MM:SS", because a duration cut short is a
@@ -109,9 +110,9 @@ type layout struct {
 func (t trackTable) layout(width int) layout {
 	if t.titleOnly {
 		// One column takes all of it. There is nothing to share with.
-		return layout{title: max(width-markWidth, 0)}
+		return layout{title: max(width, 0)}
 	}
-	spare := max(width-markWidth-2, 0)
+	spare := max(width-2, 0)
 	title := spare * titleShare / 100
 	length := min(max(spare*lengthShare/100, minLength), max(spare-title, 0))
 	return layout{title: title, artist: spare - title - length, length: length}
@@ -205,29 +206,44 @@ func rowStyle(playing, selected bool, highlight color.Color) (lipgloss.Style, bo
 // down. A highlighted row is drawn plain and coloured whole by the caller —
 // dimming part of it would fight the highlight.
 func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string {
-	prefix := strings.Repeat(" ", markWidth)
-	if t.showRating || track.isRelease() {
-		prefix = track.glyph() + " "
+	// The mark goes on the front of the title rather than in a column of its
+	// own. A column of its own is two cells of nothing on every unrated row,
+	// and most rows are unrated.
+	title := track.Title
+	if t.showRating {
+		if glyph := track.Rating.glyph(); glyph != "" {
+			title = glyph + " " + title
+		}
 	}
+	// A release is the artist's own work rather than a song of theirs, and
+	// weight is what says so now that it has no icon.
+	if track.isRelease() {
+		title = releaseStyle.Render(title)
+	}
+
 	if cols.title+cols.artist < 4 {
 		// No room for columns; the title is the only thing worth keeping.
-		return truncate(prefix+track.Title, t.width)
+		return truncate(title, t.width)
 	}
 	if t.titleOnly {
-		return prefix + pad(truncate(track.Title, cols.title), cols.title)
+		return pad(truncate(title, cols.title), cols.title)
 	}
 
 	artist := pad(truncate(track.Artist, cols.artist), cols.artist)
+	// The last column is read against the right edge, so it is set there.
 	length := strings.Repeat(" ", cols.length)
 	if !track.isRelease() {
-		length = pad(truncate(formatDuration(track.Duration), cols.length), cols.length)
+		length = padLeft(truncate(formatDuration(track.Duration), cols.length), cols.length)
 	}
 	if !highlighted {
 		artist, length = dim.Render(artist), dim.Render(length)
 	}
-	return prefix + pad(truncate(track.Title, cols.title), cols.title) +
-		" " + artist + " " + length
+	return pad(truncate(title, cols.title), cols.title) + " " + artist + " " + length
 }
+
+// releaseStyle is how an album reads in an artist's listing: its own work,
+// not one of its songs.
+var releaseStyle = lipgloss.NewStyle().Bold(true)
 
 // scrollbarFor draws a trough and thumb for a list. The thumb is the same
 // grey as the trough: the glyphs carry the difference, as they do on the
@@ -265,11 +281,11 @@ func scrollbarFor(total, offset, height, playingAt int, highlight color.Color) [
 	for i := range out {
 		switch {
 		case i == mark:
-			out[i] = active.Render("█") + " "
+			out[i] = " " + active.Render("█") + " "
 		case i >= start && i < start+thumb:
-			out[i] = furniture.Render("█") + " "
+			out[i] = " " + furniture.Render("█") + " "
 		default:
-			out[i] = furniture.Render("│") + " "
+			out[i] = " " + furniture.Render("│") + " "
 		}
 	}
 	return out

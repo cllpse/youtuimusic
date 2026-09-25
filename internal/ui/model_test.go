@@ -552,11 +552,16 @@ func TestTheLikedPlaylistDropsTheRatingColumn(t *testing.T) {
 	if !strings.Contains(elsewhere, iconThumbUp) {
 		t.Fatalf("the comparison is wrong; no thumb elsewhere either: %q", elsewhere)
 	}
-	// The titles still start in the same column, so the two tabs line up.
-	// Columns, not byte offsets: the icon is four bytes and a space is one.
-	if column(liked, "Alpha") != column(elsewhere, "Alpha") {
-		t.Errorf("titles moved from column %d to %d:\n liked %q\n other %q",
-			column(elsewhere, "Alpha"), column(liked, "Alpha"), liked, elsewhere)
+	// The liked row has nothing in front of its title, because nothing is
+	// reserved for a mark any more: a mark goes on the front of the title
+	// when there is one, and that playlist draws none.
+	if got := column(liked, "Alpha"); got != 0 {
+		t.Errorf("the title starts at column %d, want the edge: %q", got, liked)
+	}
+	// Elsewhere the mark pushes it along, which is the difference.
+	if column(elsewhere, "Alpha") <= column(liked, "Alpha") {
+		t.Errorf("a marked row does not sit further in:\n liked %q\n other %q",
+			liked, elsewhere)
 	}
 	if lipgloss.Width(liked) != lipgloss.Width(elsewhere) {
 		t.Errorf("row widths differ: %d vs %d", lipgloss.Width(liked), lipgloss.Width(elsewhere))

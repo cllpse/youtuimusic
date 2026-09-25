@@ -169,9 +169,15 @@ func TestAReleaseRowIsMarkedAndHasNoLength(t *testing.T) {
 		t.Fatal("not recognised as a release")
 	}
 	table := trackTable{tracks: []Track{release}, width: 60, height: 3, showRating: true}
-	line := plain(table.trackLine(release, table.layout(60), false))
-	if !strings.HasPrefix(line, iconAlbum) {
-		t.Errorf("no album mark: %q", line)
+	rendered := table.trackLine(release, table.layout(60), false)
+	line := plain(rendered)
+	// An album is the artist's own work rather than a song of theirs, and
+	// weight is what says so now that nothing carries an icon.
+	if !sgrCodes(rendered)["1"] {
+		t.Errorf("a release is not bold: %v", sgrCodes(rendered))
+	}
+	if !strings.HasPrefix(line, release.Title) {
+		t.Errorf("the title does not start the row: %q", line)
 	}
 	if strings.Contains(line, "0:00") {
 		t.Errorf("a release shows a length: %q", line)
@@ -378,7 +384,7 @@ func TestAnAlbumsTableIsTitlesOnly(t *testing.T) {
 	album.titleOnly = true
 
 	// One column takes the whole width, where the full table shares it out.
-	if got, want := album.layout(70).title, 70-markWidth; got != want {
+	if got, want := album.layout(70).title, 70; got != want {
 		t.Errorf("the title column is %d wide, want all %d of it", got, want)
 	}
 	if full.layout(70).artist == 0 {
@@ -583,7 +589,7 @@ func TestTheColumnsAreSharedSixtyThirtyTen(t *testing.T) {
 	for _, width := range []int{40, 60, 80, 100, 120} {
 		table := trackTable{tracks: tableTracks(), width: width, height: 6}
 		cols := table.layout(width)
-		spare := width - markWidth - 2
+		spare := width - 2
 
 		if want := spare * titleShare / 100; cols.title != want {
 			t.Errorf("%d: title is %d, want %d", width, cols.title, want)
@@ -612,7 +618,7 @@ func TestTheColumnsAreSharedSixtyThirtyTen(t *testing.T) {
 func TestASingleColumnTakesTheWholeWidth(t *testing.T) {
 	table := trackTable{tracks: tableTracks(), width: 80, height: 6, titleOnly: true}
 	cols := table.layout(80)
-	if want := 80 - markWidth; cols.title != want {
+	if want := 80; cols.title != want {
 		t.Errorf("title is %d, want %d", cols.title, want)
 	}
 	if cols.artist != 0 || cols.length != 0 {
@@ -641,5 +647,69 @@ func TestTheTableHasNoHeader(t *testing.T) {
 	}
 	if headerRows != 0 {
 		t.Errorf("headerRows is %d", headerRows)
+	}
+}
+
+// The last column is read against the right edge, so it is set there. Only
+// where there is more than one: a single column takes the width and its text
+// starts at the left like any other title.
+func TestTheLastColumnIsRightAligned(t *testing.T) {
+	tracks := tableTracks()
+	for _, width := range []int{50, 80, 120} {
+		table := trackTable{tracks: tracks, width: width, height: len(tracks),
+			showRating: true}
+		cols := table.layout(width)
+		row := plain(table.trackLine(tracks[0], cols, false))
+
+		if got := lipgloss.Width(row); got != width {
+			t.Fatalf("%d: the row is %d cells", width, got)
+		}
+		// Nothing after the duration but the edge.
+		if strings.HasSuffix(row, " ") {
+			t.Errorf("%d: the last column is not against the edge: %q", width, row)
+		}
+		want := formatDuration(tracks[0].Duration)
+		if !strings.HasSuffix(row, strings.TrimSpace(want)) {
+			t.Errorf("%d: the row ends %q, want it to end in %q", width, row, want)
+		}
+	}
+
+	// One column, and the title starts where every title does.
+	one := trackTable{tracks: tracks, width: 80, height: len(tracks), titleOnly: true}
+	row := plain(one.trackLine(tracks[1], one.layout(80), false))
+	if !strings.HasPrefix(row, tracks[1].Title) {
+		t.Errorf("a single column does not start at the edge: %q", row)
+	}
+}
+
+// A mark goes on the front of the title, with a space after it, and only
+// where there is a mark. Nothing is reserved for one.
+func TestARatingMarksTheTitleRatherThanAColumn(t *testing.T) {
+	liked := Track{VideoID: "a", Title: "Alpha", Artist: "A", Rating: RatingUp}
+	disliked := Track{VideoID: "b", Title: "Beta", Artist: "B", Rating: RatingDown}
+	plainTrack := Track{VideoID: "c", Title: "Gamma", Artist: "C"}
+	tracks := []Track{liked, disliked, plainTrack}
+	table := trackTable{tracks: tracks, width: 80, height: 3, showRating: true}
+	cols := table.layout(80)
+
+	for _, tc := range []struct {
+		track Track
+		want  string
+	}{
+		{liked, iconThumbUp + " " + liked.Title},
+		{disliked, iconThumbDown + " " + disliked.Title},
+		{plainTrack, plainTrack.Title},
+	} {
+		row := plain(table.trackLine(tc.track, cols, false))
+		if !strings.HasPrefix(row, tc.want) {
+			t.Errorf("%q starts %q, want %q", tc.track.Title, row, tc.want)
+		}
+	}
+
+	// And an unmarked row starts at the very edge, with nothing held for a
+	// mark it does not have.
+	row := plain(table.trackLine(plainTrack, cols, false))
+	if strings.HasPrefix(row, " ") {
+		t.Errorf("space is reserved for a mark: %q", row)
 	}
 }

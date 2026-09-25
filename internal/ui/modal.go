@@ -30,18 +30,15 @@ const (
 // use than a times sign: one of them says how to do it without the mouse.
 const labelClose = "esc"
 
-// The way back and the way out are the same inside-out fill the transport's
-// buttons use when they are live.
+// The way out is the same inside-out fill the transport's buttons use when
+// they are live.
 var modalBackStyle = lipgloss.NewStyle().
 	Background(emphasis).
 	Foreground(background).
 	Bold(true)
 
-// Each is its mark with a cell either side, all of it clickable.
-const (
-	modalBackWidth  = 3
-	modalCloseWidth = len(labelClose) + 2
-)
+// The way out is its word with a cell either side, all of it clickable.
+const modalCloseWidth = len(labelClose) + 2
 
 var modalBox = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
@@ -76,25 +73,7 @@ func (m Model) modalListHeight() int {
 // modalRowsHeight is how many tracks it shows at once.
 func (m Model) modalRowsHeight() int { return max(m.modalListHeight()-headerRows, 1) }
 
-const (
-	// iconSearch heads the search popover's input.
-	iconSearch = "\U000f0349" // md-magnify
-	// iconBack marks a popover that has another behind it.
-	iconBack = "\U000f004d" // md-arrow_left
-)
-
-func (m Model) modalIcon() string {
-	switch m.detour.tab.kind {
-	case tabArtist:
-		return iconArtist
-	case tabSearch:
-		return iconSearch
-	}
-	return iconAlbum
-}
-
-// modalKind names what the popover is showing. The icon alone leaves it to
-// be recognised; the word says it.
+// modalKind names what the popover is showing.
 func (m Model) modalKind() string {
 	if m.detour.tab.kind == tabArtist {
 		return "Artist"
@@ -119,28 +98,21 @@ func (m Model) openSearch() (tea.Model, tea.Cmd) {
 // search box being typed into.
 func (m Model) modalHeader(inner int) string {
 	if m.detour.tab.kind != tabSearch {
-		// The way back stays against the left edge, drawn the way the
-		// transport's buttons are so that it reads as something to press.
-		// What it is showing sits in the middle of the row, where a title
-		// belongs, and gives way to the button rather than under it.
-		back, taken := "", 0
-		if m.showsBack() {
-			back = modalBackStyle.Render(" " + iconBack + " ")
-			taken = modalBackWidth
-		}
-		// And the way out stays against the right, which is where a window
-		// keeps it.
+		// One button, against the right, where a window keeps the way out.
+		// There was a way back beside it until the two came to do the same
+		// thing: closing a popover steps back to whatever was behind it.
 		close := modalBackStyle.Render(padded(labelClose))
 		right := modalCloseWidth
 
-		prefix := m.modalIcon() + m.modalKind() + menuGap
-		room := max(inner-taken-right-lipgloss.Width(prefix), 0)
+		// What it is showing sits in the middle of the row, where a title
+		// belongs, and gives way to the button rather than running under it.
+		prefix := m.modalKind() + menuGap
+		room := max(inner-right-lipgloss.Width(prefix), 0)
 		title := active.Render(prefix) + truncate(m.detour.tab.Title, room)
 
 		width := lipgloss.Width(title)
-		// Centred on the whole row, but never under either button.
-		start := min(max((inner-width)/2, taken), max(inner-right-width, taken))
-		return back + strings.Repeat(" ", start-taken) + title +
+		start := min(max((inner-width)/2, 0), max(inner-right-width, 0))
+		return strings.Repeat(" ", start) + title +
 			strings.Repeat(" ", max(inner-right-start-width, 0)) + close
 	}
 	query := m.detour.query
@@ -149,8 +121,9 @@ func (m Model) modalHeader(inner int) string {
 	} else if query == "" {
 		query = dim.Render("type to search")
 	}
-	room := max(inner-lipgloss.Width(iconSearch), 0)
-	return active.Render(iconSearch) + pad(truncate(query, room), room)
+	close := modalBackStyle.Render(padded(labelClose))
+	room := max(inner-modalCloseWidth, 0)
+	return pad(truncate(query, room), room) + close
 }
 
 // typeInto runs the search box. Everything reaches it while it has focus,
@@ -190,7 +163,15 @@ func (m Model) renderModal() string {
 	height := m.modalListHeight()
 
 	lines := make([]string, 0, modalHeader+height)
-	lines = append(lines, m.modalHeader(inner), strings.Repeat(" ", inner))
+	// Under the search box a rule, not a blank: the box is something being
+	// typed into and the rest of the popover is the answer, and a line is
+	// what says where one stops. It is there whether or not there is an
+	// answer yet.
+	under := strings.Repeat(" ", inner)
+	if m.detour.tab.kind == tabSearch {
+		under = dim.Render(strings.Repeat("─", inner))
+	}
+	lines = append(lines, m.modalHeader(inner), under)
 
 	if m.detour.tab.kind == tabSearch && !m.loading && len(m.detour.tracks) == 0 {
 		note := dim.Render("type to search")
@@ -237,25 +218,6 @@ func (m Model) modalCloseButton() (x, y, width int, ok bool) {
 	mx, my, mwidth, _ := m.modalBounds()
 	// Against the inside of the right border, on the header line.
 	return mx + mwidth - modalChrome/2 - modalCloseWidth, my + 1, modalCloseWidth, true
-}
-
-// showsBack reports whether the popover needs a way back drawn on it.
-//
-// An album does not: it sits inset on the artist it opened from, which is
-// still on the screen around it, so the way back is the artist — clicking it,
-// or esc. A button pointing at something already visible is furniture.
-func (m Model) showsBack() bool {
-	return len(m.history) > 0 && m.detour.tab.kind != tabAlbum
-}
-
-// modalBackButton is where the way back sits, when there is one.
-func (m Model) modalBackButton() (x, y, width int, ok bool) {
-	if !m.detour.active || m.detour.tab.kind == tabSearch || !m.showsBack() {
-		return 0, 0, 0, false
-	}
-	mx, my, _, _ := m.modalBounds()
-	// Past the box's border and its padding, on the header line.
-	return mx + modalChrome/2, my + 1, modalBackWidth, true
 }
 
 // modalContains reports whether a point is anywhere on the popover.
@@ -406,10 +368,6 @@ func (m Model) clickModal(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		// closed from the artist it opened from should leave the artist,
 		// which is still on the screen behind it. Same as esc. Clicking away
 		// from the lot is what dismisses the lot.
-		return m.leaveDetour()
-	}
-	if x, y, width, ok := m.modalBackButton(); ok &&
-		mouse.Y == y && mouse.X >= x && mouse.X < x+width {
 		return m.leaveDetour()
 	}
 	row, ok := m.modalHit(mouse.X, mouse.Y)

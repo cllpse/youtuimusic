@@ -8,11 +8,6 @@ import (
 )
 
 // More Material Design icons, again by their glyphnames.json names.
-const (
-	iconAlbum  = "\U000f0025" // md-album
-	iconArtist = "\U000f0803" // md-account_music
-	iconRemove = "\U000f0156" // md-close
-)
 
 // menuGap separates one word from the next where two sit on a line — not an
 // icon from its label, which sit against each other. One reads as
@@ -39,7 +34,6 @@ type trackMenu struct {
 // menuRow is one line of it.
 type menuRow struct {
 	item  menuItem
-	icon  string
 	label string
 	// enabled is false when the row has nowhere to go: a single with no
 	// album page, or a track whose artist is not linked.
@@ -54,17 +48,14 @@ func (m Model) menuRows() []menuRow {
 	t := m.menu.track
 	// The row says what pressing it does, so a liked track offers to undo
 	// it rather than offering to do it again.
-	like := menuRow{menuLike, iconThumbUp, "Like track", true}
+	like := menuRow{menuLike, "Like track", true}
 	if t.Rating == RatingUp {
-		// A cross, because the row undoes something rather than doing it
-		// again; a filled thumb there reads as "this is liked", which is
-		// not what pressing it would do.
-		like = menuRow{menuLike, iconRemove, "Unlike track", true}
+		like = menuRow{menuLike, "Unlike track", true}
 	}
 	return []menuRow{
 		like,
-		{menuAlbum, iconAlbum, "Go to album", t.AlbumID != ""},
-		{menuArtist, iconArtist, "Go to artist", t.ArtistID != ""},
+		{menuAlbum, "Go to album", t.AlbumID != ""},
+		{menuArtist, "Go to artist", t.ArtistID != ""},
 	}
 }
 
@@ -108,8 +99,8 @@ func (m Model) menuSize() (width, height int) {
 	for _, row := range m.menuRows() {
 		longest = max(longest, lipgloss.Width(row.label))
 	}
-	// icon, label, then padding and border either side.
-	return longest + 1 + 2 + 2, len(m.menuRows()) + 1 + 2
+	// label, then padding and border either side.
+	return longest + 2 + 2, len(m.menuRows()) + 1 + 2
 }
 
 // openMenu puts the menu on screen at a point, nudged so that all of it
@@ -129,7 +120,7 @@ func (m Model) renderMenu() string {
 
 	lines := make([]string, 0, len(rows)+1)
 	for i, row := range rows {
-		line := pad(row.icon+row.label, inner)
+		line := pad(row.label, inner)
 		switch {
 		case !row.enabled:
 			line = dim.Render(line)

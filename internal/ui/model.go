@@ -33,6 +33,9 @@ const (
 
 // glyph marks a rated row with the same icon the control below it uses, so
 // the two cannot be read as different things.
+// glyph is the mark a rated track carries in front of its title. An unrated
+// one carries nothing: it used to carry a space, because the mark had a
+// column of its own to be blank in, and it has not had one since.
 func (r Rating) glyph() string {
 	switch r {
 	case RatingUp:
@@ -40,7 +43,7 @@ func (r Rating) glyph() string {
 	case RatingDown:
 		return iconThumbDown
 	default:
-		return " "
+		return ""
 	}
 }
 
@@ -82,13 +85,6 @@ type Track struct {
 // isRelease reports whether a row is an album rather than a song: it has
 // somewhere to go and nothing to play.
 func (t Track) isRelease() bool { return t.VideoID == "" && t.AlbumID != "" }
-
-func (t Track) glyph() string {
-	if t.isRelease() {
-		return iconAlbum
-	}
-	return t.Rating.glyph()
-}
 
 // likedPlaylistID is YouTube's fixed id for the auto playlist a thumbs-up
 // adds to.
@@ -1329,8 +1325,9 @@ func (m Model) hasScrollbar() bool {
 	return needsScrollbar(m.rowCount(), m.listHeight())
 }
 
-// scrollbarColumn is where it is drawn.
-func (m Model) scrollbarColumn() int { return m.width - scrollbarWidth }
+// scrollbarColumn is where it is drawn: past the blank on its left, and one
+// short of the edge.
+func (m Model) scrollbarColumn() int { return m.width - scrollbarWidth + 1 }
 
 // scrollTo puts the list where a point on the scrollbar says it should be.
 func (m *Model) scrollTo(y int) {
@@ -1625,6 +1622,15 @@ func truncate(s string, w int) string {
 		width += cells
 	}
 	return b.String() + "…"
+}
+
+// padLeft is pad the other way round: the text against the right edge.
+func padLeft(s string, w int) string {
+	gap := w - lipgloss.Width(s)
+	if gap <= 0 {
+		return s
+	}
+	return strings.Repeat(" ", gap) + s
 }
 
 func pad(s string, w int) string {
