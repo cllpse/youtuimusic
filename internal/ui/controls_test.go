@@ -540,10 +540,10 @@ func TestButtonsFillWhenLive(t *testing.T) {
 	if strings.ContainsAny(row, "[]") {
 		t.Errorf("brackets are drawn: %q", row)
 	}
-	if !strings.Contains(row, "│ "+labelPrevious+" │") {
-		t.Errorf("the label is not boxed and padded: %q", row)
+	if !strings.Contains(row, "│"+labelPrevious+"│") {
+		t.Errorf("the label is not boxed, or is padded off its border: %q", row)
 	}
-	if strings.Contains(row, labelPrevious+" ││") {
+	if strings.Contains(row, labelPrevious+"││") {
 		t.Errorf("buttons are touching: %q", row)
 	}
 

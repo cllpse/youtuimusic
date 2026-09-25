@@ -90,13 +90,12 @@ type button struct {
 	start, end int // half-open columns
 }
 
-// A button is a labelled box: its word, a space either side, and a rounded
-// border around that. Every cell of it answers to a click, all three rows.
-// The gap is two so a row of them does not run together.
+// A button is a labelled box: its word with a rounded border straight around
+// it, no padding between the two. Every cell of it answers to a click, all
+// three rows. The gap is two so a row of them does not run together.
 const (
-	buttonPadding = 1
-	buttonBorder  = 1
-	buttonGap     = 2
+	buttonBorder = 1
+	buttonGap    = 2
 	// controlsRows is how tall the row of them is: a border, the labels,
 	// a border.
 	controlsRows = 3
@@ -104,7 +103,7 @@ const (
 
 // buttonWidth is what one label occupies once it is boxed.
 func buttonWidth(label string) int {
-	return lipgloss.Width(label) + 2*buttonPadding + 2*buttonBorder
+	return lipgloss.Width(label) + 2*buttonBorder
 }
 
 var (
@@ -112,8 +111,7 @@ var (
 	buttonStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(muted).
-			Foreground(muted).
-			Padding(0, buttonPadding)
+			Foreground(muted)
 	// Live, it is turned inside out — the foreground as a fill, the
 	// background as its text — which is what makes it look pressable rather
 	// than printed, without reaching for a second hue. Its border takes the
