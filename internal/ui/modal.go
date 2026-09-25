@@ -16,6 +16,17 @@ const (
 	modalHeader  = 2 // the title, and the blank line under it
 )
 
+// The way back is the same inside-out fill the transport's buttons use when
+// they are live, but flat: the header is one row, and a box with corners on
+// it needs three.
+var modalBackStyle = lipgloss.NewStyle().
+	Background(emphasis).
+	Foreground(background).
+	Bold(true)
+
+// modalBackWidth is the icon with a cell either side, all of it clickable.
+const modalBackWidth = 3
+
 var modalBox = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
 	BorderForeground(foreground).
@@ -94,8 +105,8 @@ func (m Model) modalHeader(inner int) string {
 		// belongs, and gives way to the button rather than under it.
 		back, taken := "", 0
 		if len(m.history) > 0 {
-			back = renderButton(iconBack, true)
-			taken = buttonWidth
+			back = modalBackStyle.Render(" " + iconBack + " ")
+			taken = modalBackWidth
 		}
 		prefix := m.modalIcon() + menuGap + m.modalKind() + menuGap
 		room := max(inner-taken-lipgloss.Width(prefix), 0)
@@ -198,7 +209,7 @@ func (m Model) modalBackButton() (x, y, width int, ok bool) {
 	}
 	mx, my, _, _ := m.modalBounds()
 	// Past the box's border and its padding, on the header line.
-	return mx + modalChrome/2, my + 1, buttonWidth, true
+	return mx + modalChrome/2, my + 1, modalBackWidth, true
 }
 
 // modalContains reports whether a point is anywhere on the popover.

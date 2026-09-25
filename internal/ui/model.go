@@ -1081,9 +1081,10 @@ var (
 
 const (
 	tabsHeight = 3 // border, label, border
-	// playerRows is the box: border, bar, blank, controls, border. The
-	// title that used to sit in it is the status bar's now.
-	playerRows = 5
+	// playerRows is the box: border, bar, blank, the three rows the labelled
+	// buttons take, border. The title that used to sit in it is the status
+	// bar's now.
+	playerRows = 4 + controlsRows
 	statusRows = 1
 	// progressRows is everything below the list.
 	progressRows = playerRows + statusRows
@@ -1109,7 +1110,8 @@ func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 1 }
 // statusRow is the bar under the player.
 func (m Model) statusRow() int { return tabsHeight + m.bodyHeight() + playerRows }
 
-// controlsRow is the line of buttons, a blank line below the bar.
+// controlsRow is the first line of the buttons, a blank line below the bar.
+// They are controlsRows tall from there.
 func (m Model) controlsRow() int { return m.barRow() + 2 }
 
 // barGeometry is the column the progress bar starts at and how wide it is.

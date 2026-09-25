@@ -11,18 +11,37 @@ import (
 // them. The codepoints were checked against that file rather than typed from
 // memory, and against the installed fonts with fontconfig.
 const (
-	iconPrevious     = "\U000f04ae" // md-skip_previous
-	iconPlay         = "\U000f040a" // md-play
-	iconPause        = "\U000f03e4" // md-pause
-	iconNext         = "\U000f04ad" // md-skip_next
 	iconThumbUp      = "\U000f0513" // md-thumb_up
 	iconThumbUpOff   = "\U000f0514" // md-thumb_up_outline
 	iconThumbDown    = "\U000f0511" // md-thumb_down
 	iconThumbDownOff = "\U000f0512" // md-thumb_down_outline
-	iconRepeatOff    = "\U000f0457" // md-repeat_off
-	iconRepeatAll    = "\U000f0456" // md-repeat
-	iconRepeatOne    = "\U000f0458" // md-repeat_once
 )
+
+// The transport is labelled rather than pictured. An icon has to be learned;
+// a word does not, and there is room for words here.
+const (
+	labelPrevious  = "Previous"
+	labelPlayPause = "Play/Pause"
+	labelNext      = "Next"
+	labelLike      = "Like"
+	labelDislike   = "Dislike"
+	labelRepeatOff = "Repeat off"
+	labelRepeatOn  = "Repeat on"
+	labelRepeatOne = "Repeat one"
+)
+
+// repeatLabels are what the one repeat button says, and every one of them is
+// drawn at the width of the longest so that the button does not change size
+// underneath the pointer as it cycles.
+var repeatLabels = []string{labelRepeatOff, labelRepeatOn, labelRepeatOne}
+
+var widestRepeatLabel = func() int {
+	widest := 0
+	for _, l := range repeatLabels {
+		widest = max(widest, lipgloss.Width(l))
+	}
+	return widest
+}()
 
 // Repeat is what happens when a track ends.
 type Repeat int
@@ -35,15 +54,17 @@ const (
 
 func (r Repeat) next() Repeat { return (r + 1) % 3 }
 
-func (r Repeat) icon() string {
+// label is what the repeat button says, centred in the width of the longest
+// of the three.
+func (r Repeat) label() string {
+	label := labelRepeatOff
 	switch r {
 	case RepeatAll:
-		return iconRepeatAll
+		label = labelRepeatOn
 	case RepeatOne:
-		return iconRepeatOne
-	default:
-		return iconRepeatOff
+		label = labelRepeatOne
 	}
+	return lipgloss.PlaceHorizontal(widestRepeatLabel, lipgloss.Center, label)
 }
 
 // control identifies a button on the controls row.
@@ -62,47 +83,68 @@ const (
 // button is one control as laid out on the row.
 type button struct {
 	control control
-	icon    string
+	label   string
 	// lit means filled rather than dimmed: there is something for
 	// it to act on, or the thing it toggles is on.
 	lit        bool
 	start, end int // half-open columns
 }
 
-// A button is three cells — the icon with one either side — all of which
-// answer to a click. The gap is two so a row of them does not run together.
+// A button is a labelled box: its word, a space either side, and a rounded
+// border around that. Every cell of it answers to a click, all three rows.
+// The gap is two so a row of them does not run together.
 const (
-	buttonWidth = 3
-	buttonGap   = 2
+	buttonPadding = 1
+	buttonBorder  = 1
+	buttonGap     = 2
+	// controlsRows is how tall the row of them is: a border, the labels,
+	// a border.
+	controlsRows = 3
 )
 
+// buttonWidth is what one label occupies once it is boxed.
+func buttonWidth(label string) int {
+	return lipgloss.Width(label) + 2*buttonPadding + 2*buttonBorder
+}
+
 var (
-	// Idle, a button is only its icon, dimmed: there is nothing to press.
-	buttonStyle = lipgloss.NewStyle().Foreground(muted)
+	// Idle, a button is an outline: there is nothing to press.
+	buttonStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(muted).
+			Foreground(muted).
+			Padding(0, buttonPadding)
 	// Live, it is turned inside out — the foreground as a fill, the
 	// background as its text — which is what makes it look pressable rather
-	// than printed, without reaching for a second hue.
-	buttonLitStyle = lipgloss.NewStyle().
+	// than printed, without reaching for a second hue. Its border takes the
+	// fill as well, so the box reads as one solid rounded thing.
+	buttonLitStyle = buttonStyle.
+			BorderForeground(emphasis).
+			BorderBackground(emphasis).
 			Background(emphasis).
 			Foreground(background).
 			Bold(true)
 )
 
-// renderButton draws one button: its icon, filled when it is live.
-func renderButton(icon string, lit bool) string {
+// renderButton draws one button, three lines tall.
+func renderButton(label string, lit bool) string {
 	style := buttonStyle
 	if lit {
 		style = buttonLitStyle
 	}
-	return style.Render(" " + icon + " ")
+	return style.Render(label)
 }
 
 // groupWidth is what a run of buttons occupies, gaps between them included.
-func groupWidth(n int) int {
-	if n == 0 {
+func groupWidth(group []button) int {
+	if len(group) == 0 {
 		return 0
 	}
-	return n*buttonWidth + (n-1)*buttonGap
+	total := (len(group) - 1) * buttonGap
+	for _, b := range group {
+		total += buttonWidth(b.label)
+	}
+	return total
 }
 
 // controlButtons lays the row out: transport against the left edge, the
@@ -111,45 +153,40 @@ func groupWidth(n int) int {
 // should.
 func (m Model) controlButtons() []button {
 	width := m.contentWidth()
-	if width < groupWidth(3) {
-		return nil
-	}
 	// Columns are counted across the whole row, so a span can be compared
 	// against a click without anyone remembering the border is there.
 	right := contentLeft + width
 	playing := m.playing.VideoID != ""
 
 	leftGroup := []button{
-		{control: controlPrevious, icon: iconPrevious, lit: playing},
-		{control: controlPlayPause, icon: m.playPauseIcon(), lit: playing},
-		{control: controlNext, icon: iconNext, lit: playing},
+		{control: controlPrevious, label: labelPrevious, lit: playing},
+		{control: controlPlayPause, label: labelPlayPause, lit: playing},
+		{control: controlNext, label: labelNext, lit: playing},
 	}
-	up, down := iconThumbUpOff, iconThumbDownOff
-	if m.playing.Rating == RatingUp {
-		up = iconThumbUp
-	}
-	if m.playing.Rating == RatingDown {
-		down = iconThumbDown
+	if width < groupWidth(leftGroup) {
+		return nil
 	}
 	centre := []button{
-		{control: controlThumbUp, icon: up, lit: playing && m.playing.Rating == RatingUp},
-		{control: controlThumbDown, icon: down, lit: playing && m.playing.Rating == RatingDown},
+		{control: controlThumbUp, label: labelLike,
+			lit: playing && m.playing.Rating == RatingUp},
+		{control: controlThumbDown, label: labelDislike,
+			lit: playing && m.playing.Rating == RatingDown},
 	}
 	repeatGroup := []button{
-		{control: controlRepeat, icon: m.repeat.icon(), lit: m.repeat != RepeatOff},
+		{control: controlRepeat, label: m.repeat.label(), lit: m.repeat != RepeatOff},
 	}
 
 	at := lay(leftGroup, contentLeft)
 
 	// Centred on the row, but never on top of the transport.
-	centreStart := max(contentLeft+(width-groupWidth(len(centre)))/2, at+buttonGap)
-	if centreStart+groupWidth(len(centre)) > right {
+	centreStart := max(contentLeft+(width-groupWidth(centre))/2, at+buttonGap)
+	if centreStart+groupWidth(centre) > right {
 		centre = nil
 	} else {
 		at = lay(centre, centreStart)
 	}
 
-	repeatStart := right - groupWidth(len(repeatGroup))
+	repeatStart := right - groupWidth(repeatGroup)
 	if repeatStart < at+buttonGap {
 		repeatGroup = nil
 	} else {
@@ -163,41 +200,56 @@ func (m Model) controlButtons() []button {
 func lay(group []button, at int) int {
 	end := at
 	for i := range group {
-		group[i].start, group[i].end = at, at+buttonWidth
+		group[i].start, group[i].end = at, at+buttonWidth(group[i].label)
 		end = group[i].end
-		at += buttonWidth + buttonGap
+		at = end + buttonGap
 	}
 	return end
 }
 
-func (m Model) playPauseIcon() string {
-	// The icon is what pressing it does, which is the convention every other
-	// player follows: a pause bar while it plays.
-	if m.playing.VideoID != "" && !m.Paused {
-		return iconPause
-	}
-	return iconPlay
-}
-
+// renderControls draws the row of buttons, which is controlsRows lines tall.
+// Each button is assembled line by line rather than joined horizontally,
+// because they do not sit shoulder to shoulder: each one starts at the column
+// hit-testing says it does.
 func (m Model) renderControls() string {
 	width := m.contentWidth()
+	blank := strings.Repeat(" ", max(width, 0))
 	buttons := m.controlButtons()
 	if len(buttons) == 0 {
-		return strings.Repeat(" ", width)
-	}
-	var b strings.Builder
-	at := contentLeft
-	for _, btn := range buttons {
-		if btn.start > at {
-			b.WriteString(strings.Repeat(" ", btn.start-at))
+		rows := make([]string, controlsRows)
+		for i := range rows {
+			rows[i] = blank
 		}
-		b.WriteString(renderButton(btn.icon, btn.lit))
-		at = btn.end
+		return strings.Join(rows, "\n")
 	}
-	if end := contentLeft + width; at < end {
-		b.WriteString(strings.Repeat(" ", end-at))
+
+	rows := make([]strings.Builder, controlsRows)
+	at := make([]int, controlsRows)
+	for i := range at {
+		at[i] = contentLeft
 	}
-	return b.String()
+	for _, btn := range buttons {
+		lines := strings.Split(renderButton(btn.label, btn.lit), "\n")
+		for r := range rows {
+			if r >= len(lines) {
+				continue
+			}
+			if btn.start > at[r] {
+				rows[r].WriteString(strings.Repeat(" ", btn.start-at[r]))
+			}
+			rows[r].WriteString(lines[r])
+			at[r] = btn.end
+		}
+	}
+
+	out := make([]string, controlsRows)
+	for r := range rows {
+		if end := contentLeft + width; at[r] < end {
+			rows[r].WriteString(strings.Repeat(" ", end-at[r]))
+		}
+		out[r] = rows[r].String()
+	}
+	return strings.Join(out, "\n")
 }
 
 // press acts on a control.

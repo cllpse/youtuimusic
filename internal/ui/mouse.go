@@ -65,7 +65,7 @@ func (m Model) hit(x, y int) (region, int) {
 	case y == m.barRow():
 		return regionBar, x
 
-	case y == m.controlsRow():
+	case y >= m.controlsRow() && y < m.controlsRow()+controlsRows:
 		for _, btn := range m.controlButtons() {
 			if x >= btn.start && x < btn.end {
 				return regionControls, int(btn.control)

@@ -24,8 +24,16 @@ func playingModel(t *testing.T) (Model, *fakeLibrary, *fakeStreams, *fakeAudio) 
 	return m, lib, st, au
 }
 
+// controlsLine is the row the labels sit on: the middle of the three the
+// boxed buttons take.
 func controlsLine(m Model) string {
-	return strings.Split(m.View().Content, "\n")[m.controlsRow()]
+	return strings.Split(m.View().Content, "\n")[m.controlsRow()+1]
+}
+
+// controlsBlock is all three rows of them.
+func controlsBlock(m Model) []string {
+	lines := strings.Split(m.View().Content, "\n")
+	return lines[m.controlsRow() : m.controlsRow()+controlsRows]
 }
 
 // buttonAt finds a control in the laid-out row.
@@ -47,25 +55,41 @@ func TestControlsSitLeftCentreAndRight(t *testing.T) {
 		t.Fatalf("the controls row is %d cells, want %d", got, m.width)
 	}
 
-	// Transport against the left edge of the box, in order.
-	for i, c := range []control{controlPrevious, controlPlayPause, controlNext} {
+	// Transport against the left edge of the box, in order. The buttons are
+	// their labels wide, so where each one starts depends on the last.
+	at := contentLeft
+	for _, c := range []control{controlPrevious, controlPlayPause, controlNext} {
 		b, ok := buttonAt(m, c)
 		if !ok {
 			t.Fatalf("control %v is missing", c)
 		}
-		if want := contentLeft + i*(buttonWidth+buttonGap); b.start != want {
-			t.Errorf("control %v starts at %d, want %d", c, b.start, want)
+		if b.start != at {
+			t.Errorf("control %v starts at %d, want %d", c, b.start, at)
 		}
+		if got := b.end - b.start; got != buttonWidth(b.label) {
+			t.Errorf("control %v spans %d, want %d for %q",
+				c, got, buttonWidth(b.label), b.label)
+		}
+		at = b.end + buttonGap
 	}
 
 	// Thumbs centred on the row.
 	up, _ := buttonAt(m, controlThumbUp)
 	down, _ := buttonAt(m, controlThumbDown)
-	// Within a cell: a group an odd number of columns wide cannot straddle
-	// the middle exactly.
+	// Centred is a preference, not a promise. The labels make the transport
+	// wide, so on a row without the room for all three groups the middle one
+	// gives way to the transport rather than overlapping it.
 	span := down.end - up.start
-	if middle, want := up.start+span/2, contentLeft+m.contentWidth()/2; middle < want-1 || middle > want+1 {
-		t.Errorf("the thumbs are centred on %d, want %d", middle, want)
+	next, _ := buttonAt(m, controlNext)
+	if up.start < next.end+buttonGap {
+		t.Errorf("the middle group runs into the transport: %d < %d",
+			up.start, next.end+buttonGap)
+	}
+	middle, want := up.start+span/2, contentLeft+m.contentWidth()/2
+	pushed := up.start == next.end+buttonGap
+	if !pushed && (middle < want-1 || middle > want+1) {
+		t.Errorf("the thumbs are centred on %d, want %d, and had room to be",
+			middle, want)
 	}
 
 	// Repeat against the right edge.
@@ -74,10 +98,14 @@ func TestControlsSitLeftCentreAndRight(t *testing.T) {
 		t.Errorf("repeat ends at %d, want the inside of the right border %d", rep.end, want)
 	}
 
-	// And they are where the row actually draws them.
+	// And they are where the row actually draws them. The label is compared
+	// trimmed: the repeat button pads its label to the width of the longest,
+	// so what is drawn carries the padding too.
 	for _, b := range m.controlButtons() {
-		if !strings.Contains(row[colToByte(row, b.start):colToByte(row, b.end)], b.icon) {
-			t.Errorf("control %v is not drawn in its own columns %d-%d", b.control, b.start, b.end)
+		drawn := row[colToByte(row, b.start):colToByte(row, b.end)]
+		if !strings.Contains(drawn, strings.TrimSpace(b.label)) {
+			t.Errorf("control %v is not drawn in its own columns %d-%d: %q",
+				b.control, b.start, b.end, drawn)
 		}
 	}
 }
@@ -95,47 +123,54 @@ func colToByte(s string, col int) int {
 	return len(s)
 }
 
-func TestPlayPauseIconFollowsTheState(t *testing.T) {
+// The label names the control and does not change with the state — it says
+// both things the button does, and the bar and the status block say which of
+// them is happening.
+func TestThePlayPauseLabelIsSteady(t *testing.T) {
 	m, _, _, _ := playingModel(t)
-	if got := m.playPauseIcon(); got != iconPause {
-		t.Errorf("playing shows %q, want the pause bars", got)
-	}
-	m.Paused = true
-	if got := m.playPauseIcon(); got != iconPlay {
-		t.Errorf("paused shows %q, want the play triangle", got)
-	}
-	m.playing = Track{}
-	if got := m.playPauseIcon(); got != iconPlay {
-		t.Errorf("idle shows %q, want the play triangle", got)
+	for _, state := range []func(Model) Model{
+		func(m Model) Model { return m },
+		func(m Model) Model { m.Paused = true; return m },
+		func(m Model) Model { m.playing = Track{}; return m },
+	} {
+		b, ok := buttonAt(state(m), controlPlayPause)
+		if !ok {
+			t.Fatal("the play button is missing")
+		}
+		if b.label != labelPlayPause {
+			t.Errorf("the label changed to %q", b.label)
+		}
 	}
 }
 
-func TestThumbIconsFollowTheRating(t *testing.T) {
+// The rating shows in whether the button is filled, not in its label.
+func TestTheRatingLitsItsButton(t *testing.T) {
 	m, _, _, _ := playingModel(t)
 
 	up, _ := buttonAt(m, controlThumbUp)
 	down, _ := buttonAt(m, controlThumbDown)
-	if up.icon != iconThumbUpOff || down.icon != iconThumbDownOff {
-		t.Errorf("unrated shows %q/%q, want the outlines", up.icon, down.icon)
+	if up.label != labelLike || down.label != labelDislike {
+		t.Errorf("the labels are %q/%q", up.label, down.label)
 	}
 	if up.lit || down.lit {
-		t.Error("unrated thumbs should not be lit")
+		t.Error("unrated buttons should not be lit")
 	}
 
 	m.playing.Rating = RatingUp
 	up, _ = buttonAt(m, controlThumbUp)
 	down, _ = buttonAt(m, controlThumbDown)
-	if up.icon != iconThumbUp || !up.lit {
-		t.Errorf("rated up shows %q lit=%v", up.icon, up.lit)
+	if !up.lit {
+		t.Error("rated up did not light Like")
 	}
-	if down.icon != iconThumbDownOff {
-		t.Errorf("the other thumb changed to %q", down.icon)
+	if down.lit {
+		t.Error("rated up lit Dislike too")
 	}
 
 	m.playing.Rating = RatingDown
+	up, _ = buttonAt(m, controlThumbUp)
 	down, _ = buttonAt(m, controlThumbDown)
-	if down.icon != iconThumbDown || !down.lit {
-		t.Errorf("rated down shows %q lit=%v", down.icon, down.lit)
+	if !down.lit || up.lit {
+		t.Errorf("rated down: like lit=%v, dislike lit=%v", up.lit, down.lit)
 	}
 }
 
@@ -143,15 +178,15 @@ func TestRepeatCyclesThroughItsThreeStates(t *testing.T) {
 	m, _, _, _ := playingModel(t)
 	want := []struct {
 		state Repeat
-		icon  string
+		label string
 		lit   bool
 	}{
-		{RepeatAll, iconRepeatAll, true},
-		{RepeatOne, iconRepeatOne, true},
-		{RepeatOff, iconRepeatOff, false},
+		{RepeatAll, labelRepeatOn, true},
+		{RepeatOne, labelRepeatOne, true},
+		{RepeatOff, labelRepeatOff, false},
 	}
-	if b, _ := buttonAt(m, controlRepeat); b.icon != iconRepeatOff || b.lit {
-		t.Fatalf("starts at %q lit=%v, want repeat-off unlit", b.icon, b.lit)
+	if b, _ := buttonAt(m, controlRepeat); !strings.Contains(b.label, labelRepeatOff) || b.lit {
+		t.Fatalf("starts at %q lit=%v, want repeat-off unlit", b.label, b.lit)
 	}
 	for _, step := range want {
 		next, _ := m.Update(keyPress("r"))
@@ -160,8 +195,17 @@ func TestRepeatCyclesThroughItsThreeStates(t *testing.T) {
 			t.Fatalf("repeat = %v, want %v", m.repeat, step.state)
 		}
 		b, _ := buttonAt(m, controlRepeat)
-		if b.icon != step.icon || b.lit != step.lit {
-			t.Errorf("%v shows %q lit=%v, want %q lit=%v", step.state, b.icon, b.lit, step.icon, step.lit)
+		if !strings.Contains(b.label, step.label) || b.lit != step.lit {
+			t.Errorf("%v shows %q lit=%v, want %q lit=%v",
+				step.state, b.label, b.lit, step.label, step.lit)
+		}
+		// Every state is drawn at the same width, so the button does not
+		// change size under the pointer as it cycles.
+		if got := buttonWidth(b.label); got != buttonWidth(m.repeat.label()) {
+			t.Errorf("%v is %d wide", step.state, got)
+		}
+		if got := lipgloss.Width(b.label); got != widestRepeatLabel {
+			t.Errorf("%v pads to %d, want %d", step.state, got, widestRepeatLabel)
 		}
 	}
 }
@@ -487,8 +531,8 @@ func TestTheWholeButtonIsClickable(t *testing.T) {
 	}
 }
 
-// A live button fills with the accent; an idle one is only its icon,
-// dimmed. Neither draws anything that has to be read as punctuation.
+// A live button is filled; an idle one is an outline. Either way it is a
+// labelled box, and the label is padded off its own border.
 func TestButtonsFillWhenLive(t *testing.T) {
 	m, _, _, _ := playingModel(t)
 	row := plain(controlsLine(m))
@@ -496,19 +540,19 @@ func TestButtonsFillWhenLive(t *testing.T) {
 	if strings.ContainsAny(row, "[]") {
 		t.Errorf("brackets are drawn: %q", row)
 	}
-	if !strings.Contains(row, " "+iconPrevious+" ") {
-		t.Errorf("the icon is not padded: %q", row)
+	if !strings.Contains(row, "│ "+labelPrevious+" │") {
+		t.Errorf("the label is not boxed and padded: %q", row)
 	}
-	if strings.Contains(row, iconPrevious+"  "+iconPause) {
+	if strings.Contains(row, labelPrevious+" ││") {
 		t.Errorf("buttons are touching: %q", row)
 	}
 
 	codes := sgrCodes(controlsLine(m))
 	if !codes[fillBG] {
-		t.Errorf("no live button is filled with the accent: %v", codes)
+		t.Errorf("no live button is filled: %v", codes)
 	}
 	if !codes[onFillFG] {
-		t.Errorf("a filled button has no light text on it: %v", codes)
+		t.Errorf("a filled button has no contrasting text on it: %v", codes)
 	}
 	// The repeat button is off, so it is dim rather than filled.
 	if !codes["90"] {
@@ -537,13 +581,27 @@ func TestALitButtonIsFilled(t *testing.T) {
 	}
 }
 
-// What is drawn has to be as wide as what is clicked, or a click lands on
-// the wrong button.
+// What is drawn has to be as wide and as tall as what is clicked, or a click
+// lands on the wrong button or on nothing.
 func TestAButtonIsAsWideAsItsHitbox(t *testing.T) {
-	for _, lit := range []bool{false, true} {
-		if got := lipgloss.Width(renderButton(iconPlay, lit)); got != buttonWidth {
-			t.Errorf("lit=%v: the button draws %d cells, buttonWidth is %d",
-				lit, got, buttonWidth)
+	for _, label := range []string{labelPrevious, labelPlayPause, labelRepeatOne} {
+		for _, lit := range []bool{false, true} {
+			lines := strings.Split(renderButton(label, lit), "\n")
+			if len(lines) != controlsRows {
+				t.Errorf("%q lit=%v draws %d rows, want %d",
+					label, lit, len(lines), controlsRows)
+			}
+			for i, line := range lines {
+				if got := lipgloss.Width(line); got != buttonWidth(label) {
+					t.Errorf("%q lit=%v row %d is %d cells, buttonWidth is %d",
+						label, lit, i, got, buttonWidth(label))
+				}
+			}
+			// And it is rounded, with the tight arc rather than a pill.
+			if !strings.HasPrefix(plain(lines[0]), "╭") ||
+				!strings.HasSuffix(plain(lines[len(lines)-1]), "╯") {
+				t.Errorf("%q is not rounded: %q", label, plain(lines[0]))
+			}
 		}
 	}
 }

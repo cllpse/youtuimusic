@@ -327,8 +327,8 @@ func TestThePlayerHoldsOnlyTheBarAndButtons(t *testing.T) {
 	if !strings.ContainsAny(plain(lines[m.barRow()]), "▌"+string(emptyCell)) {
 		t.Errorf("no progress bar on row %d: %q", m.barRow(), plain(lines[m.barRow()]))
 	}
-	if !strings.Contains(lines[m.controlsRow()], iconPrevious) {
-		t.Errorf("no controls on row %d", m.controlsRow())
+	if !strings.Contains(lines[m.controlsRow()+1], labelPrevious) {
+		t.Errorf("no controls on row %d", m.controlsRow()+1)
 	}
 	// And the box still closes above the status bar, inside its margin.
 	if bottom := strings.TrimRight(plain(lines[m.statusRow()-1]), " "); !strings.HasSuffix(bottom, "╯") {
@@ -406,9 +406,6 @@ func TestPausedIsSaidOnce(t *testing.T) {
 	// Not a second time beside the track.
 	if got := plain(lines[m.statusRow()]); strings.Count(strings.ToLower(got), "paused") != 1 {
 		t.Errorf("said more than once: %q", got)
-	}
-	if m.playPauseIcon() != iconPlay {
-		t.Error("the control is not a play triangle")
 	}
 	if anyCode(lines[m.barRow()], []string{emphasisFG, fillBG}) {
 		t.Error("the bar is still lit")
@@ -489,9 +486,9 @@ func TestThePlayerIsBoxed(t *testing.T) {
 		t.Fatalf("view is %d lines, want 20", len(lines))
 	}
 
-	// The bar sits directly under the border: no blank line above it, one
-	// below, separating it from the buttons.
-	top, bottom := lines[m.barRow()-1], lines[m.barRow()+3]
+	// The bar sits directly under the border, one blank line below it, then
+	// the buttons, which are controlsRows tall.
+	top, bottom := lines[m.barRow()-1], lines[m.controlsRow()+controlsRows]
 	if !strings.HasPrefix(plain(top), "╭") || !strings.HasSuffix(plain(top), "╮") {
 		t.Errorf("no top border: %q", plain(top))
 	}
@@ -505,7 +502,11 @@ func TestThePlayerIsBoxed(t *testing.T) {
 		t.Errorf("the row under the bar is not blank: %q", inner)
 	}
 	// Every row inside it is bounded by the sides, blank lines included.
-	for _, row := range []int{m.barRow(), m.barRow() + 1, m.barRow() + 2} {
+	inside := []int{m.barRow(), m.barRow() + 1}
+	for r := range controlsRows {
+		inside = append(inside, m.controlsRow()+r)
+	}
+	for _, row := range inside {
 		line := plain(lines[row])
 		if !strings.HasPrefix(line, "│") || !strings.HasSuffix(line, "│") {
 			t.Errorf("row %d is not inside the box: %q", row, line)
