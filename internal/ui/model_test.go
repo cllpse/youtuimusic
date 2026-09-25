@@ -326,9 +326,13 @@ func TestThePlayerHoldsOnlyTheBarAndButtons(t *testing.T) {
 	if !strings.Contains(lines[m.controlsRow()], iconPrevious) {
 		t.Errorf("no controls on row %d", m.controlsRow())
 	}
-	// And the buttons are the last of it, directly above the status bar.
-	if !strings.Contains(plain(lines[m.statusRow()-1]), iconPrevious) {
-		t.Errorf("the buttons are not above the status bar: %q", plain(lines[m.statusRow()-1]))
+	// And the buttons are directly under the bar, with the blank line the
+	// player ends on between them and the status bar.
+	if !strings.Contains(plain(lines[m.controlsRow()]), iconPrevious) {
+		t.Errorf("the buttons are not under the bar: %q", plain(lines[m.controlsRow()]))
+	}
+	if got := strings.TrimSpace(plain(lines[m.statusRow()-1])); got != "" {
+		t.Errorf("the player does not end on a blank line: %q", got)
 	}
 }
 
@@ -465,11 +469,12 @@ func TestThePlayerSitsUnderARule(t *testing.T) {
 		t.Fatalf("view is %d lines, want 20", len(lines))
 	}
 
-	if got, want := plain(lines[m.barRow()-1]), strings.Repeat("─", m.width); got != want {
-		t.Errorf("the rule above the bar is %q", got)
+	if got, want := plain(lines[m.barRow()-2]), strings.Repeat("─", m.width); got != want {
+		t.Errorf("the rule above the player is %q", got)
 	}
 	// Nothing in the player carries a frame any more.
-	for _, row := range []int{m.barRow() - 1, m.barRow(), m.barRow() + 1, m.barRow() + 2} {
+	for _, row := range []int{m.barRow() - 2, m.barRow() - 1, m.barRow(),
+		m.barRow() + 1, m.barRow() + 2} {
 		if line := plain(lines[row]); strings.ContainsAny(line, "│╭╮╰╯") {
 			t.Errorf("row %d is still boxed: %q", row, line)
 		}
@@ -478,8 +483,19 @@ func TestThePlayerSitsUnderARule(t *testing.T) {
 		}
 	}
 
-	// The bar is directly under the rule, at the list's gutter, and the
-	// line under it is blank so it is not wedged against the buttons.
+	// Air above the bar and below the buttons, none between them: they are
+	// one control, not two.
+	if got := strings.TrimSpace(plain(lines[m.barRow()-1])); got != "" {
+		t.Errorf("the line under the rule is not blank: %q", got)
+	}
+	if got := strings.TrimSpace(plain(lines[m.barRow()+2])); got != "" {
+		t.Errorf("the line under the buttons is not blank: %q", got)
+	}
+	if !strings.Contains(plain(lines[m.barRow()+1]), iconPrevious) {
+		t.Errorf("the buttons are not directly under the bar: %q", plain(lines[m.barRow()+1]))
+	}
+
+	// The bar is at the list's gutter.
 	bar := plain(lines[m.barRow()])
 	if strings.TrimSpace(bar) == "" {
 		t.Error("no bar under the rule")
@@ -487,9 +503,6 @@ func TestThePlayerSitsUnderARule(t *testing.T) {
 	if start, _ := m.barGeometry(); !strings.HasPrefix(bar, strings.Repeat(" ", start)) ||
 		bar[start] == ' ' {
 		t.Errorf("the bar does not start at column %d: %q", start, bar)
-	}
-	if got := strings.TrimSpace(plain(lines[m.barRow()+1])); got != "" {
-		t.Errorf("the row under the bar is not blank: %q", got)
 	}
 }
 

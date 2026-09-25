@@ -475,7 +475,7 @@ func TestThePopoverStaysInsideTheList(t *testing.T) {
 		}
 		// The player below it is still drawn.
 		lines := strings.Split(m.View().Content, "\n")
-		if rule := plain(lines[m.barRow()-1]); !strings.Contains(rule, "─") {
+		if rule := plain(lines[m.barRow()-2]); !strings.Contains(rule, "─") {
 			t.Errorf("%dx%d: the rule above the player is gone: %q", size.w, size.h, rule)
 		}
 		if row := plain(lines[m.controlsRow()]); !strings.Contains(row, iconPrevious) {

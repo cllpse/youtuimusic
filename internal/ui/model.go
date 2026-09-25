@@ -1020,8 +1020,9 @@ var (
 
 const (
 	tabsHeight = 3 // border, label, border
-	// playerRows is the rule, the bar, a blank line and the buttons.
-	playerRows = 4
+	// playerRows is the rule, a blank line, the bar, the buttons and a
+	// blank line under them.
+	playerRows = 5
 	statusRows = 1
 	// progressRows is everything below the list.
 	progressRows = playerRows + statusRows
@@ -1040,15 +1041,16 @@ func (m Model) bodyHeight() int {
 	return 1
 }
 
-// barRow is the line the progress bar is drawn on: past the list and the
-// rule under it.
-func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 1 }
+// barRow is the line the progress bar is drawn on: past the list, the rule
+// under it and the blank line under that.
+func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 2 }
 
 // statusRow is the bar under the player.
 func (m Model) statusRow() int { return tabsHeight + m.bodyHeight() + playerRows }
 
-// controlsRow is the line of buttons, a blank line below the bar.
-func (m Model) controlsRow() int { return m.barRow() + 2 }
+// controlsRow is the line of buttons, directly under the bar: they are one
+// thing, and a gap between them made them read as two.
+func (m Model) controlsRow() int { return m.barRow() + 1 }
 
 // barGeometry is the column the progress bar starts at and how wide it is.
 // Rendering and hit-testing both go through this, so a click lands where the
@@ -1369,13 +1371,15 @@ func (m Model) renderPlayer() string {
 	// gutter is written here rather than by either of them — it used to be
 	// the box's border and padding supplying it.
 	gutter := strings.Repeat(" ", min(contentLeft, max(m.width, 0)))
-	// One blank line under the bar, so it is not wedged against the
-	// buttons. Above it the rule is separation enough.
+	// The bar and the buttons sit together, with air above and below the
+	// pair of them rather than between them.
+	blank := strings.Repeat(" ", max(m.width, 0))
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.separator(),
+		blank,
 		gutter+m.renderBar(),
-		strings.Repeat(" ", max(m.width, 0)),
 		gutter+m.renderControls(),
+		blank,
 	)
 }
 
