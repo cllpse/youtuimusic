@@ -96,9 +96,9 @@ func itemAtVisual(line, items int) (int, bool) {
 var (
 	menuBox = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(accent).
+		BorderForeground(foreground).
 		Padding(0, 1)
-	menuSelected = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	menuSelected = lipgloss.NewStyle().Bold(true).Foreground(emphasis)
 )
 
 // menuSize is the whole box, borders and padding included.

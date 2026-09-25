@@ -249,7 +249,7 @@ func (t trackTable) moreRow(width int) string {
 // whether it is the one under the cursor. Colour says the first and a filled
 // background says the second, so a row can say both at once — which it has
 // to, since the cursor is usually on the track that is playing.
-var rowPlaying = lipgloss.NewStyle().Bold(true).Foreground(accent)
+var rowPlaying = lipgloss.NewStyle().Bold(true).Foreground(emphasis)
 
 // rowSelected fills a row with the highlight. No foreground is set with it:
 // the highlight is a tint of the terminal's own background, so the

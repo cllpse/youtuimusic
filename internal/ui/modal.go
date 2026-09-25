@@ -18,7 +18,7 @@ const (
 
 var modalBox = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
-	BorderForeground(accent).
+	BorderForeground(foreground).
 	Padding(0, 1)
 
 // modalBounds is where the popover sits: centred on the list, and inside

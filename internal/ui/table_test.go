@@ -597,7 +597,7 @@ func TestTheScrollbarMarksThePlayingTrack(t *testing.T) {
 	// The mark is a block like the thumb, so it is the colour that finds it.
 	at := -1
 	for i, cell := range bar {
-		if sgrCodes(cell)["34"] {
+		if sgrCodes(cell)[emphasisFG] {
 			if at >= 0 {
 				t.Errorf("the mark is on rows %d and %d", at, i)
 			}
@@ -630,7 +630,7 @@ func TestThePlayingMarkStaysOnTheTrough(t *testing.T) {
 		// Found by colour: the mark is a block wherever it lands.
 		found := -1
 		for i, cell := range bar {
-			if sgrCodes(cell)["34"] {
+			if sgrCodes(cell)[emphasisFG] {
 				found = i
 			}
 		}
@@ -654,7 +654,7 @@ func TestNoMarkForATrackThatIsNotInTheList(t *testing.T) {
 		}
 		bar := scrollbarFor(table.rowCount(), table.offset, 10, table.playingRow(), table.highlight)
 		for i, cell := range bar {
-			if sgrCodes(cell)["34"] {
+			if sgrCodes(cell)[emphasisFG] {
 				t.Errorf("playing %q still marked row %d", playing, i)
 			}
 		}
@@ -687,7 +687,7 @@ func TestTheMarkAndTheThumbShareACell(t *testing.T) {
 	if !strings.Contains(plain(cell), "█") {
 		t.Errorf("the thumb lost its shape: %q", plain(cell))
 	}
-	if codes := sgrCodes(cell); !codes["34"] {
+	if codes := sgrCodes(cell); !codes[emphasisFG] {
 		t.Errorf("the shared cell does not say the track is there: %v", codes)
 	}
 	// Below the thumb the trough is its ordinary self.

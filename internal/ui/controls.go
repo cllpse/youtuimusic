@@ -63,7 +63,7 @@ const (
 type button struct {
 	control control
 	icon    string
-	// lit means drawn in the accent rather than grey: there is something for
+	// lit means filled rather than dimmed: there is something for
 	// it to act on, or the thing it toggles is on.
 	lit        bool
 	start, end int // half-open columns
@@ -79,11 +79,12 @@ const (
 var (
 	// Idle, a button is only its icon, dimmed: there is nothing to press.
 	buttonStyle = lipgloss.NewStyle().Foreground(muted)
-	// Live, it fills with the accent, which is what makes it look pressable
-	// rather than printed.
+	// Live, it is turned inside out — the foreground as a fill, the
+	// background as its text — which is what makes it look pressable rather
+	// than printed, without reaching for a second hue.
 	buttonLitStyle = lipgloss.NewStyle().
-			Background(accent).
-			Foreground(contrast).
+			Background(emphasis).
+			Foreground(background).
 			Bold(true)
 )
 

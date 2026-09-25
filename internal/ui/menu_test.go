@@ -744,7 +744,7 @@ func TestTheBackButtonIsAButtonAndWorks(t *testing.T) {
 
 	// It is drawn filled, the way the transport's buttons are.
 	header := strings.Split(m.renderModal(), "\n")[1]
-	if !sgrCodes(header)["44"] {
+	if !sgrCodes(header)[fillBG] {
 		t.Errorf("the back button is not filled: %v", sgrCodes(header))
 	}
 	if !strings.Contains(plain(header), iconBack) {

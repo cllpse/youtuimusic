@@ -200,7 +200,7 @@ func New(s Services) Model {
 		loading:   s.Library != nil,
 		now:       time.Now,
 		cache:     map[string]cached{},
-		bar:       newBar(rampAt),
+		bar:       newBar(litRamp),
 		pausedBar: newBar(mutedRamp),
 		spin:      newLoader(),
 	}
@@ -908,12 +908,12 @@ func (m Model) applyRating(r Rating) (tea.Model, tea.Cmd) {
 // #FFFFFF and 7 to #272727 — "black" is white and "white" is nearly black.
 // Pick a colour for its name and it inverts with the theme; pick it for its
 // role and it follows.
+// The interface is monochrome: one hue, and it is the terminal's own. There
+// is no accent. Everything that has to stand out does it by weight —
+// faint, ordinary, bright — or by being turned inside out, a fill of the
+// foreground with the background as its text. Shape does the rest.
 var (
-	accent = lipgloss.Blue
-	// accentBright is the same hue, one slot up, which is how a sixteen
-	// colour palette does emphasis.
-	accentBright = lipgloss.BrightBlue
-	// alert is the one thing that is not the accent. An error announcing
+	// alert is the one exception, and it earns it: an error announcing
 	// itself by colour is the point of colouring it.
 	alert = lipgloss.Red
 
@@ -923,9 +923,10 @@ var (
 	foreground = lipgloss.White
 	// muted is the dim foreground: on the page, but not what is being read.
 	muted = lipgloss.BrightBlack
-	// contrast is the far end of the foreground, for text on a fill the
-	// ordinary one would not survive.
-	contrast = lipgloss.BrightWhite
+	// emphasis is the far end of the foreground. It is what the accent used
+	// to be — the strongest thing available — and doubles as the fill under
+	// text drawn in the background colour.
+	emphasis = lipgloss.BrightWhite
 
 	// surface is a raised background — the status bar's band. It is the dim
 	// foreground used the other way round, which puts it one step off the
@@ -934,9 +935,9 @@ var (
 	// onSurface is text on that surface. It cannot be muted, because muted
 	// is the surface.
 	onSurface = foreground
-	// played is the paused bar's filled part: no colour, so nothing about it
-	// reads as playing, but the foreground against the groove's background,
-	// so the playhead is still there to see.
+	// played is the paused bar's filled part: a step below the lit state, so
+	// nothing about it reads as playing, but well clear of the groove behind
+	// it, so the playhead is still there to see.
 	played = foreground
 )
 
@@ -951,7 +952,7 @@ var (
 	// a flatter hierarchy rather than an invisible one.
 	dim    = lipgloss.NewStyle().Faint(true)
 	failed = lipgloss.NewStyle().Foreground(alert)
-	active = lipgloss.NewStyle().Foreground(accent)
+	active = lipgloss.NewStyle().Foreground(emphasis).Bold(true)
 )
 
 // dropFromLiked removes a track from the liked playlist wherever it is on
@@ -1049,7 +1050,10 @@ func (m Model) isPlaying(t Track) bool {
 }
 
 // tabBorder is a rounded box whose bottom edge is open on the tab in front,
-// so it reads as joined to the table below it.
+// so it reads as joined to the table below it. Its corners are the light arc
+// the rest of the frame uses, which is the tightest radius a character grid
+// has — the Powerline half circles are a whole cell of curve and read as a
+// pill rather than as a corner.
 func tabBorder(left, middle, right string) lipgloss.Border {
 	b := lipgloss.RoundedBorder()
 	b.BottomLeft, b.Bottom, b.BottomRight = left, middle, right
@@ -1063,9 +1067,9 @@ var (
 				Foreground(muted).
 				Padding(0, 1)
 	activeTabStyle = inactiveTabStyle.
-			Border(tabBorder("┘", " ", "└"), true).
-			BorderForeground(accent).
-			Foreground(accent).
+			Border(tabBorder("╯", " ", "╰"), true).
+			BorderForeground(emphasis).
+			Foreground(emphasis).
 			Bold(true)
 	// The gap is the rule that carries on past the last tab. It inherits the
 	// tab's padding unless that is cleared, which would push the row two
@@ -1288,8 +1292,8 @@ func (m Model) showsRating() bool { return m.showingID != likedPlaylistID }
 // doing, and one holding what is playing that takes the rest of the row.
 var (
 	statusKeyStyle = lipgloss.NewStyle().
-			Background(accent).
-			Foreground(contrast).
+			Background(emphasis).
+			Foreground(background).
 			Bold(true).
 			Padding(0, 1)
 	statusAlertStyle = statusKeyStyle.Background(alert)
@@ -1458,37 +1462,28 @@ func (m Model) renderPlayer() string {
 	return playerBox.Render(inner)
 }
 
-// barRamp is the bar's gradient, as ANSI palette entries. Naming the
-// palette rather than a hex value is what keeps the bar inside the
-// terminal's own colour scheme: the terminal resolves these, so they are
-// whatever the user's theme says they are.
+// litRamp is the played part of the bar: the brightest thing the scheme has,
+// flat.
 //
-// The component's own blend cannot be used for this. It interpolates in RGB
-// through lipgloss.Blend1D, which has to invent concrete values for the
-// steps in between and emits them as true colour — off-scheme by
-// construction, however the endpoints were named.
-var barRamp = []color.Color{
-	accent,
-	accentBright,
-}
-
-// rampAt picks the ramp entry for a position along the bar. Sixteen colours
-// cannot make a smooth blend, so this steps rather than fades; the half
-// block softens it, carrying a foreground and a background so each cell can
-// show two steps.
+// It used to be a gradient between two steps of the accent. Monochrome there
+// is no gradient to give it — two adjacent greys is not one — and worse, the
+// step that would have been the low end is the colour the paused bar uses,
+// so a bar under half way would have been indistinguishable from a paused
+// one. Weight says playing here, and it says it the same the whole way
+// along.
 //
-// The ramp is laid along the track rather than squeezed into the played
-// part, so a colour means a place in the song and stays put as it plays.
-func rampAt(_, position float64) color.Color {
-	i := int(position * float64(len(barRamp)))
-	return barRamp[min(max(i, 0), len(barRamp)-1)]
-}
+// It is a named palette entry rather than a hex value, which is what keeps
+// the bar inside the terminal's own scheme: the terminal resolves it, so it
+// is whatever the theme says it is. The component's own blend could not be
+// used even when this was a gradient — it interpolates in RGB through
+// lipgloss.Blend1D and emits true colour, off-scheme by construction.
+func litRamp(_, _ float64) color.Color { return emphasis }
 
-// mutedRamp drains the colour out of the played part without draining the
-// information: paused, the bar stops being the one lit thing on the screen
-// but still says where the playhead is. It has to differ from the groove
-// rather than match it — matching hid the position, which is the one thing
-// the bar is for.
+// mutedRamp takes the played part down a step without taking it away:
+// paused, the bar stops being the brightest thing on the screen but still
+// says where the playhead is. It has to differ from the groove as well as
+// from the lit state — matching the groove hid the position, which is the one
+// thing the bar is for.
 func mutedRamp(_, _ float64) color.Color { return played }
 
 // emptyCell is what the bar has not reached yet: a solid block, so the track

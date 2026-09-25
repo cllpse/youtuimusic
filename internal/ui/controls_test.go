@@ -504,10 +504,10 @@ func TestButtonsFillWhenLive(t *testing.T) {
 	}
 
 	codes := sgrCodes(controlsLine(m))
-	if !codes["44"] {
+	if !codes[fillBG] {
 		t.Errorf("no live button is filled with the accent: %v", codes)
 	}
-	if !codes["97"] {
+	if !codes[onFillFG] {
 		t.Errorf("a filled button has no light text on it: %v", codes)
 	}
 	// The repeat button is off, so it is dim rather than filled.
@@ -523,7 +523,7 @@ func TestIdleButtonsAreOnlyDimIcons(t *testing.T) {
 	if !codes["90"] {
 		t.Errorf("the idle row is not dimmed: %v", codes)
 	}
-	if codes["44"] {
+	if codes[fillBG] {
 		t.Errorf("an idle button is filled: %v", codes)
 	}
 }
@@ -532,7 +532,7 @@ func TestIdleButtonsAreOnlyDimIcons(t *testing.T) {
 func TestALitButtonIsFilled(t *testing.T) {
 	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
 	next, _ := m.Update(keyPress("r")) // repeat on lights its button
-	if codes := sgrCodes(controlsLine(next.(Model))); !codes["44"] {
+	if codes := sgrCodes(controlsLine(next.(Model))); !codes[fillBG] {
 		t.Errorf("a lit button is not filled: %v", codes)
 	}
 }
@@ -551,12 +551,12 @@ func TestAButtonIsAsWideAsItsHitbox(t *testing.T) {
 // Switching repeat on fills its button without touching the others.
 func TestTurningSomethingOnFillsItsButton(t *testing.T) {
 	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
-	if sgrCodes(controlsLine(m))["44"] {
+	if sgrCodes(controlsLine(m))[fillBG] {
 		t.Fatal("something is already filled")
 	}
 	next, _ := m.Update(keyPress("r"))
 	m = next.(Model)
-	if !sgrCodes(controlsLine(m))["44"] {
+	if !sgrCodes(controlsLine(m))[fillBG] {
 		t.Errorf("repeat on did not fill its button: %v", sgrCodes(controlsLine(m)))
 	}
 }

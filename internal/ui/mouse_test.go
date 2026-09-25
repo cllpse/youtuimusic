@@ -561,18 +561,21 @@ func TestThePausedBarIsGreyed(t *testing.T) {
 	m.Length, m.Position = 100*time.Second, 50*time.Second
 
 	playing := strings.Split(m.View().Content, "\n")[m.barRow()]
-	accent := []string{"34", "44", "94", "104"}
-	if !anyCode(playing, accent) {
-		t.Fatalf("the playing bar is not in the accent at all; the test proves nothing:\n%q", playing)
+	// Monochrome, "lit" is the bright end of the foreground. Paused drops
+	// to the ordinary one, which is quieter but still a playhead — the
+	// groove behind it is the row highlight, and neither matches that.
+	lit := []string{emphasisFG}
+	if !anyCode(playing, lit) {
+		t.Fatalf("the playing bar is not lit at all; the test proves nothing:\n%q", playing)
 	}
 
 	m.Paused = true
 	paused := strings.Split(m.View().Content, "\n")[m.barRow()]
-	if anyCode(paused, accent) {
-		t.Errorf("the paused bar still uses the accent: %v", sgrCodes(paused))
+	if anyCode(paused, lit) {
+		t.Errorf("the paused bar is still lit: %v", sgrCodes(paused))
 	}
-	if !sgrCodes(paused)["90"] {
-		t.Errorf("the paused bar is not grey: %v", sgrCodes(paused))
+	if !sgrCodes(paused)[foregroundFG] {
+		t.Errorf("the paused bar has lost its playhead: %v", sgrCodes(paused))
 	}
 	// It is still a bar, and the same length.
 	full := func(s string) int {

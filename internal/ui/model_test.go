@@ -303,8 +303,8 @@ func TestTheStatusBarSaysWhatIsPlaying(t *testing.T) {
 	}
 	// Two fills: the bright one for the state, the quiet one for the rest.
 	codes := sgrCodes(bar)
-	if !codes["44"] {
-		t.Errorf("the state block is not filled with the accent: %v", codes)
+	if !codes[fillBG] {
+		t.Errorf("the state block is not filled: %v", codes)
 	}
 	if !codes["100"] {
 		t.Errorf("the rest of the bar is not filled: %v", codes)
@@ -410,7 +410,7 @@ func TestPausedIsSaidOnce(t *testing.T) {
 	if m.playPauseIcon() != iconPlay {
 		t.Error("the control is not a play triangle")
 	}
-	if anyCode(lines[m.barRow()], []string{"34", "44", "94", "104"}) {
+	if anyCode(lines[m.barRow()], []string{emphasisFG, fillBG}) {
 		t.Error("the bar is still lit")
 	}
 }
@@ -459,6 +459,16 @@ func TestTabRowIsThreeLines(t *testing.T) {
 		t.Errorf("row %d is %q, want the first track", tabsHeight, plain(lines[tabsHeight+headerRows]))
 	}
 }
+
+// The frame is monochrome. "Emphasised" is the bright end of the foreground,
+// and a fill is that turned inside out: the bright foreground as a
+// background, the background colour as the text on it.
+const (
+	emphasisFG   = "97"
+	foregroundFG = "37"
+	fillBG       = "107"
+	onFillFG     = "30"
+)
 
 // highlightSGR is the background a selected row renders as when the
 // terminal has not said what its own background is — which it has not, in a
@@ -703,12 +713,12 @@ func TestPlayingAndSelectedAreSeparate(t *testing.T) {
 	if !sgrCodes(alpha)[highlightSGR] {
 		t.Errorf("the selected row is not highlighted: %v", sgrCodes(alpha))
 	}
-	if sgrCodes(alpha)["34"] {
+	if sgrCodes(alpha)[emphasisFG] {
 		t.Errorf("the selected row is coloured as if playing: %v", sgrCodes(alpha))
 	}
 
 	// The playing track is coloured and not highlighted.
-	if !sgrCodes(beta)["34"] {
+	if !sgrCodes(beta)[emphasisFG] {
 		t.Errorf("the playing row is not coloured: %v", sgrCodes(beta))
 	}
 	if sgrCodes(beta)[highlightSGR] {
@@ -716,14 +726,14 @@ func TestPlayingAndSelectedAreSeparate(t *testing.T) {
 	}
 
 	// A row that is neither is left alone.
-	if sgrCodes(gamma)[highlightSGR] || sgrCodes(gamma)["34"] {
+	if sgrCodes(gamma)[highlightSGR] || sgrCodes(gamma)[emphasisFG] {
 		t.Errorf("an ordinary row is styled: %v", sgrCodes(gamma))
 	}
 
 	// And a row that is both says both.
 	m.trackCursor = 1
 	both := strings.Split(m.View().Content, "\n")[tabsHeight+headerRows+1]
-	if !sgrCodes(both)["34"] || !sgrCodes(both)[highlightSGR] {
+	if !sgrCodes(both)[emphasisFG] || !sgrCodes(both)[highlightSGR] {
 		t.Errorf("the playing row under the cursor says %v, want both", sgrCodes(both))
 	}
 }
@@ -1101,5 +1111,65 @@ func TestOneSurfaceForEveryQuietPartOfTheFrame(t *testing.T) {
 		if got := colorTriples(lines[tc.row]); !slices.Contains(got, want) {
 			t.Errorf("%s does not use the highlight %s: %v", tc.what, want, got)
 		}
+	}
+}
+
+// chromaticCodes are the SGR parameters that name a hue, foreground and
+// background, ordinary and bright. Red is left out: it is the one colour the
+// interface keeps, and only for trouble.
+var chromaticCodes = []string{
+	"32", "33", "34", "35", "36", "42", "43", "44", "45", "46",
+	"92", "93", "94", "95", "96", "102", "103", "104", "105", "106",
+}
+
+// The interface is monochrome. Everything that has to stand out does it by
+// weight or by being turned inside out, so a hue appearing anywhere is a
+// regression — and an easy one to make, since reaching for a colour is the
+// obvious way to mark something.
+func TestNothingIsColouredButTrouble(t *testing.T) {
+	m := sample()
+	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
+	m = next.(Model)
+	m.Tracks = rows(100)
+	m.playing, m.Length, m.Position = m.Tracks[3], time.Minute, 20*time.Second
+	m.playing.Rating = RatingUp
+	m.Tracks[3].Rating = RatingUp
+	m.trackCursor, m.repeat, m.sort = 3, RepeatAll, sortSpec{by: sortTitle}
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
+
+	for _, state := range []struct {
+		name  string
+		setup func(Model) Model
+	}{
+		{"playing", func(m Model) Model { return m }},
+		{"paused", func(m Model) Model { m.Paused = true; return m }},
+		{"loading", func(m Model) Model { m.loading = true; return m }},
+		{"with the menu open", func(m Model) Model {
+			return m.openMenu(m.Tracks[3], 4, 4)
+		}},
+		{"with a popover open", func(m Model) Model {
+			m.detour = detour{active: true, tracks: m.Tracks,
+				tab: Playlist{ID: "MPRE", Title: "Cherry", kind: tabAlbum}}
+			return m
+		}},
+	} {
+		t.Run(state.name, func(t *testing.T) {
+			frame := state.setup(m).View().Content
+			for code := range sgrCodes(frame) {
+				if slices.Contains(chromaticCodes, code) {
+					t.Errorf("a hue got in: SGR %s", code)
+				}
+				if code == "31" || code == "41" {
+					t.Errorf("red without trouble: SGR %s", code)
+				}
+			}
+		})
+	}
+
+	// And trouble is still red, or the exception is worth nothing.
+	m.Err = errors.New("something went wrong")
+	codes := sgrCodes(m.View().Content)
+	if !codes["41"] && !codes["31"] {
+		t.Errorf("an error is not red: %v", codes)
 	}
 }
