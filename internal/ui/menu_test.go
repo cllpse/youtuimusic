@@ -309,6 +309,10 @@ func TestThePopoverOwnsNavigationButNotTransport(t *testing.T) {
 func TestClickingInsidethePopover(t *testing.T) {
 	m, lib, st, au := menuModel(t)
 	lib.tracks["MPREbCherry"] = fromUI(rows(20))
+	// Tall enough for an album to show three tracks: it is inset a row top
+	// and bottom so the artist behind it shows, which costs it two.
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = sized.(Model)
 	now := time.Unix(1000, 0)
 	m = frozen(m, &now)
 	m = openVia(t, m, menuAlbum)
@@ -675,7 +679,11 @@ func TestClickingAwayClosesEveryPopover(t *testing.T) {
 		t.Fatalf("history is %d deep", len(m.history))
 	}
 
-	x, y, _, _ := m.modalBounds()
+	// Outside the artist as well as the album. Inside the artist is a step
+	// back to it now, which is what the inset is for.
+	artist := m
+	artist.detour = m.history[0]
+	x, y, _, _ := artist.modalBounds()
 	next, cmd = m.Update(click(max(x-1, 0), max(y-1, 0)))
 	m = drain(t, next.(Model), cmd)
 
@@ -684,8 +692,10 @@ func TestClickingAwayClosesEveryPopover(t *testing.T) {
 	}
 }
 
-// A popover with something behind it says so.
-func TestAPopoverWithHistoryShowsTheWayBack(t *testing.T) {
+// An album shows no way back. It is inset on the artist it opened from and
+// the artist is still on the screen around it, so the way back is the thing
+// itself — clicking it, or esc.
+func TestAnAlbumShowsNoWayBack(t *testing.T) {
 	m, lib, _, _ := menuModel(t)
 	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
 
@@ -696,12 +706,81 @@ func TestAPopoverWithHistoryShowsTheWayBack(t *testing.T) {
 
 	next, cmd := m.Update(keyPress("enter"))
 	m = drain(t, next.(Model), cmd)
-	header := plain(strings.Split(m.renderModal(), "\n")[1])
-	if !strings.Contains(header, iconBack) {
-		t.Errorf("no way back shown on %q", header)
+	if len(m.history) == 0 {
+		t.Fatal("the album did not stack on the artist")
 	}
-	if !strings.Contains(header, "Album") {
-		t.Errorf("the header stopped saying what it shows: %q", header)
+	header := plain(strings.Split(m.renderModal(), "\n")[1])
+	if strings.Contains(header, iconBack) {
+		t.Errorf("the album draws a way back: %q", header)
+	}
+	if _, _, _, ok := m.modalBackButton(); ok {
+		t.Error("the album answers clicks on a button it does not draw")
+	}
+	// It still says what it is showing, and still offers the way out.
+	for _, want := range []string{"Album", iconClose} {
+		if !strings.Contains(header, want) {
+			t.Errorf("the header is missing %q: %q", want, header)
+		}
+	}
+	// And esc is still a step back rather than a dismissal.
+	next, cmd = m.Update(keyPress("esc"))
+	stepped := drain(t, next.(Model), cmd)
+	if !stepped.detour.active || stepped.detour.tab.Title != "DAPHNI" {
+		t.Errorf("esc went to %+v, want back to the artist", stepped.detour.tab)
+	}
+}
+
+// The artist stays on the screen behind the album, and clicking it is the
+// way back to it.
+func TestTheArtistShowsBehindTheAlbumAndTakesTheClick(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
+
+	m = openVia(t, m, menuArtist)
+	ax, ay, awidth, _ := m.modalBounds()
+
+	next, cmd := m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+
+	// The artist's own border is drawn where the album is not covering it.
+	// Sliced by column and not by byte: the row is full of box drawing and
+	// track titles, and neither is one byte a cell.
+	frame := strings.Split(m.View().Content, "\n")
+	row := plain(frame[ay])
+	edge := row[colToByte(row, ax):colToByte(row, ax+awidth)]
+	if !strings.HasPrefix(edge, "╭") || !strings.HasSuffix(edge, "╮") {
+		t.Errorf("the artist is not drawn behind the album: %q", edge)
+	}
+	// The artist's top border has the row to itself — that is the point of
+	// the vertical inset. Two columns either side and nothing else uncovers
+	// only the artist's sides, which reads as a double line.
+	if strings.Count(edge, "╭") != 1 {
+		t.Errorf("the album is drawn on the artist's own border row: %q", edge)
+	}
+	// The album's border is on the next row down, inset inside the artist's
+	// sides, which are still drawn either side of it.
+	below := plain(frame[ay+albumInsetY])
+	inner := below[colToByte(below, ax):colToByte(below, ax+awidth)]
+	if !strings.HasPrefix(inner, "│") || !strings.HasSuffix(inner, "│") {
+		t.Errorf("the artist's sides are not drawn beside the album: %q", inner)
+	}
+	if !strings.Contains(inner, "╭") || !strings.Contains(inner, "╮") {
+		t.Errorf("the album is not drawn inside them: %q", inner)
+	}
+
+	// A click on the strip of artist the inset leaves showing steps back to
+	// it rather than dismissing everything.
+	bx, _, _, _ := m.modalBounds()
+	if bx <= ax {
+		t.Fatalf("the album is not inset: %d vs %d", bx, ax)
+	}
+	next, cmd = m.Update(click(ax+1, ay+2))
+	back := drain(t, next.(Model), cmd)
+	if !back.detour.active {
+		t.Fatal("clicking the artist behind dismissed the lot")
+	}
+	if back.detour.tab.Title != "DAPHNI" {
+		t.Errorf("it went to %q", back.detour.tab.Title)
 	}
 }
 
@@ -725,7 +804,8 @@ func TestSearchClearsWhatWasBehindIt(t *testing.T) {
 	}
 }
 
-// The way back is a button, and pressing it goes back.
+// The way back is still a button where one is drawn, which is any stacked
+// popover that is not an album.
 func TestTheBackButtonIsAButtonAndWorks(t *testing.T) {
 	m, lib, _, _ := menuModel(t)
 	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
@@ -735,27 +815,37 @@ func TestTheBackButtonIsAButtonAndWorks(t *testing.T) {
 		t.Error("the first popover offers a way back")
 	}
 
+	// An album is the one stacked popover that does not draw one, because
+	// what it would point at is already on the screen.
 	next, cmd := m.Update(keyPress("enter"))
-	m = drain(t, next.(Model), cmd)
-	x, y, width, ok := m.modalBackButton()
-	if !ok {
-		t.Fatal("no way back on the second popover")
+	album := drain(t, next.(Model), cmd)
+	if !album.showsBack() {
+		if _, _, _, ok := album.modalBackButton(); ok {
+			t.Error("the album offers a button it says it does not show")
+		}
+	} else {
+		t.Error("the album shows a way back")
 	}
 
-	// It is drawn filled, the way the transport's buttons are.
-	header := strings.Split(m.renderModal(), "\n")[1]
+	// Force the other case: a stacked popover of another kind does draw one,
+	// and every column of it goes back.
+	stacked := album
+	stacked.history = []detour{album.history[0]}
+	stacked.detour = detour{active: true,
+		tab: Playlist{ID: "UCother", Title: "Someone", kind: tabArtist}}
+	x, y, width, ok := stacked.modalBackButton()
+	if !ok {
+		t.Fatal("a stacked artist offers no way back")
+	}
+	header := strings.Split(stacked.renderModal(), "\n")[1]
 	if !sgrCodes(header)[fillBG] {
 		t.Errorf("the back button is not filled: %v", sgrCodes(header))
 	}
 	if !strings.Contains(plain(header), iconBack) {
 		t.Errorf("no back icon: %q", plain(header))
 	}
-
-	// Every column of it goes back.
 	for offset := range width {
-		again := openVia(t, m, menuAlbum)
-		_ = again
-		next, cmd := m.Update(click(x+offset, y))
+		next, cmd := stacked.Update(click(x+offset, y))
 		back := drain(t, next.(Model), cmd)
 		if !back.detour.active {
 			t.Fatalf("column %d closed the popover instead of going back", x+offset)
@@ -834,19 +924,16 @@ func TestTheModalTitleIsCentred(t *testing.T) {
 		t.Errorf("off centre by %d without a button: %q", off, header)
 	}
 
-	// With one, still centred — and the button is on the left.
+	// On an album, which draws no way back, still centred and still clear
+	// of the way out on the right.
 	next, cmd := m.Update(keyPress("enter"))
 	m = drain(t, next.(Model), cmd)
 	header = plain(strings.Split(m.renderModal(), "\n")[1])
-	// Border, padding, then the button's own leading cell.
-	if at, want := column(header, iconBack), modalChrome/2+1; at != want {
-		t.Errorf("the button is at column %d, want %d: %q", at, want, header)
-	}
 	if off := centreOffset(header, iconAlbum, "Cherry"); off > 1 {
-		t.Errorf("off centre by %d with a button: %q", off, header)
+		t.Errorf("off centre by %d: %q", off, header)
 	}
-	if column(header, iconBack) > column(header, iconAlbum) {
-		t.Errorf("the button is not before the title: %q", header)
+	if column(header, iconAlbum) > column(header, iconClose) {
+		t.Errorf("the title runs past the way out: %q", header)
 	}
 }
 
@@ -893,11 +980,11 @@ func TestAnAlbumSitsInsideAnArtist(t *testing.T) {
 	}
 	bx, _, albumWidth, _ := album.modalBounds()
 
-	if want := artistWidth - 2*albumInset; albumWidth != want {
+	if want := artistWidth - 2*albumInsetX; albumWidth != want {
 		t.Errorf("the album is %d wide, want %d", albumWidth, want)
 	}
 	// Inset on both sides, not just narrower on one.
-	if want := ax + albumInset; bx != want {
+	if want := ax + albumInsetX; bx != want {
 		t.Errorf("the album starts at %d, want %d", bx, want)
 	}
 }

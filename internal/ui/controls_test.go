@@ -149,7 +149,8 @@ func TestTheRatingLitsItsButton(t *testing.T) {
 
 	up, _ := buttonAt(m, controlThumbUp)
 	down, _ := buttonAt(m, controlThumbDown)
-	if up.label != labelLike || down.label != labelDislike {
+	if strings.TrimSpace(up.label) != labelLike ||
+		strings.TrimSpace(down.label) != labelDislike {
 		t.Errorf("the labels are %q/%q", up.label, down.label)
 	}
 	if up.lit || down.lit {
@@ -712,28 +713,60 @@ func TestLikingWhileOnLikedMusicRefetches(t *testing.T) {
 	}
 }
 
-// Every row on the liked playlist is liked, so a button offering to like one
-// says nothing. Everywhere else it has something to say.
-func TestTheLikedPlaylistHasNoThumbs(t *testing.T) {
+// The thumbs follow the track, not the playlist: pressing one on a track
+// that already carries that rating takes it off, and the label says so.
+func TestTheThumbsFollowTheTrack(t *testing.T) {
 	m, _, _, _ := playingModel(t)
 
-	for _, c := range []control{controlThumbUp, controlThumbDown} {
-		if _, ok := buttonAt(m, c); !ok {
-			t.Fatalf("%v is missing from an ordinary playlist", c)
+	label := func(m Model, c control) string {
+		b, ok := buttonAt(m, c)
+		if !ok {
+			t.Fatalf("%v is missing", c)
 		}
+		return strings.TrimSpace(b.label)
 	}
 
-	m.showingID = likedPlaylistID
-	for _, c := range []control{controlThumbUp, controlThumbDown} {
-		if _, ok := buttonAt(m, c); ok {
-			t.Errorf("%v is still offered on the liked playlist", c)
-		}
+	if got := label(m, controlThumbUp); got != labelLike {
+		t.Errorf("unrated says %q, want %q", got, labelLike)
 	}
-	// The transport is untouched, and the row still fills its width.
-	for _, c := range []control{controlPrevious, controlPlayPause, controlNext, controlRepeat} {
-		if _, ok := buttonAt(m, c); !ok {
-			t.Errorf("%v went with them", c)
-		}
+	m.playing.Rating = RatingUp
+	if got := label(m, controlThumbUp); got != labelUnlike {
+		t.Errorf("liked says %q, want %q", got, labelUnlike)
+	}
+	if got := label(m, controlThumbDown); got != labelDislike {
+		t.Errorf("liked changed the other one to %q", got)
+	}
+	m.playing.Rating = RatingDown
+	if got := label(m, controlThumbDown); got != labelUndislike {
+		t.Errorf("disliked says %q, want %q", got, labelUndislike)
+	}
+	if got := label(m, controlThumbUp); got != labelLike {
+		t.Errorf("disliked changed the other one to %q", got)
+	}
+
+	// Both states are drawn at the same width, so the button does not change
+	// size under the pointer when a rating lands.
+	m.playing.Rating = RatingNone
+	unrated, _ := buttonAt(m, controlThumbUp)
+	m.playing.Rating = RatingUp
+	rated, _ := buttonAt(m, controlThumbUp)
+	if a, b := buttonWidth(unrated.label), buttonWidth(rated.label); a != b {
+		t.Errorf("Like is %d wide and Unlike %d", a, b)
+	}
+}
+
+// They are offered on the liked playlist too, where what they say is Unlike.
+func TestTheLikedPlaylistStillOffersTheThumbs(t *testing.T) {
+	m, _, _, _ := playingModel(t)
+	m.showingID = likedPlaylistID
+	m.playing.Rating = RatingUp
+
+	b, ok := buttonAt(m, controlThumbUp)
+	if !ok {
+		t.Fatal("the liked playlist has no thumb")
+	}
+	if got := strings.TrimSpace(b.label); got != labelUnlike {
+		t.Errorf("it says %q, want %q", got, labelUnlike)
 	}
 	if got := lipgloss.Width(plain(controlsLine(m))); got != m.width {
 		t.Errorf("the row is %d cells, want %d", got, m.width)

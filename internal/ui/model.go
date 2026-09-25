@@ -1153,13 +1153,26 @@ func (m Model) View() tea.View {
 	// canvas directly: a layer's own Draw ignores its position, and only
 	// the compositor works out where each one belongs.
 	layers := []*lipgloss.Layer{lipgloss.NewLayer(content)}
+	z := 1
 	if m.detour.active {
+		// Every popover in the stack, not only the one in front: an album
+		// is inset on the artist it opened from so that the artist is still
+		// there around it, and it can only be there if it is drawn.
+		for _, behind := range m.history {
+			under := m
+			under.detour = behind
+			x, y, _, _ := under.modalBounds()
+			layers = append(layers,
+				lipgloss.NewLayer(under.renderModal()).X(x).Y(y).Z(z))
+			z++
+		}
 		x, y, _, _ := m.modalBounds()
-		layers = append(layers, lipgloss.NewLayer(m.renderModal()).X(x).Y(y).Z(1))
+		layers = append(layers, lipgloss.NewLayer(m.renderModal()).X(x).Y(y).Z(z))
+		z++
 	}
 	if m.menu.open {
 		layers = append(layers,
-			lipgloss.NewLayer(m.renderMenu()).X(m.menu.x).Y(m.menu.y).Z(2))
+			lipgloss.NewLayer(m.renderMenu()).X(m.menu.x).Y(m.menu.y).Z(z))
 	}
 	if len(layers) > 1 {
 		content = lipgloss.NewCompositor(layers...).Render()

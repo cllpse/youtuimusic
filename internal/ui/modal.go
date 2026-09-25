@@ -14,10 +14,15 @@ const (
 	modalMarginY = 1
 	modalChrome  = 4 // border and padding, both sides
 	modalHeader  = 2 // the title, and the blank line under it
-	// albumInset sits an album a little inside an artist, which is what it
-	// usually opened from: two popovers of the same size look like one that
-	// changed its mind, and this says the first is still behind.
-	albumInset = 2
+	// albumInset sits an album inside the artist it usually opened from, so
+	// that the artist is still there around it rather than replaced by it.
+	//
+	// It insets vertically as well, by a row. Two columns either side only
+	// uncovers the artist's own border, which reads as a double line rather
+	// than as something behind; a row off the top and bottom uncovers the
+	// header it is showing, which reads as what it is.
+	albumInsetX = 2
+	albumInsetY = 1
 )
 
 // iconClose is the way out of a popover: the times sign, which every font
@@ -47,12 +52,12 @@ var modalBox = lipgloss.NewStyle().
 // transport would mean the thing playing could not be paused.
 func (m Model) modalBounds() (x, y, width, height int) {
 	available := m.bodyHeight()
-	inset := 0
+	insetX, insetY := 0, 0
 	if m.detour.tab.kind == tabAlbum {
-		inset = albumInset
+		insetX, insetY = albumInsetX, albumInsetY
 	}
-	width = min(max(m.width-2*modalMarginX-2*inset, 24), m.width)
-	height = min(max(available-2*modalMarginY, 4), available)
+	width = min(max(m.width-2*modalMarginX-2*insetX, 24), m.width)
+	height = min(max(available-2*modalMarginY-2*insetY, 4), available)
 	return (m.width - width) / 2, tabsHeight + (available-height)/2, width, height
 }
 
@@ -118,7 +123,7 @@ func (m Model) modalHeader(inner int) string {
 		// What it is showing sits in the middle of the row, where a title
 		// belongs, and gives way to the button rather than under it.
 		back, taken := "", 0
-		if len(m.history) > 0 {
+		if m.showsBack() {
 			back = modalBackStyle.Render(" " + iconBack + " ")
 			taken = modalBackWidth
 		}
@@ -232,9 +237,18 @@ func (m Model) modalCloseButton() (x, y, width int, ok bool) {
 	return mx + mwidth - modalChrome/2 - modalCloseWidth, my + 1, modalCloseWidth, true
 }
 
+// showsBack reports whether the popover needs a way back drawn on it.
+//
+// An album does not: it sits inset on the artist it opened from, which is
+// still on the screen around it, so the way back is the artist — clicking it,
+// or esc. A button pointing at something already visible is furniture.
+func (m Model) showsBack() bool {
+	return len(m.history) > 0 && m.detour.tab.kind != tabAlbum
+}
+
 // modalBackButton is where the way back sits, when there is one.
 func (m Model) modalBackButton() (x, y, width int, ok bool) {
-	if !m.detour.active || len(m.history) == 0 || m.detour.tab.kind == tabSearch {
+	if !m.detour.active || m.detour.tab.kind == tabSearch || !m.showsBack() {
 		return 0, 0, 0, false
 	}
 	mx, my, _, _ := m.modalBounds()
@@ -248,6 +262,21 @@ func (m Model) modalContains(x, y int) bool {
 		return false
 	}
 	mx, my, width, height := m.modalBounds()
+	return x >= mx && x < mx+width && y >= my && y < my+height
+}
+
+// behindContains reports whether a point is on the popover immediately
+// behind the front one. Only that one: with the album inset on its artist
+// there is never a third, and popping blindly until a point lands would
+// close more than was clicked.
+func (m Model) behindContains(x, y int) bool {
+	n := len(m.history)
+	if n == 0 {
+		return false
+	}
+	under := m
+	under.detour = m.history[n-1]
+	mx, my, width, height := under.modalBounds()
 	return x >= mx && x < mx+width && y >= my && y < my+height
 }
 
@@ -359,6 +388,12 @@ func (m Model) clickModal(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		// is open should work the transport, not dismiss what you opened.
 		if mouse.Y >= tabsHeight+m.bodyHeight() {
 			return m.handleClick(mouse)
+		}
+		// On the popover behind this one, which the inset leaves showing:
+		// step back to it. Dismissing the lot when the thing clicked is
+		// visibly there would be a surprise.
+		if m.behindContains(mouse.X, mouse.Y) {
+			return m.leaveDetour()
 		}
 		// Clicking anywhere else dismisses the lot; esc is what steps back.
 		return m.closeDetour()

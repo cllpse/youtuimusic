@@ -27,24 +27,32 @@ const (
 	labelPlayPause = "Play/Pause (space)"
 	labelNext      = "Next (n)"
 	labelLike      = "Like (+)"
+	labelUnlike    = "Unlike (+)"
 	labelDislike   = "Dislike (-)"
+	labelUndislike = "Undislike (-)"
 	labelRepeatOff = "Repeat off (r)"
 	labelRepeatOn  = "Repeat on (r)"
 	labelRepeatOne = "Repeat one (r)"
 )
 
-// repeatLabels are what the one repeat button says, and every one of them is
-// drawn at the width of the longest so that the button does not change size
-// underneath the pointer as it cycles.
-var repeatLabels = []string{labelRepeatOff, labelRepeatOn, labelRepeatOne}
+// A button whose label changes with the state is drawn at the width of its
+// longest label, so that it does not change size underneath the pointer.
+var (
+	repeatLabels  = []string{labelRepeatOff, labelRepeatOn, labelRepeatOne}
+	likeLabels    = []string{labelLike, labelUnlike}
+	dislikeLabels = []string{labelDislike, labelUndislike}
+)
 
-var widestRepeatLabel = func() int {
+// steady renders one of a set of labels at the width of the widest.
+func steady(label string, set []string) string {
 	widest := 0
-	for _, l := range repeatLabels {
+	for _, l := range set {
 		widest = max(widest, lipgloss.Width(l))
 	}
-	return widest
-}()
+	return lipgloss.PlaceHorizontal(widest, lipgloss.Center, label)
+}
+
+var widestRepeatLabel = lipgloss.Width(steady(labelRepeatOff, repeatLabels))
 
 // Repeat is what happens when a track ends.
 type Repeat int
@@ -67,7 +75,7 @@ func (r Repeat) label() string {
 	case RepeatOne:
 		label = labelRepeatOne
 	}
-	return lipgloss.PlaceHorizontal(widestRepeatLabel, lipgloss.Center, label)
+	return steady(label, repeatLabels)
 }
 
 // control identifies a button on the controls row.
@@ -161,16 +169,23 @@ func (m Model) controlButtons() []button {
 	if width < groupWidth(leftGroup) {
 		return nil
 	}
-	// On the liked playlist every row is liked, so a button offering to like
-	// one says nothing. The same reasoning drops the column there.
-	var centre []button
-	if m.showsRating() {
-		centre = []button{
-			{control: controlThumbUp, label: labelLike,
-				lit: playing && m.playing.Rating == RatingUp},
-			{control: controlThumbDown, label: labelDislike,
-				lit: playing && m.playing.Rating == RatingDown},
-		}
+	// The thumbs follow the track rather than the playlist. Pressing one on
+	// a track that already carries that rating takes it off, so the label
+	// says which of the two it will do.
+	liked := m.playing.Rating == RatingUp
+	disliked := m.playing.Rating == RatingDown
+	like, dislike := labelLike, labelDislike
+	if liked {
+		like = labelUnlike
+	}
+	if disliked {
+		dislike = labelUndislike
+	}
+	centre := []button{
+		{control: controlThumbUp, label: steady(like, likeLabels),
+			lit: playing && liked},
+		{control: controlThumbDown, label: steady(dislike, dislikeLabels),
+			lit: playing && disliked},
 	}
 	repeatGroup := []button{
 		{control: controlRepeat, label: m.repeat.label(), lit: m.repeat != RepeatOff},
