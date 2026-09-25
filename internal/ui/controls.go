@@ -24,7 +24,8 @@ const (
 // typo.
 const (
 	labelPrevious  = "Previous (p)"
-	labelPlayPause = "Play/Pause (space)"
+	labelPlay      = "Play (space)"
+	labelPause     = "Pause (space)"
 	labelNext      = "Next (n)"
 	labelLike      = "Like (+)"
 	labelUnlike    = "Unlike (+)"
@@ -39,9 +40,19 @@ const (
 // longest label, so that it does not change size underneath the pointer.
 var (
 	repeatLabels  = []string{labelRepeatOff, labelRepeatOn, labelRepeatOne}
+	playingLabels = []string{labelPlay, labelPause}
 	likeLabels    = []string{labelLike, labelUnlike}
 	dislikeLabels = []string{labelDislike, labelUndislike}
 )
+
+// playPauseLabel says what pressing it will do, which is the convention every
+// other player follows: Pause while it is playing.
+func (m Model) playPauseLabel() string {
+	if m.playing.VideoID != "" && !m.Paused {
+		return steady(labelPause, playingLabels)
+	}
+	return steady(labelPlay, playingLabels)
+}
 
 // steady renders one of a set of labels at the width of the widest.
 func steady(label string, set []string) string {
@@ -101,21 +112,36 @@ type button struct {
 	start, end int // half-open columns
 }
 
-// A button is its label and nothing else: one row, no border around it, no
-// padding inside it. It went through a bordered box three rows tall and a
-// pair of rounded caps on the way here, and both were bigger than what they
-// were wrapping. A word with a fill under it is a button.
+// A button is its label with a space either side: one row, no border around
+// it. It went through a bordered box three rows tall and a pair of rounded
+// caps on the way here, and both were bigger than what they were wrapping. A
+// word with a fill under it is a button, and the fill wants a cell of air
+// before the first letter.
 //
-// The gap is two, which is the only separation there is now, and every cell
-// of a label answers to a click.
+// A cell is the narrowest space a terminal has. The thin spaces — U+2009 and
+// its neighbours — are a cell wide here too, and are in neither of the fonts
+// this is read in, so they would come from whatever fallback the terminal
+// picks and at whatever width it likes.
+//
+// Every cell of a button answers to a click, padding included.
 const (
-	buttonGap = 2
+	buttonPadding = 1
+	buttonGap     = 2
 	// controlsRows is how tall the row of them is.
 	controlsRows = 1
 )
 
-// buttonWidth is what one button occupies, which is its label and no more.
-func buttonWidth(label string) int { return lipgloss.Width(label) }
+// buttonWidth is what one button occupies: its label and the space either
+// side of it.
+func buttonWidth(label string) int {
+	return lipgloss.Width(label) + 2*buttonPadding
+}
+
+// padded is a label with its air, which the fill covers as well as the word.
+func padded(label string) string {
+	pad := strings.Repeat(" ", buttonPadding)
+	return pad + label + pad
+}
 
 var (
 	// Idle, a button is its label dimmed: there is nothing to press. Faint
@@ -134,9 +160,9 @@ var (
 // press and turned inside out when there is.
 func renderButton(label string, lit bool) string {
 	if lit {
-		return buttonLitStyle.Render(label)
+		return buttonLitStyle.Render(padded(label))
 	}
-	return buttonStyle.Render(label)
+	return buttonStyle.Render(padded(label))
 }
 
 // groupWidth is what a run of buttons occupies, gaps between them included.
@@ -164,7 +190,7 @@ func (m Model) controlButtons() []button {
 
 	leftGroup := []button{
 		{control: controlPrevious, label: labelPrevious, lit: playing},
-		{control: controlPlayPause, label: labelPlayPause, lit: playing},
+		{control: controlPlayPause, label: m.playPauseLabel(), lit: playing},
 		{control: controlNext, label: labelNext, lit: playing},
 	}
 	if width < groupWidth(leftGroup) {

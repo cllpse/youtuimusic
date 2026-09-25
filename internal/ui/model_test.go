@@ -1192,3 +1192,43 @@ func TestTheDimColourIsNotDrawnAsText(t *testing.T) {
 		t.Error("it stopped being a background too")
 	}
 }
+
+// The state block is as wide as the word in it. It was padded to the longest
+// of the five so that nothing moved as the state changed, and what that
+// bought was a block with a hole in it most of the time.
+func TestTheStateBlockIsAsWideAsItsWord(t *testing.T) {
+	m := sample()
+	m.Tracks = rows(4)
+
+	widths := map[string]int{}
+	for _, tc := range []struct {
+		name  string
+		setup func(Model) Model
+		want  string
+	}{
+		{"ready", func(m Model) Model { m.playing = Track{}; return m }, "READY"},
+		{"playing", func(m Model) Model { m.playing = m.Tracks[0]; return m }, "PLAYING"},
+		{"paused", func(m Model) Model {
+			m.playing, m.Paused = m.Tracks[0], true
+			return m
+		}, "PAUSED"},
+	} {
+		at := tc.setup(m)
+		row := plain(strings.Split(at.View().Content, "\n")[at.statusRow()])
+		if !strings.Contains(row, tc.want) {
+			t.Fatalf("%s: the block does not say %q: %q", tc.name, tc.want, row)
+		}
+		// The block runs from the start of the row to the end of its word
+		// plus its padding; what follows is the wide half.
+		end := strings.Index(row, tc.want) + len(tc.want) + 1
+		widths[tc.want] = end
+		if got := strings.TrimSpace(row[:end]); got != tc.want {
+			t.Errorf("%s: the block holds %q, want just the word", tc.name, got)
+		}
+	}
+
+	if widths["READY"] >= widths["PLAYING"] {
+		t.Errorf("READY takes %d and PLAYING %d; it is not sizing to the word",
+			widths["READY"], widths["PLAYING"])
+	}
+}

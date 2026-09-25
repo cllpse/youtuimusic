@@ -1345,29 +1345,13 @@ func (m Model) renderStatusBar() string {
 		style = statusAlertStyle
 	}
 
-	// Every word is padded to the longest of them, so the block keeps its
-	// width and what follows does not shuffle sideways as the state
-	// changes.
-	//
-	// On a narrow terminal the block gives way instead, rather than pushing
-	// the frame wider than the screen.
-	key = pad(key, min(widestStatusKey, max(m.width-2, 0)))
+	// The block is as wide as the word in it. It used to be padded to the
+	// longest of them so that nothing moved as the state changed, and what
+	// that bought was a block with a hole in it most of the time.
 	block := style.Render(truncate(key, max(m.width-2, 0)))
 	return block + fillRow(m.statusSegments(), m.statusBarStyle(),
 		max(m.width-lipgloss.Width(block), 0))
 }
-
-// statusKeys are every word the block can hold, and widestStatusKey is what
-// it is always sized to.
-var statusKeys = []string{"READY", "PLAYING", "PAUSED", "LOADING", "ERROR"}
-
-var widestStatusKey = func() int {
-	widest := 0
-	for _, key := range statusKeys {
-		widest = max(widest, lipgloss.Width(key))
-	}
-	return widest
-}()
 
 // statusKey is the word in the small block: what the app is doing, in the
 // order that matters. Trouble first, then a wait, then the player — and

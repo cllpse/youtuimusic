@@ -123,23 +123,37 @@ func colToByte(s string, col int) int {
 	return len(s)
 }
 
-// The label names the control and does not change with the state — it says
-// both things the button does, and the bar and the status block say which of
-// them is happening.
-func TestThePlayPauseLabelIsSteady(t *testing.T) {
+// The label says what pressing it will do, which is Pause while it plays.
+func TestThePlayPauseLabelFollowsTheState(t *testing.T) {
 	m, _, _, _ := playingModel(t)
-	for _, state := range []func(Model) Model{
-		func(m Model) Model { return m },
-		func(m Model) Model { m.Paused = true; return m },
-		func(m Model) Model { m.playing = Track{}; return m },
+	for _, tc := range []struct {
+		name  string
+		setup func(Model) Model
+		want  string
+	}{
+		{"playing", func(m Model) Model { return m }, labelPause},
+		{"paused", func(m Model) Model { m.Paused = true; return m }, labelPlay},
+		{"idle", func(m Model) Model { m.playing = Track{}; return m }, labelPlay},
 	} {
-		b, ok := buttonAt(state(m), controlPlayPause)
-		if !ok {
-			t.Fatal("the play button is missing")
-		}
-		if b.label != labelPlayPause {
-			t.Errorf("the label changed to %q", b.label)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			b, ok := buttonAt(tc.setup(m), controlPlayPause)
+			if !ok {
+				t.Fatal("the play button is missing")
+			}
+			if got := strings.TrimSpace(b.label); got != tc.want {
+				t.Errorf("it says %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// Both words are drawn at the same width, so the row does not shuffle
+	// when what is playing pauses.
+	playing, _ := buttonAt(m, controlPlayPause)
+	stopped := m
+	stopped.Paused = true
+	paused, _ := buttonAt(stopped, controlPlayPause)
+	if a, b := buttonWidth(playing.label), buttonWidth(paused.label); a != b {
+		t.Errorf("Pause is %d wide and Play %d", a, b)
 	}
 }
 
@@ -547,8 +561,12 @@ func TestButtonsFillWhenLive(t *testing.T) {
 	}
 	// Nothing wraps it: no border, no cap, no bracket. The gap between
 	// buttons is the only separation, so it has to actually be there.
-	if strings.Contains(row, labelPrevious+labelPlayPause) {
+	if strings.Contains(row, labelPrevious+" "+labelPause) {
 		t.Errorf("buttons are touching: %q", row)
+	}
+	// A cell of air either side of the label, inside the fill.
+	if !strings.Contains(row, " "+labelPrevious+" ") {
+		t.Errorf("the label has no padding: %q", row)
 	}
 
 	codes := sgrCodes(controlsLine(m))
@@ -589,7 +607,7 @@ func TestALitButtonIsFilled(t *testing.T) {
 // What is drawn has to be as wide and as tall as what is clicked, or a click
 // lands on the wrong button or on nothing.
 func TestAButtonIsAsWideAsItsHitbox(t *testing.T) {
-	for _, label := range []string{labelPrevious, labelPlayPause, labelRepeatOne} {
+	for _, label := range []string{labelPrevious, labelPause, labelRepeatOne} {
 		for _, lit := range []bool{false, true} {
 			lines := strings.Split(renderButton(label, lit), "\n")
 			if len(lines) != controlsRows {
@@ -602,9 +620,9 @@ func TestAButtonIsAsWideAsItsHitbox(t *testing.T) {
 						label, lit, i, got, buttonWidth(label))
 				}
 			}
-			// And it is the label itself, with nothing wrapped round it.
-			if got := plain(lines[0]); got != label {
-				t.Errorf("%q lit=%v draws %q", label, lit, got)
+			// And it is the label with its padding, and nothing else.
+			if got, want := plain(lines[0]), padded(label); got != want {
+				t.Errorf("%q lit=%v draws %q, want %q", label, lit, got, want)
 			}
 		}
 	}
