@@ -589,7 +589,7 @@ func TestTheScrollbarMarksThePlayingTrack(t *testing.T) {
 	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
 		playing: "v50"}
 
-	bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow())
+	bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow(), table.highlight)
 	if len(bar) != height {
 		t.Fatalf("the scrollbar is %d cells", len(bar))
 	}
@@ -626,7 +626,7 @@ func TestThePlayingMarkStaysOnTheTrough(t *testing.T) {
 	for _, at := range []int{0, 1, 18, 35, 36} {
 		table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
 			playing: fmt.Sprintf("v%d", at)}
-		bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow())
+		bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow(), table.highlight)
 		// Found by colour: the mark is a block wherever it lands.
 		found := -1
 		for i, cell := range bar {
@@ -652,7 +652,7 @@ func TestNoMarkForATrackThatIsNotInTheList(t *testing.T) {
 		if got := table.playingRow(); got != -1 {
 			t.Errorf("playing %q gave row %d", playing, got)
 		}
-		bar := scrollbarFor(table.rowCount(), table.offset, 10, table.playingRow())
+		bar := scrollbarFor(table.rowCount(), table.offset, 10, table.playingRow(), table.highlight)
 		for i, cell := range bar {
 			if sgrCodes(cell)["34"] {
 				t.Errorf("playing %q still marked row %d", playing, i)
@@ -681,7 +681,7 @@ func TestTheMarkAndTheThumbShareACell(t *testing.T) {
 	// top both the thumb and a mark for an early track are on row 0.
 	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
 		playing: "v0"}
-	bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow())
+	bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow(), table.highlight)
 
 	cell := bar[0]
 	if !strings.Contains(plain(cell), "█") {

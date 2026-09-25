@@ -117,7 +117,7 @@ func (t trackTable) layout(width int) layout {
 // above it without splitting a string apart again.
 func (t trackTable) rows() []string {
 	width := t.width
-	bar := scrollbarFor(t.rowCount(), t.offset, t.rowsHeight(), t.playingRow())
+	bar := scrollbarFor(t.rowCount(), t.offset, t.rowsHeight(), t.playingRow(), t.highlight)
 	if bar != nil {
 		width -= scrollbarWidth
 	}
@@ -309,7 +309,12 @@ func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string
 // progress bar.
 // scrollbarFor draws a trough and thumb for a list, with the playing track
 // marked in it. playingAt is that track's index, or -1 for none.
-func scrollbarFor(total, offset, height, playingAt int) []string {
+//
+// The bar is drawn in the row highlight, the same surface the selected row,
+// the status bar and the progress groove use. Shape carries the meaning here
+// — a block where the window is, a line where it is not — so the colour is
+// free to say only "furniture".
+func scrollbarFor(total, offset, height, playingAt int, highlight color.Color) []string {
 	if !needsScrollbar(total, height) {
 		return nil
 	}
@@ -330,15 +335,16 @@ func scrollbarFor(total, offset, height, playingAt int) []string {
 	// window is and colour says where the playing track is, so the two can
 	// share a cell — which they do the whole time the playing track is on
 	// screen — without either hiding the other.
+	furniture := lipgloss.NewStyle().Foreground(highlight)
 	out := make([]string, height)
 	for i := range out {
 		switch {
 		case i == mark:
 			out[i] = active.Render("█") + " "
 		case i >= start && i < start+thumb:
-			out[i] = dim.Render("█") + " "
+			out[i] = furniture.Render("█") + " "
 		default:
-			out[i] = dim.Render("│") + " "
+			out[i] = furniture.Render("│") + " "
 		}
 	}
 	return out

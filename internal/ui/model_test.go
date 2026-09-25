@@ -606,7 +606,7 @@ func TestTheScrollbarThumbFollowsTheWindow(t *testing.T) {
 	height := m.listHeight()
 
 	thumbTop := func(m Model) int {
-		for i, cell := range scrollbarFor(len(m.Tracks), m.trackOffset, height, -1) {
+		for i, cell := range scrollbarFor(len(m.Tracks), m.trackOffset, height, -1, m.highlightColor()) {
 			if strings.Contains(cell, "█") {
 				return i
 			}
@@ -1067,13 +1067,15 @@ func colorTriples(s string) []string {
 	return out
 }
 
-// The bar's groove, the wide half of the status bar and the selected row are
-// one surface. Whatever the highlight turns out to be, all three take it —
-// they were three separate colours once, and it looked like three things.
-func TestOneSurfaceForTheGrooveTheStatusBarAndTheSelection(t *testing.T) {
+// The bar's groove, the wide half of the status bar, the selected row and
+// the scrollbar are one surface. Whatever the highlight turns out to be, all
+// four take it — they were separate colours once, and it looked like it.
+func TestOneSurfaceForEveryQuietPartOfTheFrame(t *testing.T) {
 	m := sample()
 	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
 	m = next.(Model)
+	// Long enough to need a scrollbar, which is the fourth of the four.
+	m.Tracks = rows(100)
 	m.playing = m.Tracks[0]
 	m.Length, m.Position = time.Minute, 30*time.Second
 	m.trackCursor = 1 // not the playing row, so the fill is the only styling
@@ -1092,6 +1094,9 @@ func TestOneSurfaceForTheGrooveTheStatusBarAndTheSelection(t *testing.T) {
 		{"the bar's groove", m.barRow()},
 		{"the status bar", m.statusRow()},
 		{"the selected row", tabsHeight + headerRows + 1},
+		// A row that is neither selected nor playing: the only thing on it
+		// that can carry the colour is the scrollbar.
+		{"the scrollbar", tabsHeight + headerRows + 4},
 	} {
 		if got := colorTriples(lines[tc.row]); !slices.Contains(got, want) {
 			t.Errorf("%s does not use the highlight %s: %v", tc.what, want, got)
