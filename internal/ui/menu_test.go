@@ -876,3 +876,82 @@ func TestANamelessPageDoesNotRepeatItsKind(t *testing.T) {
 		t.Errorf("the kind is repeated: %q", header)
 	}
 }
+
+// An album usually opens from an artist, and two popovers of the same size
+// look like one that changed its mind rather than one on top of another.
+func TestAnAlbumSitsInsideAnArtist(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
+
+	artist := openVia(t, m, menuArtist)
+	ax, _, artistWidth, _ := artist.modalBounds()
+
+	next, cmd := artist.Update(keyPress("enter"))
+	album := drain(t, next.(Model), cmd)
+	if album.detour.tab.kind != tabAlbum {
+		t.Fatalf("the album did not open: %+v", album.detour.tab)
+	}
+	bx, _, albumWidth, _ := album.modalBounds()
+
+	if want := artistWidth - 2*albumInset; albumWidth != want {
+		t.Errorf("the album is %d wide, want %d", albumWidth, want)
+	}
+	// Inset on both sides, not just narrower on one.
+	if want := ax + albumInset; bx != want {
+		t.Errorf("the album starts at %d, want %d", bx, want)
+	}
+}
+
+// Every popover can be shut from the popover, against the right edge where a
+// window keeps it.
+func TestTheCloseButtonShutsThePopover(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+	m = openVia(t, m, menuArtist)
+
+	x, y, width, ok := m.modalCloseButton()
+	if !ok {
+		t.Fatal("the popover has no way out")
+	}
+	mx, _, mwidth, _ := m.modalBounds()
+	if want := mx + mwidth - modalChrome/2 - width; x != want {
+		t.Errorf("the close button is at column %d, want %d", x, want)
+	}
+
+	// Drawn on the header, to the right of what the popover is showing.
+	header := plain(strings.Split(m.renderModal(), "\n")[1])
+	if at := column(header, iconClose); at < 0 {
+		t.Fatalf("the close button is not drawn: %q", header)
+	} else if title := column(header, "DAPHNI"); at < title {
+		t.Errorf("the close button is left of the title: %q", header)
+	}
+
+	next, cmd := m.Update(click(x+1, y))
+	if drain(t, next.(Model), cmd).detour.active {
+		t.Error("clicking it did not shut the popover")
+	}
+}
+
+// From a stacked popover it shuts the lot, where the way back steps one.
+func TestTheCloseButtonShutsTheWholeStack(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
+	m = openVia(t, m, menuArtist)
+	next, cmd := m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+	if len(m.history) == 0 {
+		t.Fatal("nothing was stacked")
+	}
+
+	x, y, _, ok := m.modalCloseButton()
+	if !ok {
+		t.Fatal("the stacked popover has no way out")
+	}
+	next, cmd = m.Update(click(x+1, y))
+	shut := drain(t, next.(Model), cmd)
+	if shut.detour.active {
+		t.Error("the popover is still open")
+	}
+	if len(shut.history) != 0 {
+		t.Errorf("%d popovers are still stacked behind it", len(shut.history))
+	}
+}

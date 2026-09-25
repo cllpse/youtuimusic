@@ -14,18 +14,28 @@ const (
 	modalMarginY = 1
 	modalChrome  = 4 // border and padding, both sides
 	modalHeader  = 2 // the title, and the blank line under it
+	// albumInset sits an album a little inside an artist, which is what it
+	// usually opened from: two popovers of the same size look like one that
+	// changed its mind, and this says the first is still behind.
+	albumInset = 2
 )
 
-// The way back is the same inside-out fill the transport's buttons use when
-// they are live, but flat: the header is one row, and a box with corners on
-// it needs three.
+// iconClose is the way out of a popover: the times sign, which every font
+// has and nobody has to learn.
+const iconClose = "×"
+
+// The way back and the way out are the same inside-out fill the transport's
+// buttons use when they are live.
 var modalBackStyle = lipgloss.NewStyle().
 	Background(emphasis).
 	Foreground(background).
 	Bold(true)
 
-// modalBackWidth is the icon with a cell either side, all of it clickable.
-const modalBackWidth = 3
+// Each is its character with a cell either side, all of it clickable.
+const (
+	modalBackWidth  = 3
+	modalCloseWidth = 3
+)
 
 var modalBox = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
@@ -37,7 +47,11 @@ var modalBox = lipgloss.NewStyle().
 // transport would mean the thing playing could not be paused.
 func (m Model) modalBounds() (x, y, width, height int) {
 	available := m.bodyHeight()
-	width = min(max(m.width-2*modalMarginX, 24), m.width)
+	inset := 0
+	if m.detour.tab.kind == tabAlbum {
+		inset = albumInset
+	}
+	width = min(max(m.width-2*modalMarginX-2*inset, 24), m.width)
 	height = min(max(available-2*modalMarginY, 4), available)
 	return (m.width - width) / 2, tabsHeight + (available-height)/2, width, height
 }
@@ -108,14 +122,20 @@ func (m Model) modalHeader(inner int) string {
 			back = modalBackStyle.Render(" " + iconBack + " ")
 			taken = modalBackWidth
 		}
+		// And the way out stays against the right, which is where a window
+		// keeps it.
+		close := modalBackStyle.Render(" " + iconClose + " ")
+		right := modalCloseWidth
+
 		prefix := m.modalIcon() + menuGap + m.modalKind() + menuGap
-		room := max(inner-taken-lipgloss.Width(prefix), 0)
+		room := max(inner-taken-right-lipgloss.Width(prefix), 0)
 		title := active.Render(prefix) + truncate(m.detour.tab.Title, room)
 
 		width := lipgloss.Width(title)
-		start := max((inner-width)/2, taken)
+		// Centred on the whole row, but never under either button.
+		start := min(max((inner-width)/2, taken), max(inner-right-width, taken))
 		return back + strings.Repeat(" ", start-taken) + title +
-			strings.Repeat(" ", max(inner-start-width, 0))
+			strings.Repeat(" ", max(inner-right-start-width, 0)) + close
 	}
 	query := m.detour.query
 	if m.detour.typing {
@@ -200,6 +220,16 @@ func (m Model) renderModal() string {
 		loader:      m.loader(),
 	}.rows()...)
 	return modalBox.Render(strings.Join(lines, "\n"))
+}
+
+// modalCloseButton is where the way out sits. Every popover has one.
+func (m Model) modalCloseButton() (x, y, width int, ok bool) {
+	if !m.detour.active || m.detour.tab.kind == tabSearch {
+		return 0, 0, 0, false
+	}
+	mx, my, mwidth, _ := m.modalBounds()
+	// Against the inside of the right border, on the header line.
+	return mx + mwidth - modalChrome/2 - modalCloseWidth, my + 1, modalCloseWidth, true
 }
 
 // modalBackButton is where the way back sits, when there is one.
@@ -331,6 +361,10 @@ func (m Model) clickModal(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 			return m.handleClick(mouse)
 		}
 		// Clicking anywhere else dismisses the lot; esc is what steps back.
+		return m.closeDetour()
+	}
+	if x, y, width, ok := m.modalCloseButton(); ok &&
+		mouse.Y == y && mouse.X >= x && mouse.X < x+width {
 		return m.closeDetour()
 	}
 	if x, y, width, ok := m.modalBackButton(); ok &&

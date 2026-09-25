@@ -489,8 +489,9 @@ func TestRatingWhileOnLikedMusicReloadsIt(t *testing.T) {
 	m.playing = m.Tracks[25]
 
 	requests := len(lib.askedFor)
-	b, _ := buttonAt(m, controlThumbUp)
-	next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+	// Rated through the control rather than by clicking it: the liked
+	// playlist does not carry the thumbs, since every row there is liked.
+	next, cmd := m.press(controlThumbUp)
 	m = drain(t, next.(Model), cmd)
 
 	if len(lib.askedFor) != requests+1 {
@@ -666,9 +667,9 @@ func TestUnlikingRemovesTheRowFromLikedMusic(t *testing.T) {
 	before := len(m.Tracks)
 	m.playing = m.Tracks[0]
 
-	// Unlike the playing track from the controls.
-	b, _ := buttonAt(m, controlThumbUp)
-	next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+	// Rated through the control rather than by clicking it: the liked
+	// playlist does not carry the thumbs, since every row there is liked.
+	next, cmd := m.press(controlThumbUp)
 	m = drain(t, next.(Model), cmd)
 
 	if len(m.Tracks) != before-1 {
@@ -701,11 +702,67 @@ func TestLikingWhileOnLikedMusicRefetches(t *testing.T) {
 	m.playing = m.Tracks[0]
 
 	asked := len(lib.askedFor)
-	b, _ := buttonAt(m, controlThumbUp)
-	next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+	// Rated through the control rather than by clicking it: the liked
+	// playlist does not carry the thumbs, since every row there is liked.
+	next, cmd := m.press(controlThumbUp)
 	m = drain(t, next.(Model), cmd)
 
 	if len(lib.askedFor) != asked+1 {
 		t.Errorf("asked for %v; want one more fetch", lib.askedFor)
+	}
+}
+
+// Every row on the liked playlist is liked, so a button offering to like one
+// says nothing. Everywhere else it has something to say.
+func TestTheLikedPlaylistHasNoThumbs(t *testing.T) {
+	m, _, _, _ := playingModel(t)
+
+	for _, c := range []control{controlThumbUp, controlThumbDown} {
+		if _, ok := buttonAt(m, c); !ok {
+			t.Fatalf("%v is missing from an ordinary playlist", c)
+		}
+	}
+
+	m.showingID = likedPlaylistID
+	for _, c := range []control{controlThumbUp, controlThumbDown} {
+		if _, ok := buttonAt(m, c); ok {
+			t.Errorf("%v is still offered on the liked playlist", c)
+		}
+	}
+	// The transport is untouched, and the row still fills its width.
+	for _, c := range []control{controlPrevious, controlPlayPause, controlNext, controlRepeat} {
+		if _, ok := buttonAt(m, c); !ok {
+			t.Errorf("%v went with them", c)
+		}
+	}
+	if got := lipgloss.Width(plain(controlsLine(m))); got != m.width {
+		t.Errorf("the row is %d cells, want %d", got, m.width)
+	}
+}
+
+// The row doubles as its own help, so every button says which key works it.
+func TestEveryButtonNamesItsKey(t *testing.T) {
+	m, _, _, _ := playingModel(t)
+	want := map[control]string{
+		controlPrevious:  "(p)",
+		controlPlayPause: "(space)",
+		controlNext:      "(n)",
+		controlThumbUp:   "(+)",
+		controlThumbDown: "(-)",
+		controlRepeat:    "(r)",
+	}
+	for _, b := range m.controlButtons() {
+		key, ok := want[b.control]
+		if !ok {
+			t.Errorf("%v is not in the table", b.control)
+			continue
+		}
+		if !strings.Contains(b.label, key) {
+			t.Errorf("%v says %q, want it to name %s", b.control, b.label, key)
+		}
+		delete(want, b.control)
+	}
+	for c := range want {
+		t.Errorf("%v was not on the row", c)
 	}
 }

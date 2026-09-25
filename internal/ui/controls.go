@@ -19,15 +19,18 @@ const (
 
 // The transport is labelled rather than pictured. An icon has to be learned;
 // a word does not, and there is room for words here.
+// Each carries the key that works it, so the row doubles as the help for
+// itself. Space is spelled out; a single blank in brackets would read as a
+// typo.
 const (
-	labelPrevious  = "Previous"
-	labelPlayPause = "Play/Pause"
-	labelNext      = "Next"
-	labelLike      = "Like"
-	labelDislike   = "Dislike"
-	labelRepeatOff = "Repeat off"
-	labelRepeatOn  = "Repeat on"
-	labelRepeatOne = "Repeat one"
+	labelPrevious  = "Previous (p)"
+	labelPlayPause = "Play/Pause (space)"
+	labelNext      = "Next (n)"
+	labelLike      = "Like (+)"
+	labelDislike   = "Dislike (-)"
+	labelRepeatOff = "Repeat off (r)"
+	labelRepeatOn  = "Repeat on (r)"
+	labelRepeatOne = "Repeat one (r)"
 )
 
 // repeatLabels are what the one repeat button says, and every one of them is
@@ -158,11 +161,16 @@ func (m Model) controlButtons() []button {
 	if width < groupWidth(leftGroup) {
 		return nil
 	}
-	centre := []button{
-		{control: controlThumbUp, label: labelLike,
-			lit: playing && m.playing.Rating == RatingUp},
-		{control: controlThumbDown, label: labelDislike,
-			lit: playing && m.playing.Rating == RatingDown},
+	// On the liked playlist every row is liked, so a button offering to like
+	// one says nothing. The same reasoning drops the column there.
+	var centre []button
+	if m.showsRating() {
+		centre = []button{
+			{control: controlThumbUp, label: labelLike,
+				lit: playing && m.playing.Rating == RatingUp},
+			{control: controlThumbDown, label: labelDislike,
+				lit: playing && m.playing.Rating == RatingDown},
+		}
 	}
 	repeatGroup := []button{
 		{control: controlRepeat, label: m.repeat.label(), lit: m.repeat != RepeatOff},
