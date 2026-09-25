@@ -300,14 +300,6 @@ func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string
 // scrollbarFor draws a trough and thumb for a list. The thumb is the same
 // grey as the trough: the glyphs carry the difference, as they do on the
 // progress bar.
-// playingMark says where in the whole list the playing track is, which the
-// list itself can only say about the part of it on screen.
-//
-// A dot and not a block: the thumb is a block already, and the mark has to
-// stay legible where the two land on the same cell. Both fonts here carry
-// U+25CF, which is more than can be said for most of the geometric shapes.
-const playingMark = "●"
-
 // scrollbarFor draws a trough and thumb for a list, with the playing track
 // marked in it. playingAt is that track's index, or -1 for none.
 func scrollbarFor(total, offset, height, playingAt int) []string {
@@ -327,20 +319,16 @@ func scrollbarFor(total, offset, height, playingAt int) []string {
 		mark = min(playingAt*height/total, height-1)
 	}
 
+	// The mark is the trough's own block, highlighted. Shape says where the
+	// window is and colour says where the playing track is, so the two can
+	// share a cell — which they do the whole time the playing track is on
+	// screen — without either hiding the other.
 	out := make([]string, height)
 	for i := range out {
-		onThumb := i >= start && i < start+thumb
 		switch {
-		case i == mark && onThumb:
-			// Both at once, which is the ordinary case while the playing
-			// track is on screen. The block stays, so the thumb does not
-			// disappear behind the mark — a long list moves its thumb by
-			// less than a cell per row, and a one-cell thumb would be
-			// swallowed whole. The colour carries the mark instead.
-			out[i] = active.Render("█") + " "
 		case i == mark:
-			out[i] = active.Render(playingMark) + " "
-		case onThumb:
+			out[i] = active.Render("█") + " "
+		case i >= start && i < start+thumb:
 			out[i] = dim.Render("█") + " "
 		default:
 			out[i] = dim.Render("│") + " "

@@ -594,9 +594,10 @@ func TestTheScrollbarMarksThePlayingTrack(t *testing.T) {
 		t.Fatalf("the scrollbar is %d cells", len(bar))
 	}
 
+	// The mark is a block like the thumb, so it is the colour that finds it.
 	at := -1
 	for i, cell := range bar {
-		if strings.Contains(plain(cell), playingMark) {
+		if sgrCodes(cell)["34"] {
 			if at >= 0 {
 				t.Errorf("the mark is on rows %d and %d", at, i)
 			}
@@ -610,10 +611,8 @@ func TestTheScrollbarMarksThePlayingTrack(t *testing.T) {
 	if want := 5; at != want {
 		t.Errorf("the mark is at %d, want %d", at, want)
 	}
-	// And it is the accent, so it reads as the playing track and not as
-	// another piece of furniture.
-	if codes := sgrCodes(bar[at]); !codes["34"] {
-		t.Errorf("the mark is not the accent: %v", codes)
+	if got := plain(bar[at]); !strings.Contains(got, "█") {
+		t.Errorf("the mark is not a block: %q", got)
 	}
 }
 
@@ -628,8 +627,7 @@ func TestThePlayingMarkStaysOnTheTrough(t *testing.T) {
 		table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
 			playing: fmt.Sprintf("v%d", at)}
 		bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow())
-		// Found by colour, not by glyph: on the thumb the mark is the
-		// block, off it the dot.
+		// Found by colour: the mark is a block wherever it lands.
 		found := -1
 		for i, cell := range bar {
 			if sgrCodes(cell)["34"] {
@@ -656,7 +654,7 @@ func TestNoMarkForATrackThatIsNotInTheList(t *testing.T) {
 		}
 		bar := scrollbarFor(table.rowCount(), table.offset, 10, table.playingRow())
 		for i, cell := range bar {
-			if strings.Contains(plain(cell), playingMark) {
+			if sgrCodes(cell)["34"] {
 				t.Errorf("playing %q still marked row %d", playing, i)
 			}
 		}
@@ -687,7 +685,7 @@ func TestTheMarkAndTheThumbShareACell(t *testing.T) {
 
 	cell := bar[0]
 	if !strings.Contains(plain(cell), "█") {
-		t.Errorf("the thumb was swallowed by the mark: %q", plain(cell))
+		t.Errorf("the thumb lost its shape: %q", plain(cell))
 	}
 	if codes := sgrCodes(cell); !codes["34"] {
 		t.Errorf("the shared cell does not say the track is there: %v", codes)
