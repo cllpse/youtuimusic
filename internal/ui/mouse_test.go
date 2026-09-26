@@ -560,9 +560,16 @@ func TestTheBarDoesNotMoveAsTheTimesChange(t *testing.T) {
 			t.Errorf("the bar starts at %d, want %d", got, barTimeWidth+1)
 		}
 	}
-	// Idle, the room is kept and left empty.
-	if got := strings.TrimSpace(idle[:barTimeWidth]); got != "" {
-		t.Errorf("idle shows a time: %q", got)
+	// Idle, the room is kept and reads as a bar that has not started: a zero
+	// where the position goes and an ellipsis where a length would be.
+	if got := idle[:barTimeWidth]; got != labelIdlePosition {
+		t.Errorf("idle starts at %q, want %q", got, labelIdlePosition)
+	}
+	if !strings.HasSuffix(idle, labelIdleLength) {
+		t.Errorf("idle does not end in an ellipsis: %q", idle)
+	}
+	if strings.Contains(idle, ":00 ▌") {
+		t.Errorf("idle drew a filled bar: %q", idle)
 	}
 }
 

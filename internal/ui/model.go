@@ -1688,6 +1688,16 @@ const barTimeWidth = 5
 // was hinting at is not one.
 const barLeastWidth = 8
 
+// Idle, the bar runs from nought to nothing in particular: a zero where the
+// position goes, because that is where it would start, and an ellipsis where
+// the length would be, because there is no track to have one. Two empty
+// fields said the same thing by saying nothing, which reads as a bar that
+// has not finished drawing.
+const (
+	labelIdlePosition = "00:00"
+	labelIdleLength   = "…"
+)
+
 // barShowsTimes reports whether there is room for them.
 func (m Model) barShowsTimes() bool {
 	return m.contentWidth() >= 2*(barTimeWidth+1)+barLeastWidth
@@ -1714,7 +1724,7 @@ func (m Model) renderBar() string {
 	if !m.barShowsTimes() {
 		return bar.ViewAs(m.fraction())
 	}
-	at, runs := "", ""
+	at, runs := labelIdlePosition, labelIdleLength
 	if m.Length > 0 {
 		at, runs = formatDuration(m.Position), formatDuration(m.Length)
 	}
