@@ -32,9 +32,10 @@ const (
 const labelTypeToSearch = "Type to search…"
 
 // labelClose closes the popover it is drawn on, stepping back to whatever was
-// behind it. It is named for the key that does the same thing, which is more
-// use than a times sign: one of them says how to do it without the mouse.
-const labelClose = "esc"
+// behind it. It says what it does and then names the key that does the same
+// thing, the way the transport's buttons do — more use than a times sign,
+// which says neither.
+const labelClose = "Close (esc)"
 
 // The way out is a button like the transport's, through the same component.
 var modalCloseWidth = buttonWidth(labelClose)

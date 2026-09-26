@@ -167,38 +167,49 @@ func (m Model) controlButtons() []button {
 	// The thumbs follow the track. Pressing like on a track that already
 	// carries it takes it off, so that label says which of the two it will
 	// do; dislike has no second word to say it with.
-	liked := m.playing.Rating == RatingUp
-	like := labelLike
-	if liked {
-		like = labelUnlike
-	}
-	// A rating with nothing to rate cannot be pressed; one the track already
-	// carries is on.
-	rating := func(on bool) buttonState {
-		switch {
-		case !playing:
-			return buttonDisabled
-		case on:
-			return buttonActive
+	//
+	// The liked playlist has neither, on the same grounds the table drops the
+	// mark there: every row in it is liked, so one button would only ever read
+	// Unlike and the other would only ever take a row off the page. Rating a
+	// track there is still the keys and the row menu, which is where it
+	// belongs when it is the row being rated rather than the player.
+	var rightGroup []button
+	if m.showsRating() {
+		liked := m.playing.Rating == RatingUp
+		like := labelLike
+		if liked {
+			like = labelUnlike
 		}
-		return buttonDefault
-	}
-	rightGroup := []button{
-		{control: controlThumbUp, label: steady(like, likeLabels),
-			state: rating(liked)},
-		{control: controlThumbDown, label: labelDislike,
-			state: rating(m.playing.Rating == RatingDown)},
+		// A rating with nothing to rate cannot be pressed; one the track
+		// already carries is on.
+		rating := func(on bool) buttonState {
+			switch {
+			case !playing:
+				return buttonDisabled
+			case on:
+				return buttonActive
+			}
+			return buttonDefault
+		}
+		rightGroup = []button{
+			{control: controlThumbUp, label: steady(like, likeLabels),
+				state: rating(liked)},
+			{control: controlThumbDown, label: labelDislike,
+				state: rating(m.playing.Rating == RatingDown)},
+		}
 	}
 
 	at := lay(leftGroup, contentLeft)
 
 	// The ratings go against the right, and give way to the transport rather
 	// than overlapping it.
-	rightStart := right - groupWidth(rightGroup)
-	if rightStart < at+buttonGap {
-		rightGroup = nil
-	} else {
-		lay(rightGroup, rightStart)
+	if len(rightGroup) > 0 {
+		rightStart := right - groupWidth(rightGroup)
+		if rightStart < at+buttonGap {
+			rightGroup = nil
+		} else {
+			lay(rightGroup, rightStart)
+		}
 	}
 
 	return append(leftGroup, rightGroup...)

@@ -725,21 +725,33 @@ func TestTheThumbsFollowTheTrack(t *testing.T) {
 	}
 }
 
-// They are offered on the liked playlist too, where what they say is Unlike.
-func TestTheLikedPlaylistStillOffersTheThumbs(t *testing.T) {
-	m, _, _, _ := playingModel(t)
+// The liked playlist offers neither, the way its table carries no mark: every
+// row there is liked, so one button would only ever read Unlike and the other
+// would only ever take the row off the page.
+func TestTheLikedPlaylistDropsTheThumbs(t *testing.T) {
+	m, lib, _, _ := playingModel(t)
 	m.showingID = likedPlaylistID
 	m.playing.Rating = RatingUp
 
-	b, ok := buttonAt(m, controlThumbUp)
-	if !ok {
-		t.Fatal("the liked playlist has no thumb")
+	for _, c := range []control{controlThumbUp, controlThumbDown} {
+		if b, ok := buttonAt(m, c); ok {
+			t.Errorf("the liked playlist still draws %q", strings.TrimSpace(b.label))
+		}
 	}
-	if got := strings.TrimSpace(b.label); got != labelUnlike {
-		t.Errorf("it says %q, want %q", got, labelUnlike)
+	// The transport stays, and the row is still the whole width.
+	if _, ok := buttonAt(m, controlPlayPause); !ok {
+		t.Error("the transport went with them")
 	}
 	if got := lipgloss.Width(plain(controlsLine(m))); got != m.width {
 		t.Errorf("the row is %d cells, want %d", got, m.width)
+	}
+
+	// Only the buttons are gone: rating is still a key away, and the row menu
+	// still offers it.
+	next, cmd := m.Update(keyPress("+"))
+	drain(t, next.(Model), cmd)
+	if len(lib.rated) != 1 {
+		t.Errorf("rated %+v, want the + key to still work there", lib.rated)
 	}
 }
 
