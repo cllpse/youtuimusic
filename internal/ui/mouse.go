@@ -52,7 +52,7 @@ func (m Model) hit(x, y int) (region, int) {
 		}
 		return regionTracks, row
 
-	case y == m.barRow():
+	case y >= m.barRow() && y < m.barRow()+barRows:
 		return regionBar, x
 
 	case y >= m.controlsRow() && y < m.controlsRow()+controlsRows:

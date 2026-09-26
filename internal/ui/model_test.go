@@ -478,24 +478,25 @@ const highlightSGR = "100"
 // being a shade of its background.
 const faintSGR = "2"
 
-// The player is six rows and no frame: a rule under the list, a blank, the
-// buttons, a blank, the bar, a blank. Nothing boxes it in, and every row runs
-// edge to edge the way the list and the tabs above it do.
-func TestThePlayerIsSixUnboxedRows(t *testing.T) {
+// The player is a rule under the list, the buttons, a blank, the bar over
+// two rows, a blank — and no frame. Every row runs edge to edge the way the
+// list and the tabs above it do.
+func TestThePlayerIsUnboxedRows(t *testing.T) {
 	m := sample()
 	lines := strings.Split(m.View().Content, "\n")
 	if len(lines) != 20 {
 		t.Fatalf("view is %d lines, want 20", len(lines))
 	}
-	if playerRows != 6 {
-		t.Fatalf("playerRows is %d", playerRows)
-	}
-
 	top := m.playerTop()
 	if got, want := plain(lines[top]), strings.Repeat("─", m.width); got != want {
 		t.Errorf("the player does not start on a rule: %q", got)
 	}
-	for _, row := range []int{top + 1, top + 3, top + 5} {
+	// The buttons sit directly under the rule, with no blank between them.
+	if m.controlsRow() != top+1 {
+		t.Errorf("the buttons are on row %d, want %d", m.controlsRow(), top+1)
+	}
+	// A blank before the bar and one after it, and nothing else blank.
+	for _, row := range []int{m.barRow() - 1, m.barRow() + barRows} {
 		if got := strings.TrimSpace(plain(lines[row])); got != "" {
 			t.Errorf("row %d should be blank: %q", row, got)
 		}
@@ -503,8 +504,14 @@ func TestThePlayerIsSixUnboxedRows(t *testing.T) {
 	if !strings.Contains(plain(lines[m.controlsRow()]), labelPrevious) {
 		t.Errorf("the buttons are not on row %d: %q", m.controlsRow(), plain(lines[m.controlsRow()]))
 	}
-	if !strings.ContainsAny(plain(lines[m.barRow()]), "▌"+string(emptyCell)) {
-		t.Errorf("the bar is not on row %d: %q", m.barRow(), plain(lines[m.barRow()]))
+	// The bar is barRows tall, the same row stacked.
+	for row := m.barRow(); row < m.barRow()+barRows; row++ {
+		if !strings.ContainsAny(plain(lines[row]), "▌"+string(emptyCell)) {
+			t.Errorf("the bar is not on row %d: %q", row, plain(lines[row]))
+		}
+		if plain(lines[row]) != plain(lines[m.barRow()]) {
+			t.Errorf("bar row %d differs from the first", row)
+		}
 	}
 	// The buttons come before the bar, which is the way round it reads.
 	if m.controlsRow() >= m.barRow() {

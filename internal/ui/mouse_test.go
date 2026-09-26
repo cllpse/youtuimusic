@@ -407,14 +407,22 @@ func TestHitTestingMatchesTheRenderedFrame(t *testing.T) {
 	// row: nothing flanks it.
 	const barChars = string(progress.DefaultFullCharHalfBlock) +
 		string(emptyCell)
-	if !strings.ContainsAny(lines[m.barRow()], barChars) {
-		t.Fatalf("row %d is %q, which has no bar on it", m.barRow(), lines[m.barRow()])
-	}
-	if got := lipgloss.Width(lines[m.barRow()]); got != m.width {
-		t.Errorf("the bar row is %d cells wide, want the full %d", got, m.width)
+	// The bar is barRows tall, and every one of them is the same row: the
+	// component draws one and a copy of it is stacked.
+	onBar := func(row int) bool { return row >= m.barRow() && row < m.barRow()+barRows }
+	for row := m.barRow(); row < m.barRow()+barRows; row++ {
+		if !strings.ContainsAny(lines[row], barChars) {
+			t.Fatalf("row %d is %q, which has no bar on it", row, lines[row])
+		}
+		if got := lipgloss.Width(lines[row]); got != m.width {
+			t.Errorf("bar row %d is %d cells wide, want the full %d", row, got, m.width)
+		}
+		if lines[row] != lines[m.barRow()] {
+			t.Errorf("bar row %d differs from the first: %q", row, lines[row])
+		}
 	}
 	for row, line := range lines {
-		if row != m.barRow() && strings.ContainsAny(line, barChars) {
+		if !onBar(row) && strings.ContainsAny(line, barChars) {
 			t.Errorf("row %d also looks like a bar: %q", row, line)
 		}
 	}
@@ -608,4 +616,29 @@ func anyCode(s string, codes []string) bool {
 		}
 	}
 	return false
+}
+
+// Both rows of the bar scrub. A bar two rows tall that only answered on one
+// of them would be a bar that ignored half the clicks on it.
+func TestEveryRowOfTheBarScrubs(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	m.Length, m.Position = 100*time.Second, 0
+
+	start, width := m.barGeometry()
+	at := start + width/2
+	for row := m.barRow(); row < m.barRow()+barRows; row++ {
+		where, x := m.hit(at, row)
+		if where != regionBar {
+			t.Errorf("row %d of the bar answered %v, want the bar", row, where)
+		}
+		if x != at {
+			t.Errorf("row %d reported column %d, want %d", row, x, at)
+		}
+	}
+	// The row above and the row below are not the bar.
+	for _, row := range []int{m.barRow() - 1, m.barRow() + barRows} {
+		if where, _ := m.hit(at, row); where == regionBar {
+			t.Errorf("row %d answers as the bar", row)
+		}
+	}
 }

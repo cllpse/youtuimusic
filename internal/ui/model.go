@@ -1156,9 +1156,9 @@ func (m Model) quietTab() lipgloss.Style {
 
 const (
 	tabsHeight = 3 // border, label, border
-	// playerRows is the rule, a blank, the buttons, a blank, the bar and a
-	// blank. The title that used to sit up here is the status bar's now.
-	playerRows = 5 + controlsRows
+	// playerRows is the rule, the buttons, a blank, the bar and a blank. The
+	// title that used to sit up here is the status bar's now.
+	playerRows = 3 + controlsRows + barRows
 	statusRows = 1
 	// progressRows is everything below the list.
 	progressRows = playerRows + statusRows
@@ -1189,16 +1189,16 @@ func (m Model) bodyHeight() int {
 // counted from there.
 func (m Model) playerTop() int { return tabsHeight + m.bodyHeight() }
 
-// barRow is the line the progress bar is drawn on: the rule, a blank, the
-// buttons, a blank, and then the bar.
-func (m Model) barRow() int { return m.playerTop() + 3 + controlsRows }
+// barRow is the first line the progress bar is drawn on: the rule, the
+// buttons, a blank, and then the bar. It is barRows tall from there.
+func (m Model) barRow() int { return m.playerTop() + 2 + controlsRows }
 
 // statusRow is the bar under the player.
 func (m Model) statusRow() int { return tabsHeight + m.bodyHeight() + playerRows }
 
-// controlsRow is the first line of the buttons, a blank line below the rule.
+// controlsRow is the first line of the buttons, directly under the rule.
 // They are controlsRows tall from there.
-func (m Model) controlsRow() int { return m.playerTop() + 2 }
+func (m Model) controlsRow() int { return m.playerTop() + 1 }
 
 // barGeometry is the column the progress bar starts at and how wide it is.
 // Rendering and hit-testing both go through this, so a click lands where the
@@ -1619,7 +1619,6 @@ func (m Model) renderPlayer() string {
 	blank := strings.Repeat(" ", max(m.width, 0))
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.separator(),
-		blank,
 		m.renderControls(),
 		blank,
 		m.renderBar(),
@@ -1674,6 +1673,12 @@ func newBar(fill progress.ColorFunc) progress.Model {
 	return bar
 }
 
+// barRows is how tall the bar is drawn. The component draws one row, and a
+// row of it is the same row however many times it is asked for — ViewAs is a
+// function of the fraction and the width and nothing else — so a taller bar
+// is that row stacked, with no bar of our own anywhere in it.
+const barRows = 2
+
 // renderBar draws the position, greyed out while playback is paused.
 //
 // The groove takes the row highlight, so the bar sits on the same surface
@@ -1687,7 +1692,13 @@ func (m Model) renderBar() string {
 		bar = m.pausedBar
 	}
 	bar.EmptyColor = m.highlightColor()
-	return bar.ViewAs(m.fraction())
+
+	row := bar.ViewAs(m.fraction())
+	rows := make([]string, barRows)
+	for i := range rows {
+		rows[i] = row
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
 // truncate cuts a string to fit a number of screen cells, ending it with an
