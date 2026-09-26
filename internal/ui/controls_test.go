@@ -354,10 +354,13 @@ func TestControlsHitTestingCoversEveryColumn(t *testing.T) {
 			t.Errorf("the gap at column %d answered %v, %d", x, where, n)
 		}
 	}
-	// The border columns are not buttons either.
-	for _, x := range []int{0, m.width - 1} {
-		if where, _ := m.hit(x, m.controlsRow()); where != regionNone {
-			t.Errorf("column %d is on the border but answered %v", x, where)
+	// Past the last button is not a button either. There is no border to
+	// test any more: the row runs edge to edge, and the first button starts
+	// at the first column.
+	last, _ := buttonAt(m, controlThumbDown)
+	if last.end < m.width {
+		if where, _ := m.hit(m.width-1, m.controlsRow()); where != regionNone {
+			t.Errorf("the last column answered %v", where)
 		}
 	}
 }

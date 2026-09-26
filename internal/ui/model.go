@@ -1156,9 +1156,9 @@ func (m Model) quietTab() lipgloss.Style {
 
 const (
 	tabsHeight = 3 // border, label, border
-	// playerRows is the box: border, bar, blank, the buttons, border. The
-	// title that used to sit in it is the status bar's now.
-	playerRows = 4 + controlsRows
+	// playerRows is the rule, a blank, the buttons, a blank, the bar and a
+	// blank. The title that used to sit up here is the status bar's now.
+	playerRows = 5 + controlsRows
 	statusRows = 1
 	// progressRows is everything below the list.
 	progressRows = playerRows + statusRows
@@ -1185,16 +1185,20 @@ func (m Model) bodyHeight() int {
 	return 1
 }
 
-// barRow is the line the progress bar is drawn on: past the list and the
-// box's own border.
-func (m Model) barRow() int { return tabsHeight + m.bodyHeight() + 1 }
+// playerTop is the rule the player starts with, and everything in it is
+// counted from there.
+func (m Model) playerTop() int { return tabsHeight + m.bodyHeight() }
+
+// barRow is the line the progress bar is drawn on: the rule, a blank, the
+// buttons, a blank, and then the bar.
+func (m Model) barRow() int { return m.playerTop() + 3 + controlsRows }
 
 // statusRow is the bar under the player.
 func (m Model) statusRow() int { return tabsHeight + m.bodyHeight() + playerRows }
 
-// controlsRow is the first line of the buttons, a blank line below the bar.
+// controlsRow is the first line of the buttons, a blank line below the rule.
 // They are controlsRows tall from there.
-func (m Model) controlsRow() int { return m.barRow() + 2 }
+func (m Model) controlsRow() int { return m.playerTop() + 2 }
 
 // barGeometry is the column the progress bar starts at and how wide it is.
 // Rendering and hit-testing both go through this, so a click lands where the
@@ -1519,22 +1523,19 @@ func fillRow(segments []statusSegment, fill lipgloss.Style, width int) string {
 // playerBox is the frame around the bar and the controls. Its border
 // replaces the blank lines that used to separate them from the list, so it
 // costs no height.
-// Its border is the foreground and not the dim colour: lipgloss draws a
-// border as a colour and cannot draw one faint, and the dim colour is too
-// close to a light page to be a line at all.
-var playerBox = lipgloss.NewStyle().
-	Border(lipgloss.RoundedBorder()).
-	BorderForeground(foreground).
-	Padding(0, playerPadding)
+// separator divides the list from the player. A line is enough to say where
+// one ends and the other begins, and it costs the row a box cost four sides
+// of. It takes the dimmed colour and not the quiet one: the player stays live
+// with a popover in front of it, so the line above it does too.
+func (m Model) separator() string {
+	return lipgloss.NewStyle().Foreground(m.dimmedColor()).
+		Render(strings.Repeat("─", max(m.width, 0)))
+}
 
-const (
-	playerBorder  = 1
-	playerPadding = 1
-	// contentLeft is the first column inside the box, and contentWidth what
-	// is left of the row once both sides are taken. The bar and the buttons
-	// are laid out from it, and the border and padding put it there.
-	contentLeft = playerBorder + playerPadding
-)
+// contentLeft is the column the bar and the buttons are laid out from, and
+// contentWidth how much of the row they have. Both run edge to edge, the way
+// the list and the tabs above them do — there is no frame left to sit inside.
+const contentLeft = 0
 
 func (m Model) contentWidth() int { return max(0, m.width-2*contentLeft) }
 
@@ -1615,14 +1616,15 @@ func (m Model) quietColor() color.Color {
 }
 
 func (m Model) renderPlayer() string {
-	// One blank line, under the bar, so it is not wedged against the
-	// buttons. Above it the box's own border is separation enough.
-	inner := lipgloss.JoinVertical(lipgloss.Left,
-		m.renderBar(),
-		strings.Repeat(" ", m.contentWidth()),
+	blank := strings.Repeat(" ", max(m.width, 0))
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.separator(),
+		blank,
 		m.renderControls(),
+		blank,
+		m.renderBar(),
+		blank,
 	)
-	return playerBox.Render(inner)
 }
 
 // litRamp is the played part of the bar: the brightest thing the scheme has,

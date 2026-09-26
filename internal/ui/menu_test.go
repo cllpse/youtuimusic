@@ -481,10 +481,13 @@ func TestThePopoverStaysInsideTheList(t *testing.T) {
 		if x < 0 || x+width > m.width {
 			t.Errorf("%dx%d: the popover spans %d..%d", size.w, size.h, x, x+width)
 		}
-		// The player's bottom border is still drawn.
+		// The player below it is still drawn, rule and buttons both.
 		lines := strings.Split(m.View().Content, "\n")
-		if last := strings.TrimRight(plain(lines[m.statusRow()-1]), " "); !strings.HasSuffix(last, "╯") {
-			t.Errorf("%dx%d: the player box is broken: %q", size.w, size.h, last)
+		if rule := plain(lines[m.playerTop()]); !strings.Contains(rule, "─") {
+			t.Errorf("%dx%d: the rule above the player is gone: %q", size.w, size.h, rule)
+		}
+		if row := plain(lines[m.controlsRow()]); !strings.Contains(row, labelPrevious) {
+			t.Errorf("%dx%d: the buttons are gone: %q", size.w, size.h, row)
 		}
 	}
 }

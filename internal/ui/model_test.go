@@ -331,9 +331,9 @@ func TestThePlayerHoldsOnlyTheBarAndButtons(t *testing.T) {
 	if !strings.Contains(lines[m.controlsRow()], labelPrevious) {
 		t.Errorf("no controls on row %d", m.controlsRow())
 	}
-	// And the box still closes above the status bar, inside its margin.
-	if bottom := strings.TrimRight(plain(lines[m.statusRow()-1]), " "); !strings.HasSuffix(bottom, "╯") {
-		t.Errorf("the box does not close above the status bar: %q", bottom)
+	// And the player ends on a blank line, above the status bar.
+	if got := strings.TrimSpace(plain(lines[m.statusRow()-1])); got != "" {
+		t.Errorf("the player does not end on a blank line: %q", got)
 	}
 }
 
@@ -478,43 +478,51 @@ const highlightSGR = "100"
 // being a shade of its background.
 const faintSGR = "2"
 
-// The bar and the controls sit in one box, and it costs no height: its
-// border takes the rows the blank lines used to.
-func TestThePlayerIsBoxed(t *testing.T) {
+// The player is six rows and no frame: a rule under the list, a blank, the
+// buttons, a blank, the bar, a blank. Nothing boxes it in, and every row runs
+// edge to edge the way the list and the tabs above it do.
+func TestThePlayerIsSixUnboxedRows(t *testing.T) {
 	m := sample()
 	lines := strings.Split(m.View().Content, "\n")
 	if len(lines) != 20 {
 		t.Fatalf("view is %d lines, want 20", len(lines))
 	}
+	if playerRows != 6 {
+		t.Fatalf("playerRows is %d", playerRows)
+	}
 
-	// The bar sits directly under the border, one blank line below it, then
-	// the buttons, which are controlsRows tall.
-	top, bottom := lines[m.barRow()-1], lines[m.controlsRow()+controlsRows]
-	if !strings.HasPrefix(plain(top), "╭") || !strings.HasSuffix(plain(top), "╮") {
-		t.Errorf("no top border: %q", plain(top))
+	top := m.playerTop()
+	if got, want := plain(lines[top]), strings.Repeat("─", m.width); got != want {
+		t.Errorf("the player does not start on a rule: %q", got)
 	}
-	if !strings.HasSuffix(plain(bottom), "╯") {
-		t.Errorf("no bottom border: %q", plain(bottom))
-	}
-	if inner := strings.TrimSpace(plain(lines[m.barRow()])[1:]); inner == "" {
-		t.Error("the row under the border is blank; the bar should be there")
-	}
-	if inner := strings.Trim(plain(lines[m.barRow()+1]), "│ "); inner != "" {
-		t.Errorf("the row under the bar is not blank: %q", inner)
-	}
-	// Every row inside it is bounded by the sides, blank lines included.
-	inside := []int{m.barRow(), m.barRow() + 1}
-	for r := range controlsRows {
-		inside = append(inside, m.controlsRow()+r)
-	}
-	for _, row := range inside {
-		line := plain(lines[row])
-		if !strings.HasPrefix(line, "│") || !strings.HasSuffix(line, "│") {
-			t.Errorf("row %d is not inside the box: %q", row, line)
+	for _, row := range []int{top + 1, top + 3, top + 5} {
+		if got := strings.TrimSpace(plain(lines[row])); got != "" {
+			t.Errorf("row %d should be blank: %q", row, got)
 		}
-		if lipgloss.Width(lines[row]) != m.width {
-			t.Errorf("row %d is %d cells, want %d", row, lipgloss.Width(lines[row]), m.width)
+	}
+	if !strings.Contains(plain(lines[m.controlsRow()]), labelPrevious) {
+		t.Errorf("the buttons are not on row %d: %q", m.controlsRow(), plain(lines[m.controlsRow()]))
+	}
+	if !strings.ContainsAny(plain(lines[m.barRow()]), "▌"+string(emptyCell)) {
+		t.Errorf("the bar is not on row %d: %q", m.barRow(), plain(lines[m.barRow()]))
+	}
+	// The buttons come before the bar, which is the way round it reads.
+	if m.controlsRow() >= m.barRow() {
+		t.Errorf("the buttons are on row %d and the bar on %d",
+			m.controlsRow(), m.barRow())
+	}
+	// Nothing is framed, and the status bar follows immediately.
+	for row := top; row < top+playerRows; row++ {
+		if line := plain(lines[row]); strings.ContainsAny(line, "│╭╮╰╯") {
+			t.Errorf("row %d is boxed: %q", row, line)
 		}
+		if got := lipgloss.Width(lines[row]); got != m.width {
+			t.Errorf("row %d is %d cells, want %d", row, got, m.width)
+		}
+	}
+	if top+playerRows != m.statusRow() {
+		t.Errorf("the player ends at %d and the status bar is at %d",
+			top+playerRows, m.statusRow())
 	}
 }
 
@@ -1405,9 +1413,12 @@ func TestTheFrameBehindAPopoverGoesQuiet(t *testing.T) {
 	liveFrame := strings.Split(m.View().Content, "\n")
 	offFrame := strings.Split(behind.View().Content, "\n")
 	for _, row := range []int{m.barRow(), m.controlsRow(), m.statusRow()} {
-		if plain(liveFrame[row]) != plain(offFrame[row]) {
+		// Trailing spaces go too: compositing drops them, and an
+		// uncomposited frame keeps them.
+		trim := func(s string) string { return strings.TrimRight(plain(s), " ") }
+		if trim(liveFrame[row]) != trim(offFrame[row]) {
 			t.Errorf("row %d changed behind the popover:\n live %q\n then %q",
-				row, plain(liveFrame[row]), plain(offFrame[row]))
+				row, trim(liveFrame[row]), trim(offFrame[row]))
 		}
 		if strings.Contains(offFrame[row], quiet) {
 			t.Errorf("row %d of the player went quiet: %q", row, offFrame[row])
