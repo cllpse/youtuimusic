@@ -62,7 +62,7 @@ func TestRightClickOpensTheMenuOnThatTrack(t *testing.T) {
 	}
 
 	got := plain(m.renderMenu())
-	for _, want := range []string{"Like track", "Go to album", "Go to artist"} {
+	for _, want := range []string{"Like track", "Go to album…", "Go to artist…"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("menu is missing %q:\n%s", want, got)
 		}

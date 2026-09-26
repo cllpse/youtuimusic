@@ -28,20 +28,16 @@ const (
 	stackInsetY = 1
 )
 
+// labelTypeToSearch waits on you, which is what its ellipsis says.
+const labelTypeToSearch = "Type to search…"
+
 // labelClose closes the popover it is drawn on, stepping back to whatever was
 // behind it. It is named for the key that does the same thing, which is more
 // use than a times sign: one of them says how to do it without the mouse.
 const labelClose = "esc"
 
-// The way out is the same inside-out fill the transport's buttons use when
-// they are live.
-var modalBackStyle = lipgloss.NewStyle().
-	Background(emphasis).
-	Foreground(background).
-	Bold(true)
-
-// The way out is its word with a cell either side, all of it clickable.
-const modalCloseWidth = len(labelClose) + 2
+// The way out is a button like the transport's, through the same component.
+var modalCloseWidth = buttonWidth(labelClose)
 
 var modalBox = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
@@ -107,7 +103,7 @@ func (m Model) modalHeader(inner int) string {
 		// One button, against the right, where a window keeps the way out.
 		// There was a way back beside it until the two came to do the same
 		// thing: closing a popover steps back to whatever was behind it.
-		close := modalBackStyle.Render(padded(labelClose))
+		close := renderButton(labelClose, buttonDefault)
 		right := modalCloseWidth
 
 		// What it is showing sits in the middle of the row, where a title
@@ -125,9 +121,9 @@ func (m Model) modalHeader(inner int) string {
 	if m.detour.typing {
 		query += "█"
 	} else if query == "" {
-		query = dim.Render("type to search")
+		query = dim.Render(labelTypeToSearch)
 	}
-	close := modalBackStyle.Render(padded(labelClose))
+	close := renderButton(labelClose, buttonDefault)
 	room := max(inner-modalCloseWidth, 0)
 	return pad(truncate(query, room), room) + close
 }
@@ -180,9 +176,10 @@ func (m Model) renderModal() string {
 	lines = append(lines, m.modalHeader(inner), under)
 
 	if m.detour.tab.kind == tabSearch && !m.loading && len(m.detour.tracks) == 0 {
-		note := dim.Render("type to search")
+		note := dim.Render(labelTypeToSearch)
 		if !m.detour.typing && m.detour.query != "" {
-			note = dim.Render("nothing found")
+			// No ellipsis: a result, not an invitation.
+			note = dim.Render("Nothing found")
 		}
 		lines = append(lines, lipgloss.Place(inner, height,
 			lipgloss.Center, lipgloss.Center, note))

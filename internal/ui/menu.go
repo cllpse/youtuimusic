@@ -54,8 +54,8 @@ func (m Model) menuRows() []menuRow {
 	}
 	return []menuRow{
 		like,
-		{menuAlbum, "Go to album", t.AlbumID != ""},
-		{menuArtist, "Go to artist", t.ArtistID != ""},
+		{menuAlbum, "Go to album…", t.AlbumID != ""},
+		{menuArtist, "Go to artist…", t.ArtistID != ""},
 	}
 }
 

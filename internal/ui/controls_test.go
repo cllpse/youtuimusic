@@ -162,25 +162,25 @@ func TestTheRatingLitsItsButton(t *testing.T) {
 		strings.TrimSpace(down.label) != labelDislike {
 		t.Errorf("the labels are %q/%q", up.label, down.label)
 	}
-	if up.lit || down.lit {
-		t.Error("unrated buttons should not be lit")
+	if up.state == buttonActive || down.state == buttonActive {
+		t.Error("an unrated track makes a rating active")
 	}
 
 	m.playing.Rating = RatingUp
 	up, _ = buttonAt(m, controlThumbUp)
 	down, _ = buttonAt(m, controlThumbDown)
-	if !up.lit {
-		t.Error("rated up did not light Like")
+	if up.state != buttonActive {
+		t.Errorf("rated up left Like %v", up.state)
 	}
-	if down.lit {
-		t.Error("rated up lit Dislike too")
+	if down.state == buttonActive {
+		t.Error("rated up made Dislike active too")
 	}
 
 	m.playing.Rating = RatingDown
 	up, _ = buttonAt(m, controlThumbUp)
 	down, _ = buttonAt(m, controlThumbDown)
-	if !down.lit || up.lit {
-		t.Errorf("rated down: like lit=%v, dislike lit=%v", up.lit, down.lit)
+	if down.state != buttonActive || up.state == buttonActive {
+		t.Errorf("rated down: like %v, dislike %v", up.state, down.state)
 	}
 }
 
@@ -195,8 +195,11 @@ func TestRepeatCyclesThroughItsThreeStates(t *testing.T) {
 		{RepeatOne, labelRepeatOne, true},
 		{RepeatOff, labelRepeatOff, false},
 	}
-	if b, _ := buttonAt(m, controlRepeat); !strings.Contains(b.label, labelRepeatOff) || b.lit {
-		t.Fatalf("starts at %q lit=%v, want repeat-off unlit", b.label, b.lit)
+	// Repeat off is a state it is in, not a thing it cannot do, so it is the
+	// default rather than disabled.
+	if b, _ := buttonAt(m, controlRepeat); !strings.Contains(b.label, labelRepeatOff) ||
+		b.state != buttonDefault {
+		t.Fatalf("starts at %q state=%v, want repeat-off as the default", b.label, b.state)
 	}
 	for _, step := range want {
 		next, _ := m.Update(keyPress("r"))
@@ -205,9 +208,13 @@ func TestRepeatCyclesThroughItsThreeStates(t *testing.T) {
 			t.Fatalf("repeat = %v, want %v", m.repeat, step.state)
 		}
 		b, _ := buttonAt(m, controlRepeat)
-		if !strings.Contains(b.label, step.label) || b.lit != step.lit {
-			t.Errorf("%v shows %q lit=%v, want %q lit=%v",
-				step.state, b.label, b.lit, step.label, step.lit)
+		want := buttonDefault
+		if step.lit {
+			want = buttonActive
+		}
+		if !strings.Contains(b.label, step.label) || b.state != want {
+			t.Errorf("%v shows %q state=%v, want %q as %v",
+				step.state, b.label, b.state, step.label, want)
 		}
 		// Every state is drawn at the same width, so the button does not
 		// change size under the pointer as it cycles.
@@ -396,16 +403,27 @@ func TestTheThumbControlTogglesOff(t *testing.T) {
 	}
 }
 
-// Idle, the transport has nothing to act on and says so.
-func TestTransportIsUnlitWithNothingPlaying(t *testing.T) {
+// With nothing playing, skipping has nothing to skip from and says so. Play
+// does not: it starts the row under the cursor, which is something to do.
+func TestTheTransportIsDisabledWithNothingPlaying(t *testing.T) {
 	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
-	for _, c := range []control{controlPrevious, controlPlayPause, controlNext} {
-		b, ok := buttonAt(m, c)
+	for _, tc := range []struct {
+		control control
+		want    buttonState
+	}{
+		{controlPrevious, buttonDisabled},
+		{controlNext, buttonDisabled},
+		{controlPlayPause, buttonDefault},
+		{controlThumbUp, buttonDisabled},
+		{controlThumbDown, buttonDisabled},
+	} {
+		b, ok := buttonAt(m, tc.control)
 		if !ok {
-			t.Fatalf("control %v is missing", c)
+			t.Fatalf("control %v is missing", tc.control)
 		}
-		if b.lit {
-			t.Errorf("control %v is lit with nothing playing", c)
+		if b.state != tc.want {
+			t.Errorf("control %v is %v with nothing playing, want %v",
+				tc.control, b.state, tc.want)
 		}
 	}
 }
@@ -542,97 +560,27 @@ func TestTheWholeButtonIsClickable(t *testing.T) {
 	}
 }
 
-// A live button is filled; an idle one is an outline. Either way it is a
-// labelled box, and the label is padded off its own border.
-func TestButtonsFillWhenLive(t *testing.T) {
-	m, _, _, _ := playingModel(t)
-	row := plain(controlsLine(m))
-
-	if strings.ContainsAny(row, "[]") {
-		t.Errorf("brackets are drawn: %q", row)
-	}
-	if !strings.Contains(row, labelPrevious) {
-		t.Errorf("the label is not drawn: %q", row)
-	}
-	// Nothing wraps it: no border, no cap, no bracket. The gap between
-	// buttons is the only separation, so it has to actually be there.
-	if strings.Contains(row, labelPrevious+" "+labelPause) {
-		t.Errorf("buttons are touching: %q", row)
-	}
-	// A cell of air either side of the label, inside the fill.
-	if !strings.Contains(row, " "+labelPrevious+" ") {
-		t.Errorf("the label has no padding: %q", row)
-	}
-
-	codes := sgrCodes(controlsLine(m))
-	if !codes[fillBG] {
-		t.Errorf("no live button is filled: %v", codes)
-	}
-	if !codes[onFillFG] {
-		t.Errorf("a filled button has no contrasting text on it: %v", codes)
-	}
-	// The repeat button is off, so it is dimmed rather than filled. Dimmed
-	// is the terminal's own faint: colour 8 on a light page is not text.
-	if !codes[faintSGR] {
-		t.Errorf("nothing on the row is dimmed: %v", codes)
-	}
-}
-
-// Idle, a button is only its label, dimmed: there is nothing to press.
-func TestIdleButtonsAreOnlyDimLabels(t *testing.T) {
-	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
-	codes := sgrCodes(controlsLine(m))
-	if !codes[faintSGR] {
-		t.Errorf("the idle row is not dimmed: %v", codes)
-	}
-	if codes[fillBG] {
-		t.Errorf("an idle button is filled: %v", codes)
-	}
-}
-
-// Live, it fills with the accent.
-func TestALitButtonIsFilled(t *testing.T) {
-	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
-	next, _ := m.Update(keyPress("r")) // repeat on lights its button
-	if codes := sgrCodes(controlsLine(next.(Model))); !codes[fillBG] {
-		t.Errorf("a lit button is not filled: %v", codes)
-	}
-}
-
 // What is drawn has to be as wide and as tall as what is clicked, or a click
 // lands on the wrong button or on nothing.
 func TestAButtonIsAsWideAsItsHitbox(t *testing.T) {
 	for _, label := range []string{labelPrevious, labelPause, labelRepeatOne} {
-		for _, lit := range []bool{false, true} {
-			lines := strings.Split(renderButton(label, lit), "\n")
+		for _, state := range []buttonState{buttonDefault, buttonActive, buttonDisabled} {
+			lines := strings.Split(renderButton(label, state), "\n")
 			if len(lines) != controlsRows {
-				t.Errorf("%q lit=%v draws %d rows, want %d",
-					label, lit, len(lines), controlsRows)
+				t.Errorf("%q %v draws %d rows, want %d",
+					label, state, len(lines), controlsRows)
 			}
 			for i, line := range lines {
 				if got := lipgloss.Width(line); got != buttonWidth(label) {
-					t.Errorf("%q lit=%v row %d is %d cells, buttonWidth is %d",
-						label, lit, i, got, buttonWidth(label))
+					t.Errorf("%q %v row %d is %d cells, buttonWidth is %d",
+						label, state, i, got, buttonWidth(label))
 				}
 			}
 			// And it is the label with its padding, and nothing else.
 			if got, want := plain(lines[0]), padded(label); got != want {
-				t.Errorf("%q lit=%v draws %q, want %q", label, lit, got, want)
+				t.Errorf("%q %v draws %q, want %q", label, state, got, want)
 			}
 		}
-	}
-}
-
-// Switching repeat on fills its button without touching the others.
-func TestTurningSomethingOnFillsItsButton(t *testing.T) {
-	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
-	if sgrCodes(controlsLine(m))[fillBG] {
-		t.Fatal("something is already filled")
-	}
-	next, _ := m.Update(keyPress("r"))
-	m = next.(Model)
-	if !sgrCodes(controlsLine(m))[fillBG] {
-		t.Errorf("repeat on did not fill its button: %v", sgrCodes(controlsLine(m)))
 	}
 }
 
@@ -756,8 +704,8 @@ func TestTheThumbsFollowTheTrack(t *testing.T) {
 	if got := label(m, controlThumbDown); got != labelDislike {
 		t.Errorf("disliked says %q, want %q", got, labelDislike)
 	}
-	if b, _ := buttonAt(m, controlThumbDown); !b.lit {
-		t.Error("a disliked track does not light the button")
+	if b, _ := buttonAt(m, controlThumbDown); b.state != buttonActive {
+		t.Errorf("a disliked track leaves the button %v", b.state)
 	}
 	if got := label(m, controlThumbUp); got != labelLike {
 		t.Errorf("disliked changed the other one to %q", got)
@@ -904,5 +852,58 @@ func TestLikingWhatIsPlayingStaysPut(t *testing.T) {
 	}
 	if len(au.loaded) != 0 {
 		t.Errorf("a like loaded %v", au.loaded)
+	}
+}
+
+// The button component: three states, one place that decides how each reads.
+// Default and active look the same for now and that is the point — the states
+// exist so the look can change in one place later.
+func TestTheButtonComponentsThreeStates(t *testing.T) {
+	const label = "Prev (p)"
+
+	def := renderButton(label, buttonDefault)
+	act := renderButton(label, buttonActive)
+	off := renderButton(label, buttonDisabled)
+
+	if def != padded(label) {
+		t.Errorf("the default state draws %q, want just the label", def)
+	}
+	if act != def {
+		t.Errorf("active draws %q where default draws %q; they are the same for now",
+			act, def)
+	}
+	if off == def {
+		t.Error("disabled draws the same as default")
+	}
+	if !sgrCodes(off)[faintSGR] {
+		t.Errorf("disabled is not dimmed: %v", sgrCodes(off))
+	}
+	if plain(off) != padded(label) {
+		t.Errorf("disabled changed the label to %q", plain(off))
+	}
+	// Every state is the same width, or a click lands on the wrong button.
+	for _, s := range []string{def, act, off} {
+		if got := lipgloss.Width(s); got != buttonWidth(label) {
+			t.Errorf("%q is %d cells, buttonWidth is %d", s, got, buttonWidth(label))
+		}
+	}
+}
+
+// The popover's way out goes through the same component, so changing how a
+// button reads changes that one too.
+func TestThePopoverButtonIsTheSameComponent(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+	m = openVia(t, m, menuArtist)
+
+	header := strings.Split(m.renderModal(), "\n")[1]
+	if !strings.Contains(plain(header), padded(labelClose)) {
+		t.Errorf("the way out is not drawn through the component: %q", plain(header))
+	}
+	_, _, width, ok := m.modalCloseButton()
+	if !ok {
+		t.Fatal("no way out")
+	}
+	if want := buttonWidth(labelClose); width != want {
+		t.Errorf("its hitbox is %d, the component draws %d", width, want)
 	}
 }

@@ -115,63 +115,9 @@ const (
 type button struct {
 	control control
 	label   string
-	// lit means filled rather than dimmed: there is something for
-	// it to act on, or the thing it toggles is on.
-	lit        bool
-	start, end int // half-open columns
-}
-
-// A button is its label with a space either side: one row, no border around
-// it. It went through a bordered box three rows tall and a pair of rounded
-// caps on the way here, and both were bigger than what they were wrapping. A
-// word with a fill under it is a button, and the fill wants a cell of air
-// before the first letter.
-//
-// A cell is the narrowest space a terminal has. The thin spaces — U+2009 and
-// its neighbours — are a cell wide here too, and are in neither of the fonts
-// this is read in, so they would come from whatever fallback the terminal
-// picks and at whatever width it likes.
-//
-// Every cell of a button answers to a click, padding included.
-const (
-	buttonPadding = 1
-	buttonGap     = 2
-	// controlsRows is how tall the row of them is.
-	controlsRows = 1
-)
-
-// buttonWidth is what one button occupies: its label and the space either
-// side of it.
-func buttonWidth(label string) int {
-	return lipgloss.Width(label) + 2*buttonPadding
-}
-
-// padded is a label with its air, which the fill covers as well as the word.
-func padded(label string) string {
-	pad := strings.Repeat(" ", buttonPadding)
-	return pad + label + pad
-}
-
-var (
-	// Idle, a button is its label dimmed: there is nothing to press. Faint
-	// and not the dim colour, which against a light page is not text.
-	buttonStyle = lipgloss.NewStyle().Faint(true)
-	// Live, it is turned inside out — the foreground as a fill, the
-	// background as its text — which is what makes it look pressable rather
-	// than printed, without reaching for a second hue.
-	buttonLitStyle = lipgloss.NewStyle().
-			Background(emphasis).
-			Foreground(background).
-			Bold(true)
-)
-
-// renderButton draws one button: its label, dimmed when there is nothing to
-// press and turned inside out when there is.
-func renderButton(label string, lit bool) string {
-	if lit {
-		return buttonLitStyle.Render(padded(label))
-	}
-	return buttonStyle.Render(padded(label))
+	state   buttonState
+	// start and end are half-open columns.
+	start, end int
 }
 
 // groupWidth is what a run of buttons occupies, gaps between them included.
@@ -197,11 +143,23 @@ func (m Model) controlButtons() []button {
 	right := contentLeft + width
 	playing := m.playing.VideoID != ""
 
+	// Skipping needs something to skip from, so those two go quiet with
+	// nothing playing. Play does not: with nothing playing it starts the row
+	// under the cursor, which is something to do. Repeat is never disabled —
+	// off is a state it is in, not a thing it cannot do.
+	onward := buttonDefault
+	if !playing {
+		onward = buttonDisabled
+	}
+	repeat := buttonDefault
+	if m.repeat != RepeatOff {
+		repeat = buttonActive
+	}
 	leftGroup := []button{
-		{control: controlPrevious, label: labelPrevious, lit: playing},
-		{control: controlPlayPause, label: m.playPauseLabel(), lit: playing},
-		{control: controlNext, label: labelNext, lit: playing},
-		{control: controlRepeat, label: m.repeat.label(), lit: m.repeat != RepeatOff},
+		{control: controlPrevious, label: labelPrevious, state: onward},
+		{control: controlPlayPause, label: m.playPauseLabel(), state: buttonDefault},
+		{control: controlNext, label: labelNext, state: onward},
+		{control: controlRepeat, label: m.repeat.label(), state: repeat},
 	}
 	if width < groupWidth(leftGroup) {
 		return nil
@@ -214,11 +172,22 @@ func (m Model) controlButtons() []button {
 	if liked {
 		like = labelUnlike
 	}
+	// A rating with nothing to rate cannot be pressed; one the track already
+	// carries is on.
+	rating := func(on bool) buttonState {
+		switch {
+		case !playing:
+			return buttonDisabled
+		case on:
+			return buttonActive
+		}
+		return buttonDefault
+	}
 	rightGroup := []button{
 		{control: controlThumbUp, label: steady(like, likeLabels),
-			lit: playing && liked},
+			state: rating(liked)},
 		{control: controlThumbDown, label: labelDislike,
-			lit: playing && m.playing.Rating == RatingDown},
+			state: rating(m.playing.Rating == RatingDown)},
 	}
 
 	at := lay(leftGroup, contentLeft)
@@ -268,7 +237,7 @@ func (m Model) renderControls() string {
 		at[i] = contentLeft
 	}
 	for _, btn := range buttons {
-		lines := strings.Split(renderButton(btn.label, btn.lit), "\n")
+		lines := strings.Split(renderButton(btn.label, btn.state), "\n")
 		for r := range rows {
 			if r >= len(lines) {
 				continue
