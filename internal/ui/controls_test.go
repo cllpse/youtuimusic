@@ -904,6 +904,33 @@ func TestTheButtonComponentsThreeStates(t *testing.T) {
 	}
 }
 
+// A button is its label and nothing else. The space it used to carry either
+// side was the only indent on the screen: the transport sat a cell to the
+// right of the list above it and the bar below it, which is exactly the sort
+// of thing that is invisible until it is gone.
+func TestAButtonHasNoAirOfItsOwn(t *testing.T) {
+	if buttonPadding != 0 {
+		t.Errorf("buttonPadding is %d, want none", buttonPadding)
+	}
+	for _, label := range []string{labelPrevious, labelClose, labelHelp} {
+		if got := renderButton(label, buttonDefault); got != label {
+			t.Errorf("%q drew %q, want the label alone", label, got)
+		}
+		if got, want := buttonWidth(label), lipgloss.Width(label); got != want {
+			t.Errorf("%q is %d cells, the label is %d", label, got, want)
+		}
+	}
+
+	// So the row of them starts where the list and the bar start.
+	m, _, _, _ := playingModel(t)
+	if row := strings.TrimRight(plain(controlsLine(m)), " "); !strings.HasPrefix(row, labelPrevious) {
+		t.Errorf("the buttons are indented: %q", row)
+	}
+	if b, _ := buttonAt(m, controlPrevious); b.start != contentLeft {
+		t.Errorf("the first button starts at column %d, want %d", b.start, contentLeft)
+	}
+}
+
 // The popover's way out goes through the same component, so changing how a
 // button reads changes that one too.
 func TestThePopoverButtonIsTheSameComponent(t *testing.T) {

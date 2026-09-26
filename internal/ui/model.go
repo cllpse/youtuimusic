@@ -114,6 +114,10 @@ type Model struct {
 
 	menu   trackMenu
 	detour detour
+	// sheetOpen is the keys sheet, which is in front of everything when it is
+	// up and is not part of the stack behind it: it is what the app does, not
+	// somewhere you went.
+	sheetOpen bool
 	// history is the popovers behind the one in front. Going to an album
 	// from an artist comes back to the artist rather than to nothing.
 	history []detour
@@ -561,11 +565,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.RequestBackgroundColor
 
 	case tea.KeyPressMsg:
+		if m.sheetOpen {
+			if next, cmd, handled := m.handleSheetKey(msg); handled {
+				return next, cmd
+			}
+		}
 		if m.menu.open {
-			return m.handleMenuKey(msg.String())
+			return m.handleMenuKey(msg)
 		}
 		if m.detour.active {
-			if next, cmd, handled := m.handleModalKey(msg.String()); handled {
+			if next, cmd, handled := m.handleModalKey(msg); handled {
 				return next, cmd
 			}
 		}
@@ -780,71 +789,74 @@ func (m Model) handleEvent(ev player.Event) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
+	k := appKeys
 
-	switch key {
-	case "ctrl+c":
+	switch {
+	case matches(msg, k.Quit):
 		m.record()
 		return m, tea.Quit
 
-	case "/":
+	case matches(msg, k.Help):
+		return m.toggleSheet()
+
+	case matches(msg, k.Search):
 		return m.openSearch()
 
-	case "enter":
+	case matches(msg, k.Open):
 		if t, ok := m.SelectedTrack(); ok {
 			return m.open(t)
 		}
 
-	case " ", "space":
+	case matches(msg, k.PlayPause):
 		return m.press(controlPlayPause)
 
-	case "s":
+	case matches(msg, k.Sort):
 		if m.detour.active {
 			return m, nil
 		}
 		return m.sortBy(m.sort.next())
-	case "S":
+	case matches(msg, k.SortReverse):
 		if m.detour.active {
 			return m, nil
 		}
 		return m.sortBy(sortSpec{by: max(m.sort.by, sortTitle), desc: !m.sort.desc})
 
-	case "n":
+	case matches(msg, k.Next):
 		return m.press(controlNext)
-	case "p":
+	case matches(msg, k.Previous):
 		return m.press(controlPrevious)
-	case "r":
+	case matches(msg, k.Repeat):
 		return m.press(controlRepeat)
 
-	case "left", "h", "shift+tab":
+	case matches(msg, k.PrevTab):
 		return m.selectTab(m.tabCursor - 1)
-	case "right", "l", "tab":
+	case matches(msg, k.NextTab):
 		return m.selectTab(m.tabCursor + 1)
 
-	case "up", "k":
+	case matches(msg, k.Up):
 		m.moveCursor(-1)
 		return m.afterCursorMove()
-	case "down", "j":
+	case matches(msg, k.Down):
 		m.moveCursor(1)
 		return m.afterCursorMove()
 
-	case "pgup", "ctrl+u":
+	case matches(msg, k.PageUp):
 		m.moveCursor(-m.listHeight())
 		return m.afterCursorMove()
-	case "pgdown", "ctrl+d":
+	case matches(msg, k.PageDown):
 		m.moveCursor(m.listHeight())
 		return m.afterCursorMove()
 
-	case "home", "g":
+	case matches(msg, k.Top):
 		m.moveCursor(-m.rowCount())
 		return m.afterCursorMove()
-	case "end", "G":
+	case matches(msg, k.Bottom):
 		m.moveCursor(m.rowCount())
 		return m.afterCursorMove()
 
-	case "+", "=":
+	case matches(msg, k.Like):
 		return m.applyRating(RatingUp)
-	case "-", "_":
+	case matches(msg, k.Dislike):
 		return m.applyRating(RatingDown)
 	}
 	return m, nil
@@ -962,6 +974,15 @@ var (
 	// alert is the one exception, and it earns it: an error announcing
 	// itself by colour is the point of colouring it.
 	alert = lipgloss.Red
+	// good and live join it on the state block, which is the only place in
+	// the app that says how things are going rather than what they are: green
+	// when there is nothing to report, blue while the player is on a track.
+	//
+	// All three are ANSI colours and not hex, for the same reason everything
+	// else here is: they are the terminal's own red, green and blue, so they
+	// come out of whatever scheme is loaded rather than fighting it.
+	good = lipgloss.Green
+	live = lipgloss.Blue
 
 	// background and foreground are the terminal's own two ends, whichever
 	// way round the theme has them.
@@ -1139,7 +1160,7 @@ func (m Model) inactiveTab() lipgloss.Style {
 }
 
 func (m Model) tabGap() lipgloss.Style {
-	if m.detour.active {
+	if m.covered() {
 		return tabGapStyle.BorderForeground(m.quietColor())
 	}
 	return tabGapStyle.BorderForeground(m.dimmedColor())
@@ -1166,9 +1187,19 @@ const (
 	tabFurniture = 4 // a border and a space either side
 )
 
+// covered reports whether anything is drawn in front of the frame. It is what
+// makes the tabs and the list go quiet: with something over them, none of what
+// they usually say — this tab is in front, this row is selected — is being said
+// to anyone.
+//
+// The menu is not in it. It is a few rows anchored to what was clicked, and
+// sinking the whole page behind something that small would be a lot of
+// movement for a shrug.
+func (m Model) covered() bool { return m.detour.active || m.sheetOpen }
+
 // tabRuleColor is the rule the tabs sit on, which sinks with them.
 func (m Model) tabRuleColor() color.Color {
-	if m.detour.active {
+	if m.covered() {
 		return m.quietColor()
 	}
 	return m.dimmedColor()
@@ -1269,6 +1300,13 @@ func (m Model) View() tea.View {
 	if m.menu.open {
 		layers = append(layers,
 			lipgloss.NewLayer(m.renderMenu()).X(m.menu.x).Y(m.menu.y).Z(z))
+		z++
+	}
+	if m.sheetOpen {
+		// In front of everything, including a popover: it is what the app
+		// does, and that does not change with what you have open.
+		x, y, _, _ := m.sheetBounds()
+		layers = append(layers, lipgloss.NewLayer(m.renderSheet()).X(x).Y(y).Z(z))
 	}
 	if len(layers) > 1 {
 		content = lipgloss.NewCompositor(layers...).Render()
@@ -1341,7 +1379,7 @@ func (m Model) renderTabs() string {
 		// row sinks towards the page.
 		style := m.inactiveTab()
 		switch {
-		case m.detour.active:
+		case m.covered():
 			style = m.quietTab()
 		case s.index == m.tabCursor:
 			style = activeTabStyle
@@ -1366,7 +1404,7 @@ func (m Model) table(width, height int) trackTable {
 	return trackTable{
 		sort:        m.sort,
 		highlight:   m.highlightColor(),
-		inactive:    m.detour.active,
+		inactive:    m.covered(),
 		quiet:       m.quietColor(),
 		now:         m.clock(),
 		tracks:      m.Tracks,
@@ -1409,16 +1447,20 @@ func (m *Model) scrollTo(y int) {
 // the column would say the same thing all the way down.
 func (m Model) showsRating() bool { return m.showingID != likedPlaylistID }
 
-// The status bar is two blocks: a small bright one saying what the app is
+// The status bar is two blocks: a small coloured one saying what the app is
 // doing, and one holding what is playing that takes the rest of the row.
-var (
-	statusKeyStyle = lipgloss.NewStyle().
-			Background(emphasis).
-			Foreground(background).
-			Bold(true).
-			Padding(0, 1)
-	statusAlertStyle = statusKeyStyle.Background(alert)
-)
+//
+// The block's fill is the state, so it can be read without reading it. Its
+// text is the background colour — the end of the palette that inverts with the
+// theme, so it is light text on a dark scheme's hues and dark text on a light
+// scheme's, which is the closest a fixed pair gets to portable on a fill whose
+// hue does not invert at all.
+var statusBlockStyle = lipgloss.NewStyle().
+	Foreground(background).
+	Bold(true).
+	Padding(0, statusBlockPadding)
+
+const statusBlockPadding = 1
 
 // statusBarStyle fills the wide half of the bar with the row highlight, so
 // the two read as the same surface. No foreground with it: the highlight is
@@ -1441,35 +1483,62 @@ type statusSegment struct {
 
 // renderStatusBar draws the row under the player.
 func (m Model) renderStatusBar() string {
-	key, style := m.statusKey(), statusKeyStyle
-	if m.Err != nil {
-		style = statusAlertStyle
-	}
+	block, fill := m.statusBlock(), m.statusBarStyle()
+	room := max(m.width-lipgloss.Width(block), 0)
 
-	// The block is as wide as the word in it. It used to be padded to the
-	// longest of them so that nothing moved as the state changed, and what
-	// that bought was a block with a hole in it most of the time.
-	block := style.Render(truncate(key, max(m.width-2, 0)))
-	return block + fillRow(m.statusSegments(), m.statusBarStyle(),
-		max(m.width-lipgloss.Width(block), 0))
+	// The way into the keys sits at the far end of the band. It takes the
+	// band's own fill, so it reads as part of it rather than as something
+	// dropped on top, and it carries the cell of air the other end has.
+	tail := ""
+	if _, ok := m.helpButtonSpan(); ok {
+		state := buttonDefault
+		if m.sheetOpen {
+			state = buttonActive
+		}
+		tail = fill.Render(renderButton(labelHelp, state) + " ")
+		room -= helpButtonWidth + 1
+	}
+	return block + fillRow(m.statusSegments(), fill, room) + tail
 }
 
-// statusKey is the word in the small block: what the app is doing, in the
-// order that matters. Trouble first, then a wait, then the player — and
-// ready only when there is nothing else to say.
-func (m Model) statusKey() string {
+// statusBlock is the small block at the start of the bar, filled with the
+// colour of whatever it says.
+//
+// It is as wide as the word in it. It used to be padded to the longest of them
+// so that nothing moved as the state changed, and what that bought was a block
+// with a hole in it most of the time.
+func (m Model) statusBlock() string {
+	word, hue := m.statusState()
+	return statusBlockStyle.Background(hue).
+		Render(truncate(word, max(m.width-2*statusBlockPadding, 0)))
+}
+
+// statusState is what the block says and the colour it says it in, together,
+// because a word and a fill that disagree are worse than either alone — a
+// LOADING that has gone green while a track plays says two things at once.
+//
+// The order is the one that matters. Trouble first, then a wait, then the
+// player, and ready only when there is nothing else to say.
+func (m Model) statusState() (string, color.Color) {
 	switch {
 	case m.Err != nil:
-		return "ERROR"
+		return "ERROR", alert
 	case m.loading || m.loadingMore:
-		return "LOADING"
+		// A wait is not a problem. Green is "nothing is wrong", not "done".
+		return "LOADING", good
 	case m.playing.VideoID != "" && m.Paused:
-		return "PAUSED"
+		return "PAUSED", live
 	case m.playing.VideoID != "":
-		return "PLAYING"
+		return "PLAYING", live
 	default:
-		return "READY"
+		return "READY", good
 	}
+}
+
+// statusKey is the word alone.
+func (m Model) statusKey() string {
+	word, _ := m.statusState()
+	return word
 }
 
 // statusSegments is what the wide block holds: the trouble, or the track.

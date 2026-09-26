@@ -161,18 +161,20 @@ func (m Model) menuHit(x, y int) (int, bool) {
 // handleMenuKey runs the menu while it is open, swallowing everything else:
 // a menu that lets keystrokes through to the list underneath is a menu you
 // cannot trust.
-func (m Model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
-	rows := m.menuRows()
-	switch key {
-	case "esc":
+func (m Model) handleMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	rows, k := m.menuRows(), appKeys
+	switch {
+	case matches(msg, k.Close):
 		m.menu = trackMenu{}
-	case "ctrl+c":
+	case matches(msg, k.Quit):
 		return m, tea.Quit
-	case "up", "k":
+	case matches(msg, k.Up):
 		m.menu.cursor = clamp(m.menu.cursor-1, len(rows))
-	case "down", "j":
+	case matches(msg, k.Down):
 		m.menu.cursor = clamp(m.menu.cursor+1, len(rows))
-	case "enter", " ", "space":
+	case matches(msg, k.Open, k.PlayPause):
+		// Space runs the row here rather than pausing: with a menu open on a
+		// track, the nearest thing it can mean is this one.
 		return m.activate(m.menu.cursor)
 	}
 	return m, nil

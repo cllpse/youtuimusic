@@ -98,26 +98,31 @@ func (m Model) openSearch() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// titleRow lays a popover's first line out: what it is showing in the middle
+// of the row, where a title belongs, and one button against the right, where a
+// window keeps the way out. There was a way back beside it until the two came
+// to do the same thing: closing a popover steps back to whatever was behind it.
+//
+// The title arrives styled and cut to fit, because what it is made of differs —
+// a kind and a name on a popover, one word on the keys sheet — and where it
+// goes does not.
+func titleRow(inner int, title string) string {
+	close := renderButton(labelClose, buttonDefault)
+	width := lipgloss.Width(title)
+	start := min(max((inner-width)/2, 0), max(inner-modalCloseWidth-width, 0))
+	return strings.Repeat(" ", start) + title +
+		strings.Repeat(" ", max(inner-modalCloseWidth-start-width, 0)) + close
+}
+
 // modalHeader is the popover's first line: what it is showing, or the
 // search box being typed into.
 func (m Model) modalHeader(inner int) string {
 	if m.detour.tab.kind != tabSearch {
-		// One button, against the right, where a window keeps the way out.
-		// There was a way back beside it until the two came to do the same
-		// thing: closing a popover steps back to whatever was behind it.
-		close := renderButton(labelClose, buttonDefault)
-		right := modalCloseWidth
-
 		// What it is showing sits in the middle of the row, where a title
 		// belongs, and gives way to the button rather than running under it.
 		prefix := m.modalKind() + menuGap
-		room := max(inner-right-lipgloss.Width(prefix), 0)
-		title := active.Render(prefix) + truncate(m.detour.tab.Title, room)
-
-		width := lipgloss.Width(title)
-		start := min(max((inner-width)/2, 0), max(inner-right-width, 0))
-		return strings.Repeat(" ", start) + title +
-			strings.Repeat(" ", max(inner-right-start-width, 0)) + close
+		room := max(inner-modalCloseWidth-lipgloss.Width(prefix), 0)
+		return titleRow(inner, active.Render(prefix)+truncate(m.detour.tab.Title, room))
 	}
 	query := m.detour.query
 	if m.detour.typing {
@@ -296,12 +301,13 @@ func (m *Model) scrollDetour(delta int) {
 // handleModalKey runs the popover. It reports whether it took the key: the
 // transport keys are deliberately left to fall through, because pausing
 // should not depend on what is on top.
-func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
+func (m Model) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if m.detour.typing {
-		return m.typeInto(key)
+		return m.typeInto(msg.String())
 	}
-	switch key {
-	case "/":
+	k := appKeys
+	switch {
+	case matches(msg, k.Search):
 		if m.detour.tab.kind == tabSearch {
 			m.detour.typing = true
 			m.detour.cursor, m.detour.offset = noRow, 0
@@ -311,11 +317,11 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
 		// another step on from wherever this got to.
 		next, cmd := m.openSearch()
 		return next, cmd, true
-	case "esc":
+	case matches(msg, k.Close):
 		next, cmd := m.leaveDetour()
 		return next, cmd, true
 
-	case "up", "k":
+	case matches(msg, k.Up):
 		if m.detour.tab.kind == tabSearch && m.detour.cursor <= 0 {
 			// Off the top of the results is the input, not the top of the
 			// results again.
@@ -325,39 +331,39 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
 		}
 		m.moveDetour(-1)
 		return m.afterDetourMove()
-	case "down", "j":
+	case matches(msg, k.Down):
 		m.moveDetour(1)
 		return m.afterDetourMove()
-	case "pgup", "ctrl+u":
+	case matches(msg, k.PageUp):
 		m.moveDetour(-m.modalRowsHeight())
 		return m.afterDetourMove()
-	case "pgdown", "ctrl+d":
+	case matches(msg, k.PageDown):
 		m.moveDetour(m.modalRowsHeight())
 		return m.afterDetourMove()
-	case "home", "g":
+	case matches(msg, k.Top):
 		m.moveDetour(-m.detourRowCount())
 		return m.afterDetourMove()
-	case "end", "G":
+	case matches(msg, k.Bottom):
 		m.moveDetour(m.detourRowCount())
 		return m.afterDetourMove()
 
-	case "enter":
+	case matches(msg, k.Open):
 		if t, ok := m.selectedDetourTrack(); ok {
 			next, cmd := m.open(t)
 			return next, cmd, true
 		}
-	case "+", "=":
+	case matches(msg, k.Like):
 		if t, ok := m.selectedDetourTrack(); ok {
 			next, cmd := m.rateTrack(t, RatingUp)
 			return next, cmd, true
 		}
-	case "-", "_":
+	case matches(msg, k.Dislike):
 		if t, ok := m.selectedDetourTrack(); ok {
 			next, cmd := m.rateTrack(t, RatingDown)
 			return next, cmd, true
 		}
 
-	case "left", "h", "right", "l", "tab", "shift+tab":
+	case matches(msg, k.PrevTab, k.NextTab):
 		// Working the thing underneath while it is covered would be a
 		// surprise. The way out is esc.
 

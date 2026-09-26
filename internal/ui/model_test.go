@@ -302,10 +302,10 @@ func TestTheStatusBarSaysWhatIsPlaying(t *testing.T) {
 	if lipgloss.Width(bare) != m.width {
 		t.Errorf("the bar is %d cells, want the full %d", lipgloss.Width(bare), m.width)
 	}
-	// Two fills: the bright one for the state, the quiet one for the rest.
+	// Two fills: the state's hue on the block, the band on the rest.
 	codes := sgrCodes(bar)
-	if !codes[fillBG] {
-		t.Errorf("the state block is not filled: %v", codes)
+	if !codes[liveBG] {
+		t.Errorf("the state block is not blue: %v", codes)
 	}
 	if !codes["100"] {
 		t.Errorf("the rest of the bar is not filled: %v", codes)
@@ -466,6 +466,15 @@ const (
 	foregroundFG = "37"
 	fillBG       = "107"
 	onFillFG     = "30"
+)
+
+// The state block's three fills, as the SGR parameters they come out as:
+// ANSI red, green and blue as a background. They are the only hues in the
+// frame — see TestNothingIsColouredButTheStateBlock.
+const (
+	alertBG = "41"
+	goodBG  = "42"
+	liveBG  = "44"
 )
 
 // highlightSGR is the background a selected row renders as when the
@@ -1103,11 +1112,15 @@ var chromaticCodes = []string{
 	"92", "93", "94", "95", "96", "102", "103", "104", "105", "106",
 }
 
-// The interface is monochrome. Everything that has to stand out does it by
-// weight or by being turned inside out, so a hue appearing anywhere is a
-// regression — and an easy one to make, since reaching for a colour is the
-// obvious way to mark something.
-func TestNothingIsColouredButTrouble(t *testing.T) {
+// The interface is monochrome everywhere but the state block. Everything else
+// that has to stand out does it by weight or by being turned inside out, so a
+// hue anywhere else is a regression — and an easy one to make, since reaching
+// for a colour is the obvious way to mark something.
+//
+// The block earns the exception: it is the one thing on screen that says how
+// the app is going rather than what it holds, and a colour is how a glance
+// reads that. What it is coloured is TestTheStateBlockIsColouredByState's.
+func TestNothingIsColouredButTheStateBlock(t *testing.T) {
 	m := sample()
 	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
 	m = next.(Model)
@@ -1133,15 +1146,25 @@ func TestNothingIsColouredButTrouble(t *testing.T) {
 				tab: Playlist{ID: "MPRE", Title: "Cherry", kind: tabAlbum}}
 			return m
 		}},
+		{"with the keys sheet open", func(m Model) Model {
+			m.sheetOpen = true
+			return m
+		}},
 	} {
 		t.Run(state.name, func(t *testing.T) {
-			frame := state.setup(m).View().Content
-			for code := range sgrCodes(frame) {
-				if slices.Contains(chromaticCodes, code) {
-					t.Errorf("a hue got in: SGR %s", code)
+			at := state.setup(m)
+			for row, line := range strings.Split(at.View().Content, "\n") {
+				// Every row but the one the block is on.
+				if row == at.statusRow() {
+					continue
 				}
-				if code == "31" || code == "41" {
-					t.Errorf("red without trouble: SGR %s", code)
+				for code := range sgrCodes(line) {
+					if slices.Contains(chromaticCodes, code) {
+						t.Errorf("a hue got in on row %d: SGR %s", row, code)
+					}
+					if code == "31" || code == alertBG {
+						t.Errorf("red without trouble on row %d: SGR %s", row, code)
+					}
 				}
 			}
 		})
@@ -1150,8 +1173,62 @@ func TestNothingIsColouredButTrouble(t *testing.T) {
 	// And trouble is still red, or the exception is worth nothing.
 	m.Err = errors.New("something went wrong")
 	codes := sgrCodes(m.View().Content)
-	if !codes["41"] && !codes["31"] {
+	if !codes[alertBG] && !codes["31"] {
 		t.Errorf("an error is not red: %v", codes)
+	}
+}
+
+// The block is coloured by what it says: red for trouble, blue while the
+// player is on a track, green when there is nothing to report. The word and
+// the fill come from one place, so a LOADING that has gone blue is not a
+// state this can reach.
+func TestTheStateBlockIsColouredByState(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(m *Model)
+		word  string
+		hue   string
+	}{
+		{"idle", func(m *Model) {}, "READY", goodBG},
+		{"playing", func(m *Model) {
+			m.playing = Track{VideoID: "a", Title: "Poly"}
+		}, "PLAYING", liveBG},
+		{"paused", func(m *Model) {
+			m.playing = Track{VideoID: "a", Title: "Poly"}
+			m.Paused = true
+		}, "PAUSED", liveBG},
+		{"loading", func(m *Model) { m.loading = true }, "LOADING", goodBG},
+		{"a wait while a track plays", func(m *Model) {
+			m.playing = Track{VideoID: "a", Title: "Poly"}
+			m.loadingMore = true
+		}, "LOADING", goodBG},
+		{"trouble", func(m *Model) {
+			m.Err = errors.New("no")
+		}, "ERROR", alertBG},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sample()
+			tc.setup(&m)
+			row := strings.Split(m.View().Content, "\n")[m.statusRow()]
+			if got := m.statusKey(); got != tc.word {
+				t.Fatalf("the block says %q, want %q", got, tc.word)
+			}
+			if !sgrCodes(row)[tc.hue] {
+				t.Errorf("%s is not SGR %s: %v", tc.word, tc.hue, sgrCodes(row))
+			}
+			// One hue on the row, not two: the other two states' colours are
+			// not on it anywhere.
+			for _, other := range []string{alertBG, goodBG, liveBG} {
+				if other != tc.hue && sgrCodes(row)[other] {
+					t.Errorf("%s also carries SGR %s", tc.word, other)
+				}
+			}
+			// The fill is the block's own, not the whole row's: the band
+			// behind what is playing is still the highlight.
+			if !sgrCodes(row)[highlightSGR] {
+				t.Errorf("the band lost its fill: %v", sgrCodes(row))
+			}
+		})
 	}
 }
 

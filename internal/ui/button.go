@@ -6,20 +6,20 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// A button is its label with a space either side: one row, nothing wrapped
-// round it. It went through a bordered box three rows tall and a pair of
-// rounded caps on the way here, and both were bigger than what they were
-// wrapping. A word is a button.
+// A button is its label: one row, nothing wrapped round it and no air of its
+// own. It went through a bordered box three rows tall, a pair of rounded caps
+// and a space either side on the way here, and every one of them was bigger
+// than the thing it was wrapping. A word is a button.
 //
-// A cell is the narrowest space a terminal has. The thin spaces — U+2009 and
-// its neighbours — are a cell wide here too, and are in neither of the fonts
-// this is read in, so they would come from whatever fallback the terminal
-// picked and at whatever width it liked.
+// Dropping the padding also puts the row of them where everything else on the
+// screen starts. A button was the only thing indented by a cell, so the
+// transport sat a step right of the list above it and the bar below it.
 //
-// The gap is two, which is the only separation there is, and every cell of a
-// button answers to a click, padding included.
+// The gap is two, which is now the only separation there is, and it is a gap
+// between buttons rather than part of one: every cell a button draws answers
+// to a click, and no cell it does not draw does.
 const (
-	buttonPadding = 1
+	buttonPadding = 0
 	buttonGap     = 2
 	// controlsRows is how tall a row of them is.
 	controlsRows = 1

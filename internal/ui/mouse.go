@@ -22,6 +22,7 @@ const (
 	regionBar
 	regionControls
 	regionModal
+	regionHelp
 )
 
 // hit maps a screen position onto what is drawn there: a tab index, a track
@@ -62,6 +63,13 @@ func (m Model) hit(x, y int) (region, int) {
 			}
 		}
 		return regionNone, 0
+
+	case y == m.statusRow():
+		if start, ok := m.helpButtonSpan(); ok &&
+			x >= start && x < start+helpButtonWidth {
+			return regionHelp, 0
+		}
+		return regionNone, 0
 	}
 	return regionNone, 0
 }
@@ -99,6 +107,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseWheelMsg:
+		if m.sheetOpen {
+			return m, nil // the sheet is one screen of keys; there is nowhere to scroll
+		}
 		if m.menu.open {
 			return m, nil // the menu is anchored; scrolling under it would lie
 		}
@@ -116,8 +127,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		switch mouse.Button {
 		case tea.MouseRight:
+			if m.sheetOpen {
+				return m, nil
+			}
 			return m.openMenuAt(mouse)
 		case tea.MouseLeft:
+			if m.sheetOpen {
+				return m.clickSheet(mouse)
+			}
 			if m.menu.open {
 				return m.clickMenu(mouse)
 			}
@@ -194,6 +211,9 @@ func (m Model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 
 	case regionControls:
 		return m.press(control(n))
+
+	case regionHelp:
+		return m.toggleSheet()
 
 	case regionScrollbar:
 		m.draggingScroll = true
