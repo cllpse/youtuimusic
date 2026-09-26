@@ -1158,7 +1158,7 @@ const (
 	tabsHeight = 3 // border, label, border
 	// playerRows is the rule, the buttons, a blank, the bar and a blank. The
 	// title that used to sit up here is the status bar's now.
-	playerRows = 3 + controlsRows + barRows
+	playerRows = 4 + controlsRows
 	statusRows = 1
 	// progressRows is everything below the list.
 	progressRows = playerRows + statusRows
@@ -1189,8 +1189,8 @@ func (m Model) bodyHeight() int {
 // counted from there.
 func (m Model) playerTop() int { return tabsHeight + m.bodyHeight() }
 
-// barRow is the first line the progress bar is drawn on: the rule, the
-// buttons, a blank, and then the bar. It is barRows tall from there.
+// barRow is the line the progress bar is drawn on: the rule, the buttons, a
+// blank, and then the bar.
 func (m Model) barRow() int { return m.playerTop() + 2 + controlsRows }
 
 // statusRow is the bar under the player.
@@ -1202,11 +1202,15 @@ func (m Model) controlsRow() int { return m.playerTop() + 1 }
 
 // barGeometry is the column the progress bar starts at and how wide it is.
 // Rendering and hit-testing both go through this, so a click lands where the
-// bar appears to be. The bar is the whole row: nothing flanks it.
+// bar appears to be — which is not the whole row: a time and a space sit
+// either side of it.
 func (m Model) barGeometry() (start, width int) {
-	// Never wider than the box: a floor here would push the border out and
-	// take the whole frame with it.
-	return contentLeft, m.contentWidth()
+	if !m.barShowsTimes() {
+		return contentLeft, m.contentWidth()
+	}
+	// The time and the space beside it, either side.
+	flank := barTimeWidth + 1
+	return contentLeft + flank, max(m.contentWidth()-2*flank, 0)
 }
 
 // fraction is how far through the track the position is.
@@ -1673,13 +1677,27 @@ func newBar(fill progress.ColorFunc) progress.Model {
 	return bar
 }
 
-// barRows is how tall the bar is drawn. The component draws one row, and a
-// row of it is the same row however many times it is asked for — ViewAs is a
-// function of the fraction and the width and nothing else — so a taller bar
-// is that row stacked, with no bar of our own anywhere in it.
-const barRows = 2
+// barTimeWidth is the room kept either side of the bar for a time. Five
+// cells fits MM:SS, which is every track that is not an hour long, and it is
+// kept whether or not there is a time to put in it so that the bar does not
+// move as the seconds tick over.
+const barTimeWidth = 5
 
-// renderBar draws the position, greyed out while playback is paused.
+// barLeastWidth is how much bar is worth keeping. Under that the times give
+// way: they are a hint about the bar, and a hint that has eaten the thing it
+// was hinting at is not one.
+const barLeastWidth = 8
+
+// barShowsTimes reports whether there is room for them.
+func (m Model) barShowsTimes() bool {
+	return m.contentWidth() >= 2*(barTimeWidth+1)+barLeastWidth
+}
+
+// renderBar draws the position between the time it is at and the time it
+// runs to, greyed out while playback is paused.
+//
+// The bar says how far through the track it is; the two times say how far
+// that is in seconds, which a bar on its own never does.
 //
 // The groove takes the row highlight, so the bar sits on the same surface
 // the selected row and the status bar do. It is set here rather than when the
@@ -1693,12 +1711,17 @@ func (m Model) renderBar() string {
 	}
 	bar.EmptyColor = m.highlightColor()
 
-	row := bar.ViewAs(m.fraction())
-	rows := make([]string, barRows)
-	for i := range rows {
-		rows[i] = row
+	if !m.barShowsTimes() {
+		return bar.ViewAs(m.fraction())
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+	at, runs := "", ""
+	if m.Length > 0 {
+		at, runs = formatDuration(m.Position), formatDuration(m.Length)
+	}
+	field := func(s string) string {
+		return dim.Render(padLeft(truncate(s, barTimeWidth), barTimeWidth))
+	}
+	return field(at) + " " + bar.ViewAs(m.fraction()) + " " + field(runs)
 }
 
 // truncate cuts a string to fit a number of screen cells, ending it with an

@@ -496,7 +496,7 @@ func TestThePlayerIsUnboxedRows(t *testing.T) {
 		t.Errorf("the buttons are on row %d, want %d", m.controlsRow(), top+1)
 	}
 	// A blank before the bar and one after it, and nothing else blank.
-	for _, row := range []int{m.barRow() - 1, m.barRow() + barRows} {
+	for _, row := range []int{m.barRow() - 1, m.barRow() + 1} {
 		if got := strings.TrimSpace(plain(lines[row])); got != "" {
 			t.Errorf("row %d should be blank: %q", row, got)
 		}
@@ -504,14 +504,8 @@ func TestThePlayerIsUnboxedRows(t *testing.T) {
 	if !strings.Contains(plain(lines[m.controlsRow()]), labelPrevious) {
 		t.Errorf("the buttons are not on row %d: %q", m.controlsRow(), plain(lines[m.controlsRow()]))
 	}
-	// The bar is barRows tall, the same row stacked.
-	for row := m.barRow(); row < m.barRow()+barRows; row++ {
-		if !strings.ContainsAny(plain(lines[row]), "▌"+string(emptyCell)) {
-			t.Errorf("the bar is not on row %d: %q", row, plain(lines[row]))
-		}
-		if plain(lines[row]) != plain(lines[m.barRow()]) {
-			t.Errorf("bar row %d differs from the first", row)
-		}
+	if !strings.ContainsAny(plain(lines[m.barRow()]), "▌"+string(emptyCell)) {
+		t.Errorf("the bar is not on row %d: %q", m.barRow(), plain(lines[m.barRow()]))
 	}
 	// The buttons come before the bar, which is the way round it reads.
 	if m.controlsRow() >= m.barRow() {

@@ -407,22 +407,14 @@ func TestHitTestingMatchesTheRenderedFrame(t *testing.T) {
 	// row: nothing flanks it.
 	const barChars = string(progress.DefaultFullCharHalfBlock) +
 		string(emptyCell)
-	// The bar is barRows tall, and every one of them is the same row: the
-	// component draws one and a copy of it is stacked.
-	onBar := func(row int) bool { return row >= m.barRow() && row < m.barRow()+barRows }
-	for row := m.barRow(); row < m.barRow()+barRows; row++ {
-		if !strings.ContainsAny(lines[row], barChars) {
-			t.Fatalf("row %d is %q, which has no bar on it", row, lines[row])
-		}
-		if got := lipgloss.Width(lines[row]); got != m.width {
-			t.Errorf("bar row %d is %d cells wide, want the full %d", row, got, m.width)
-		}
-		if lines[row] != lines[m.barRow()] {
-			t.Errorf("bar row %d differs from the first: %q", row, lines[row])
-		}
+	if !strings.ContainsAny(lines[m.barRow()], barChars) {
+		t.Fatalf("row %d is %q, which has no bar on it", m.barRow(), lines[m.barRow()])
+	}
+	if got := lipgloss.Width(lines[m.barRow()]); got != m.width {
+		t.Errorf("the bar row is %d cells wide, want the full %d", got, m.width)
 	}
 	for row, line := range lines {
-		if !onBar(row) && strings.ContainsAny(line, barChars) {
+		if row != m.barRow() && strings.ContainsAny(line, barChars) {
 			t.Errorf("row %d also looks like a bar: %q", row, line)
 		}
 	}
@@ -507,22 +499,97 @@ var ansiSequence = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
 func plain(s string) string { return ansiSequence.ReplaceAllString(s, "") }
 
 // The bar row carries no numbers: no elapsed time, no total, no percentage.
-func TestTheBarRowIsNothingButTheBar(t *testing.T) {
+func TestTheBarRowIsTheBarBetweenTwoTimes(t *testing.T) {
 	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
 	m.Length, m.Position = 256*time.Second, 64*time.Second
 
 	row := plain(strings.Split(m.View().Content, "\n")[m.barRow()])
-	if strings.ContainsAny(row, "0123456789:%") {
-		t.Errorf("the bar row reads %q, want only the bar", row)
+	// Where it is and where it runs to, and no percentage.
+	if !strings.HasPrefix(row, " 1:04 ") {
+		t.Errorf("the row does not start at the position: %q", row)
 	}
+	if !strings.HasSuffix(row, " 4:16") {
+		t.Errorf("the row does not end at the length: %q", row)
+	}
+	if strings.Contains(row, "%") {
+		t.Errorf("the bar shows a percentage: %q", row)
+	}
+	if got := lipgloss.Width(row); got != m.width {
+		t.Errorf("the row is %d cells, want %d", got, m.width)
+	}
+
+	start, width := m.barGeometry()
 	full := strings.Count(row, string(progress.DefaultFullCharHalfBlock))
 	empty := strings.Count(row, string(emptyCell))
-	if full+empty != m.contentWidth() {
-		t.Errorf("the bar is %d cells of %d", full+empty, m.contentWidth())
+	if full+empty != width {
+		t.Errorf("the bar is %d cells of the %d it is given", full+empty, width)
+	}
+	// It sits where hit-testing says it does.
+	if want := barTimeWidth + 1; start != want {
+		t.Errorf("the bar starts at %d, want %d", start, want)
 	}
 	// A quarter of the way in, a quarter of the bar should be filled.
-	if want := m.contentWidth() / 4; full < want-2 || full > want+2 {
+	if want := width / 4; full < want-2 || full > want+2 {
 		t.Errorf("%d cells filled, want about %d", full, want)
+	}
+}
+
+// Both times keep their room whether or not there is anything to put in it,
+// so the bar does not move as the seconds tick over.
+func TestTheBarDoesNotMoveAsTheTimesChange(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+
+	at := func(pos, length time.Duration) (string, int) {
+		m.Position, m.Length = pos, length
+		row := plain(strings.Split(m.View().Content, "\n")[m.barRow()])
+		return row, strings.Index(row, string(progress.DefaultFullCharHalfBlock))
+	}
+	// Nothing playing, one digit of minutes, two digits, and an hour.
+	idle, _ := at(0, 0)
+	short, shortAt := at(4*time.Second, 9*time.Minute)
+	long, longAt := at(10*time.Minute, 59*time.Minute)
+	hour, hourAt := at(time.Hour, 2*time.Hour)
+
+	for _, row := range []string{idle, short, long, hour} {
+		if got := lipgloss.Width(row); got != m.width {
+			t.Errorf("a bar row is %d cells, want %d: %q", got, m.width, row)
+		}
+	}
+	for _, got := range []int{shortAt, longAt, hourAt} {
+		if got != barTimeWidth+1 {
+			t.Errorf("the bar starts at %d, want %d", got, barTimeWidth+1)
+		}
+	}
+	// Idle, the room is kept and left empty.
+	if got := strings.TrimSpace(idle[:barTimeWidth]); got != "" {
+		t.Errorf("idle shows a time: %q", got)
+	}
+}
+
+// Under a certain width the times give way: a hint that has eaten the thing
+// it was hinting at is not one.
+func TestTheTimesGiveWayOnANarrowRow(t *testing.T) {
+	for _, width := range []int{4, 12, 19, 20, 40, 100} {
+		m := New(Services{})
+		sized, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 20})
+		m = sized.(Model)
+		m.Length, m.Position = time.Minute, 30*time.Second
+
+		row := plain(strings.Split(m.View().Content, "\n")[m.barRow()])
+		if got := lipgloss.Width(row); got != width {
+			t.Errorf("width %d: the bar row is %d cells", width, got)
+		}
+		start, barWidth := m.barGeometry()
+		if m.barShowsTimes() {
+			if start != barTimeWidth+1 {
+				t.Errorf("width %d: the bar starts at %d", width, start)
+			}
+			if barWidth < barLeastWidth {
+				t.Errorf("width %d: only %d cells of bar left", width, barWidth)
+			}
+		} else if start != 0 {
+			t.Errorf("width %d: no times, but the bar starts at %d", width, start)
+		}
 	}
 }
 
@@ -616,29 +683,4 @@ func anyCode(s string, codes []string) bool {
 		}
 	}
 	return false
-}
-
-// Both rows of the bar scrub. A bar two rows tall that only answered on one
-// of them would be a bar that ignored half the clicks on it.
-func TestEveryRowOfTheBarScrubs(t *testing.T) {
-	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
-	m.Length, m.Position = 100*time.Second, 0
-
-	start, width := m.barGeometry()
-	at := start + width/2
-	for row := m.barRow(); row < m.barRow()+barRows; row++ {
-		where, x := m.hit(at, row)
-		if where != regionBar {
-			t.Errorf("row %d of the bar answered %v, want the bar", row, where)
-		}
-		if x != at {
-			t.Errorf("row %d reported column %d, want %d", row, x, at)
-		}
-	}
-	// The row above and the row below are not the bar.
-	for _, row := range []int{m.barRow() - 1, m.barRow() + barRows} {
-		if where, _ := m.hit(at, row); where == regionBar {
-			t.Errorf("row %d answers as the bar", row)
-		}
-	}
 }
