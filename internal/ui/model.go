@@ -124,9 +124,11 @@ type Model struct {
 	repeat  Repeat
 	loading bool
 
-	// highlight is the selected row's fill, asked of the terminal at
-	// startup. Nil until it answers, and some never do.
+	// highlight is the selected row's fill and dimmed the colour of a line
+	// that has to be quiet, both derived from the terminal's own background.
+	// Nil until it answers, and some never do.
 	highlight color.Color
+	dimmed    color.Color
 
 	// restoring is what the last session was playing, held until the
 	// pieces it names exist: the library for the tab, that tab's listing
@@ -525,8 +527,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.IsDark() {
 			m.highlight = lipgloss.Lighten(msg, highlightTint)
+			m.dimmed = lipgloss.Lighten(msg, dimmedTint)
 		} else {
 			m.highlight = lipgloss.Darken(msg, highlightTint)
+			m.dimmed = lipgloss.Darken(msg, dimmedTint)
 		}
 		return m, nil
 
@@ -1098,7 +1102,6 @@ func tabBorder(left, middle, right string) lipgloss.Border {
 var (
 	inactiveTabStyle = lipgloss.NewStyle().
 				Border(tabBorder("┴", "─", "┴"), true).
-				BorderForeground(foreground).
 				Faint(true).
 				Padding(0, 1)
 	activeTabStyle = inactiveTabStyle.
@@ -1114,6 +1117,18 @@ var (
 			BorderTop(false).BorderLeft(false).BorderRight(false).
 			Padding(0, 0)
 )
+
+// A tab that is not in front is dim all the way round: its label faint, its
+// border the dimmed colour rather than the full foreground. The border needs
+// saying at render time because the colour is not known until the terminal
+// answers for it.
+func (m Model) inactiveTab() lipgloss.Style {
+	return inactiveTabStyle.BorderForeground(m.dimmedColor())
+}
+
+func (m Model) tabGap() lipgloss.Style {
+	return tabGapStyle.BorderForeground(m.dimmedColor())
+}
 
 const (
 	tabsHeight = 3 // border, label, border
@@ -1275,19 +1290,19 @@ func (m Model) renderTabs() string {
 		// With no tabs the row still has to be exactly as tall, or
 		// everything below it moves up and the mouse lands on the wrong
 		// thing. Two empty lines and the rule the tabs would have sat on.
-		return "\n\n" + lipgloss.NewStyle().Foreground(foreground).
+		return "\n\n" + lipgloss.NewStyle().Foreground(m.dimmedColor()).
 			Render(strings.Repeat("─", max(0, m.width)))
 	}
 	rendered := make([]string, 0, len(spans))
 	for _, s := range spans {
-		style := inactiveTabStyle
+		style := m.inactiveTab()
 		if s.index == m.tabCursor {
 			style = activeTabStyle
 		}
 		rendered = append(rendered, style.Render(truncate(m.tabAt(s.index).Title, maxTabTitle)))
 	}
 	row := lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
-	gap := tabGapStyle.Render(strings.Repeat(" ", max(0, m.width-lipgloss.Width(row))))
+	gap := m.tabGap().Render(strings.Repeat(" ", max(0, m.width-lipgloss.Width(row))))
 	return lipgloss.JoinHorizontal(lipgloss.Bottom, row, gap)
 }
 
@@ -1485,6 +1500,16 @@ func (m Model) contentWidth() int { return max(0, m.width-2*contentLeft) }
 // little enough that a row of text still reads as text on it.
 const highlightTint = 0.10
 
+// dimmedTint is how far a dimmed line moves off the page. Half way, which is
+// what faint text lands on, so the two read as the same weight.
+//
+// A border cannot be faint — lipgloss draws one as a colour and there is no
+// attribute to give it — so a dim border has to be a dim colour, and the
+// scheme has only colour 8 for that. Against a white page colour 8 is about
+// 1.88:1, which is not a line. Half a step off the page is nearer 4:1 either
+// way the page runs.
+const dimmedTint = 0.50
+
 // A note on switching themes underneath a running app.
 //
 // Everything drawn in a named palette entry follows a theme change on its
@@ -1515,6 +1540,16 @@ func (m Model) highlightColor() color.Color {
 		return m.highlight
 	}
 	return surface
+}
+
+// dimmedColor is a line that is on the page without being read. Until the
+// terminal says what colour it is, the scheme's own dim entry stands in,
+// which is what every border used before this.
+func (m Model) dimmedColor() color.Color {
+	if m.dimmed != nil {
+		return m.dimmed
+	}
+	return muted
 }
 
 func (m Model) renderPlayer() string {

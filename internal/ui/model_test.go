@@ -1150,12 +1150,16 @@ func TestNothingIsColouredButTrouble(t *testing.T) {
 // — #BDBDBD on #FFFFFF is about 1.8:1 — so dim text is the terminal's own
 // faint instead, and borders take the foreground.
 //
-// The two exceptions are the scrollbar and the bar's groove. Those are the
-// row highlight, which is a surface and is meant to be near the page; where
-// the terminal does not say what colour it is, colour 8 is the nearest thing
-// the scheme has to that. Neither is text.
+// Where the terminal will not say what colour it is, colour 8 is the nearest
+// the scheme has to a dim anything and everything dim falls back to it. That
+// is the one case this does not cover, and it is checked with the page known.
 func TestTheDimColourIsNotDrawnAsText(t *testing.T) {
 	m := sample()
+	// With the page's colour known, every dim line is derived from it — half
+	// a step off the page, which is a line. Colour 8 is only what stands in
+	// until the terminal answers, and it answers here.
+	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
+	m = answered.(Model)
 	m.Tracks = rows(100)
 	m.playing, m.Length, m.Position = m.Tracks[3], time.Minute, 20*time.Second
 	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
@@ -1297,5 +1301,35 @@ func TestTheFirstViewDeclaresEveryMode(t *testing.T) {
 	}
 	if first.ReportFocus != sized.ReportFocus {
 		t.Errorf("focus reporting: %v then %v", first.ReportFocus, sized.ReportFocus)
+	}
+}
+
+// A tab that is not in front is dim all the way round: its label faint, its
+// border a dimmed colour rather than the full foreground.
+func TestAnInactiveTabIsDimAllTheWayRound(t *testing.T) {
+	m := sample()
+	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
+	m = answered.(Model)
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
+	m.tabCursor = 0
+
+	rendered := m.renderTabs()
+	// The dimmed colour is on the row, as a foreground, and it is derived
+	// rather than colour 8 — a border cannot be faint, so it has to be a
+	// colour, and the scheme's own dim entry is not a line on a light page.
+	r, g, b, _ := m.dimmedColor().RGBA()
+	want := fmt.Sprintf("38;2;%d;%d;%d", r>>8, g>>8, b>>8)
+	if !strings.Contains(rendered, want) {
+		t.Errorf("the tab borders are not the dimmed colour %s:\n%q", want, rendered)
+	}
+	if sgrCodes(rendered)["90"] {
+		t.Errorf("a border fell back to colour 8: %v", sgrCodes(rendered))
+	}
+	// The label is faint, and the tab in front is neither.
+	if !sgrCodes(rendered)[faintSGR] {
+		t.Error("no tab is faint")
+	}
+	if !sgrCodes(rendered)[emphasisFG] {
+		t.Error("the tab in front is not emphasised")
 	}
 }

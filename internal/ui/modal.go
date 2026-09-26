@@ -210,9 +210,10 @@ func (m Model) renderModal() string {
 	return modalBox.Render(strings.Join(lines, "\n"))
 }
 
-// modalCloseButton is where the way out sits. Every popover has one.
+// modalCloseButton is where the way out sits. Every popover has one,
+// including a search: its header draws the button, so the button answers.
 func (m Model) modalCloseButton() (x, y, width int, ok bool) {
-	if !m.detour.active || m.detour.tab.kind == tabSearch {
+	if !m.detour.active {
 		return 0, 0, 0, false
 	}
 	mx, my, mwidth, _ := m.modalBounds()

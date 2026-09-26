@@ -1082,3 +1082,80 @@ func TestTheSearchBoxIsRuledOffFromItsResults(t *testing.T) {
 		t.Errorf("an artist popover is ruled off too: %q", line)
 	}
 }
+
+// A search can sit at the bottom of a stack: go to an album or an artist
+// from a result and the search is still there to come back to, query and
+// results intact.
+func TestASearchKeepsItsPlaceUnderAnAlbum(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.results = []ytm.Track{{VideoID: "z", Title: "Found", Artist: "Z",
+		AlbumID: "MPREbCherry", ArtistID: "UCdaphni"}}
+	lib.tracks["MPREbCherry"] = []ytm.Track{{VideoID: "c1", Title: "Cherry Track"}}
+
+	next, cmd := m.openSearch()
+	m = drain(t, next.(Model), cmd)
+	for _, k := range []string{"f", "o", "u", "n", "d"} {
+		n, c := m.Update(keyPress(k))
+		m = drain(t, n.(Model), c)
+	}
+	n, c := m.Update(keyPress("enter"))
+	m = drain(t, n.(Model), c)
+	if len(m.detour.tracks) == 0 {
+		t.Fatal("the search found nothing, so this proves nothing")
+	}
+
+	// The menu is reachable from a result, and it offers somewhere to go.
+	x, y, _, _ := m.modalBounds()
+	n2, c2 := m.Update(rightClick(x+4, y+1+modalHeader))
+	m = drain(t, n2.(Model), c2)
+	if !m.menu.open {
+		t.Fatal("no menu on a search result")
+	}
+	at := -1
+	for i, row := range m.menuRows() {
+		if row.item == menuAlbum {
+			if !row.enabled {
+				t.Fatal("go to album is offered but not enabled")
+			}
+			at = i
+		}
+	}
+	n3, c3 := m.activate(at)
+	m = drain(t, n3.(Model), c3)
+
+	if m.detour.tab.kind != tabAlbum {
+		t.Fatalf("it went to %v", m.detour.tab.kind)
+	}
+	if len(m.history) != 1 || m.history[0].tab.kind != tabSearch {
+		t.Fatalf("the search is not behind it: %+v", m.history)
+	}
+
+	// The way out of the album lands back on the search, as it was.
+	cx, cy, _, ok := m.modalCloseButton()
+	if !ok {
+		t.Fatal("the album has no way out")
+	}
+	n4, c4 := m.Update(click(cx+1, cy))
+	back := drain(t, n4.(Model), c4)
+	if back.detour.tab.kind != tabSearch {
+		t.Fatalf("closing the album landed on %v", back.detour.tab.kind)
+	}
+	if back.detour.query != "found" {
+		t.Errorf("the query came back as %q", back.detour.query)
+	}
+	if len(back.detour.tracks) == 0 {
+		t.Error("the results did not come back")
+	}
+
+	// And the search's own way out works, which it did not when the button
+	// was drawn on it but nothing answered for it.
+	sx, sy, _, ok := back.modalCloseButton()
+	if !ok {
+		t.Fatal("the search has no way out")
+	}
+	n5, c5 := back.Update(click(sx+1, sy))
+	shut := drain(t, n5.(Model), c5)
+	if shut.detour.active {
+		t.Error("the search would not close")
+	}
+}
