@@ -260,10 +260,19 @@ type detour struct {
 	more    ytm.Continuation
 
 	// A search popover carries its own input. typing is whether keys go to
-	// it rather than to the list below.
+	// it rather than to the list below, and while they do nothing in the
+	// list is chosen — cursor is noRow and the results are just results.
 	query  string
 	typing bool
+	// searched is the query the results below belong to, which is not the
+	// query being typed. Empty until one has been run, which is how the
+	// popover tells "nothing typed yet" from "nothing found".
+	searched string
 }
+
+// noRow is a cursor with nothing under it. A search popover starts there and
+// goes back there when the input takes the keys again.
+const noRow = -1
 
 // currentTab is what a fetch in flight belongs to: the popover when one is
 // open, the tab in front otherwise.
@@ -684,11 +693,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.detour.arrival, m.detour.more = fromAPI(msg.page.Tracks), msg.page.Next
 		m.detour.tracks = m.detour.arrival
-		m.detour.cursor, m.detour.offset = 0, 0
+		// Nothing is chosen: the results are results until the reader picks
+		// one, and picking the first for them was a guess that also cost a
+		// stream resolve for a track nobody had asked to hear.
+		m.detour.cursor, m.detour.offset = noRow, 0
 		m.loading, m.Err = false, nil
-		if len(m.detour.tracks) > 0 {
-			return m, batch(m.prefetch(m.detour.tracks[0].VideoID), m.continueSort())
-		}
 		return m, m.continueSort()
 
 	case ratedMsg:

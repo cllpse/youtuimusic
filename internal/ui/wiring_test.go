@@ -373,8 +373,13 @@ func TestSearchFillsThePopover(t *testing.T) {
 	next, cmd := m.Update(keyPress("enter"))
 	m = drain(t, next.(Model), cmd)
 
-	if m.detour.typing {
-		t.Error("still typing after enter")
+	// The keys stay in the box: results arrive with nothing chosen and down
+	// is what goes into them.
+	if !m.detour.typing {
+		t.Error("enter took the keys out of the box")
+	}
+	if m.detour.cursor != noRow {
+		t.Errorf("a result was chosen for the reader: %d", m.detour.cursor)
 	}
 	if len(m.detour.tracks) != 1 || m.detour.tracks[0].Title != "Found" {
 		t.Fatalf("popover tracks = %+v", m.detour.tracks)

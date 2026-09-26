@@ -1228,3 +1228,109 @@ func TestAThreeDeepStackShowsEveryLevel(t *testing.T) {
 		t.Errorf("the search came back as %q", m.detour.query)
 	}
 }
+
+// Down goes from the box into the results and up comes back out of them,
+// which means nothing has to be chosen for the reader when they arrive.
+func TestDownAndUpWalkBetweenTheSearchBoxAndItsResults(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.results = []ytm.Track{
+		{VideoID: "a", Title: "First", Artist: "A"},
+		{VideoID: "b", Title: "Second", Artist: "B"},
+	}
+
+	next, cmd := m.openSearch()
+	m = drain(t, next.(Model), cmd)
+	if !m.detour.typing || m.detour.cursor != noRow {
+		t.Fatalf("a fresh search is typing=%v cursor=%d", m.detour.typing, m.detour.cursor)
+	}
+	for _, k := range []string{"f", "i", "r", "s", "t"} {
+		n, c := m.Update(keyPress(k))
+		m = drain(t, n.(Model), c)
+	}
+	n, c := m.Update(keyPress("enter"))
+	m = drain(t, n.(Model), c)
+	if len(m.detour.tracks) != 2 {
+		t.Fatalf("the search found %d", len(m.detour.tracks))
+	}
+	// Nothing chosen, and nothing highlighted with it.
+	if m.detour.cursor != noRow {
+		t.Fatalf("a result was chosen: %d", m.detour.cursor)
+	}
+	if sgrCodes(m.renderModal())[highlightSGR] {
+		t.Error("a row is filled with nothing chosen")
+	}
+
+	// Down goes in, at the first result.
+	n, c = m.Update(keyPress("down"))
+	m = drain(t, n.(Model), c)
+	if m.detour.typing {
+		t.Error("down left the keys in the box")
+	}
+	if m.detour.cursor != 0 {
+		t.Fatalf("down landed on %d, want the first result", m.detour.cursor)
+	}
+
+	// And on down the list from there.
+	n, c = m.Update(keyPress("down"))
+	m = drain(t, n.(Model), c)
+	if m.detour.cursor != 1 {
+		t.Fatalf("the second down landed on %d", m.detour.cursor)
+	}
+
+	// Up comes back through the list.
+	n, c = m.Update(keyPress("up"))
+	m = drain(t, n.(Model), c)
+	if m.detour.cursor != 0 || m.detour.typing {
+		t.Fatalf("up left cursor=%d typing=%v", m.detour.cursor, m.detour.typing)
+	}
+
+	// And up off the top is the box again, with the query still in it.
+	n, c = m.Update(keyPress("up"))
+	m = drain(t, n.(Model), c)
+	if !m.detour.typing {
+		t.Error("up off the top did not go back to the box")
+	}
+	if m.detour.cursor != noRow {
+		t.Errorf("it left %d chosen", m.detour.cursor)
+	}
+	if m.detour.query != "first" {
+		t.Errorf("the query came back as %q", m.detour.query)
+	}
+	// Typing works again from there.
+	n, c = m.Update(keyPress("x"))
+	m = drain(t, n.(Model), c)
+	if m.detour.query != "firstx" {
+		t.Errorf("typing after coming back gave %q", m.detour.query)
+	}
+}
+
+// Nothing typed yet and nothing found are different things to say.
+func TestTheSearchNoteTellsUntypedFromUnfound(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.results = nil
+
+	next, cmd := m.openSearch()
+	m = drain(t, next.(Model), cmd)
+	// Nothing is in flight, so the popover is not waiting on anything.
+	m.loading = false
+	if got := plain(m.renderModal()); !strings.Contains(got, labelTypeToSearch) {
+		t.Errorf("a fresh search does not invite one: %q", got)
+	}
+
+	// Mid-word there is still nothing to have found.
+	for _, k := range []string{"z", "z"} {
+		n, c := m.Update(keyPress(k))
+		m = drain(t, n.(Model), c)
+	}
+	m.loading = false
+	if got := plain(m.renderModal()); strings.Contains(got, "Nothing found") {
+		t.Errorf("it gave up before the search was run: %q", got)
+	}
+
+	n, c := m.Update(keyPress("enter"))
+	m = drain(t, n.(Model), c)
+	m.loading = false
+	if got := plain(m.renderModal()); !strings.Contains(got, "Nothing found") {
+		t.Errorf("a fruitless search does not say so: %q", got)
+	}
+}

@@ -196,7 +196,8 @@ func TestSearchTypesIntoThePopover(t *testing.T) {
 
 	// j and k are text here, not movement.
 	m = press(m, "j", "k")
-	if m.detour.query != "jk" || m.trackCursor != 0 || m.detour.cursor != 0 {
+	// Nothing is chosen in the popover while the box has the keys.
+	if m.detour.query != "jk" || m.trackCursor != 0 || m.detour.cursor != noRow {
 		t.Fatalf("query = %q, list cursor = %d, popover cursor = %d",
 			m.detour.query, m.trackCursor, m.detour.cursor)
 	}

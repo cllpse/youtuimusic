@@ -92,6 +92,7 @@ func (m Model) openSearch() (tea.Model, tea.Cmd) {
 		active: true,
 		tab:    Playlist{Title: "Search", kind: tabSearch},
 		typing: true,
+		cursor: noRow,
 	}
 	return m, nil
 }
@@ -139,11 +140,20 @@ func (m Model) typeInto(key string) (tea.Model, tea.Cmd, bool) {
 		next, cmd := m.leaveDetour()
 		return next, cmd, true
 	case "enter":
-		m.detour.typing = false
 		if m.detour.query == "" {
 			return m, nil, true
 		}
+		// The keys stay in the input: results arrive with nothing chosen,
+		// and down is what goes into them.
+		m.detour.searched = m.detour.query
 		return m, batch(m.startLoading(), m.runSearch(m.detour.query)), true
+	case "down":
+		if len(m.detour.tracks) == 0 {
+			return m, nil, true
+		}
+		m.detour.typing = false
+		m.detour.cursor, m.detour.offset = 0, 0
+		return m.afterDetourMove()
 	case "backspace":
 		if q := m.detour.query; q != "" {
 			m.detour.query = q[:len(q)-1]
@@ -177,8 +187,10 @@ func (m Model) renderModal() string {
 
 	if m.detour.tab.kind == tabSearch && !m.loading && len(m.detour.tracks) == 0 {
 		note := dim.Render(labelTypeToSearch)
-		if !m.detour.typing && m.detour.query != "" {
-			// No ellipsis: a result, not an invitation.
+		if m.detour.searched != "" {
+			// What was run, not what is being typed: mid-word there is
+			// nothing to have found yet. No ellipsis either — a result
+			// rather than an invitation.
 			note = dim.Render("Nothing found")
 		}
 		lines = append(lines, lipgloss.Place(inner, height,
@@ -291,6 +303,7 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
 	case "/":
 		if m.detour.tab.kind == tabSearch {
 			m.detour.typing = true
+			m.detour.cursor, m.detour.offset = noRow, 0
 			return m, nil, true
 		}
 		// A search from inside a popover is still a fresh start, not
@@ -302,6 +315,13 @@ func (m Model) handleModalKey(key string) (tea.Model, tea.Cmd, bool) {
 		return next, cmd, true
 
 	case "up", "k":
+		if m.detour.tab.kind == tabSearch && m.detour.cursor <= 0 {
+			// Off the top of the results is the input, not the top of the
+			// results again.
+			m.detour.typing = true
+			m.detour.cursor, m.detour.offset = noRow, 0
+			return m, nil, true
+		}
 		m.moveDetour(-1)
 		return m.afterDetourMove()
 	case "down", "j":
@@ -376,6 +396,9 @@ func (m Model) clickModal(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	// Clicking into the results is choosing one, so the keys stop going to
+	// the search input if that is where they were.
+	m.detour.typing = false
 	if row == len(m.detour.tracks) {
 		// The row that offers the next page is not a track.
 		m.detour.cursor = row
