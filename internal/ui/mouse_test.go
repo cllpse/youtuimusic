@@ -460,9 +460,16 @@ func TestBarRendersExactlyItsGeometry(t *testing.T) {
 		m = sized.(Model)
 		m.Length, m.Position = time.Minute, 30*time.Second
 
+		// Measured on what is drawn, not on the model's own bar: the width
+		// belongs to the render now, because it depends on how wide the
+		// times beside it read.
 		_, barWidth := m.barGeometry()
-		if got := lipgloss.Width(m.bar.View()); got != barWidth {
-			t.Errorf("width %d: bar renders %d cells, geometry says %d", width, got, barWidth)
+		row := plain(m.renderBar())
+		drawn := strings.Count(row, string(progress.DefaultFullCharHalfBlock)) +
+			strings.Count(row, string(emptyCell))
+		if drawn != barWidth {
+			t.Errorf("width %d: bar renders %d cells, geometry says %d",
+				width, drawn, barWidth)
 		}
 	}
 }
@@ -504,8 +511,8 @@ func TestTheBarRowIsTheBarBetweenTwoTimes(t *testing.T) {
 	m.Length, m.Position = 256*time.Second, 64*time.Second
 
 	row := plain(strings.Split(m.View().Content, "\n")[m.barRow()])
-	// Where it is and where it runs to, and no percentage.
-	if !strings.HasPrefix(row, " 1:04 ") {
+	// Where it is and where it runs to, as wide as they read and no wider.
+	if !strings.HasPrefix(row, "1:04 ") {
 		t.Errorf("the row does not start at the position: %q", row)
 	}
 	if !strings.HasSuffix(row, " 4:16") {
@@ -524,8 +531,9 @@ func TestTheBarRowIsTheBarBetweenTwoTimes(t *testing.T) {
 	if full+empty != width {
 		t.Errorf("the bar is %d cells of the %d it is given", full+empty, width)
 	}
-	// It sits where hit-testing says it does.
-	if want := barTimeWidth + 1; start != want {
+	// It sits where hit-testing says it does, which is past the position and
+	// the space after it.
+	if want := len("1:04") + 1; start != want {
 		t.Errorf("the bar starts at %d, want %d", start, want)
 	}
 	// A quarter of the way in, a quarter of the bar should be filled.
@@ -534,42 +542,50 @@ func TestTheBarRowIsTheBarBetweenTwoTimes(t *testing.T) {
 	}
 }
 
-// Both times keep their room whether or not there is anything to put in it,
-// so the bar does not move as the seconds tick over.
-func TestTheBarDoesNotMoveAsTheTimesChange(t *testing.T) {
+// The times are as wide as they read, so the bar gives up a cell when a
+// track passes ten minutes and takes it back on the next one. What has to
+// hold is that the row is always the width of the terminal and that the bar
+// is where hit-testing says it is.
+func TestTheBarAndItsTimesAlwaysFillTheRow(t *testing.T) {
 	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
 
-	at := func(pos, length time.Duration) (string, int) {
+	at := func(pos, length time.Duration) (Model, string) {
 		m.Position, m.Length = pos, length
-		row := plain(strings.Split(m.View().Content, "\n")[m.barRow()])
-		return row, strings.Index(row, string(progress.DefaultFullCharHalfBlock))
+		return m, plain(strings.Split(m.View().Content, "\n")[m.barRow()])
 	}
-	// Nothing playing, one digit of minutes, two digits, and an hour.
-	idle, _ := at(0, 0)
-	short, shortAt := at(4*time.Second, 9*time.Minute)
-	long, longAt := at(10*time.Minute, 59*time.Minute)
-	hour, hourAt := at(time.Hour, 2*time.Hour)
-
-	for _, row := range []string{idle, short, long, hour} {
-		if got := lipgloss.Width(row); got != m.width {
-			t.Errorf("a bar row is %d cells, want %d: %q", got, m.width, row)
-		}
-	}
-	for _, got := range []int{shortAt, longAt, hourAt} {
-		if got != barTimeWidth+1 {
-			t.Errorf("the bar starts at %d, want %d", got, barTimeWidth+1)
-		}
-	}
-	// Idle, the room is kept and reads as a bar that has not started: a zero
-	// where the position goes and an ellipsis where a length would be.
-	if got := idle[:barTimeWidth]; got != labelIdlePosition {
-		t.Errorf("idle starts at %q, want %q", got, labelIdlePosition)
-	}
-	if !strings.HasSuffix(idle, labelIdleLength) {
-		t.Errorf("idle does not end in an ellipsis: %q", idle)
-	}
-	if strings.Contains(idle, ":00 ▌") {
-		t.Errorf("idle drew a filled bar: %q", idle)
+	for _, tc := range []struct {
+		name           string
+		pos, length    time.Duration
+		wantAt, wantTo string
+	}{
+		{"idle", 0, 0, labelIdlePosition, labelIdleLength},
+		{"under ten minutes", 4 * time.Second, 9 * time.Minute, "0:04", "9:00"},
+		{"over ten minutes", 10 * time.Minute, 59 * time.Minute, "10:00", "59:00"},
+		{"over an hour", time.Hour, 2 * time.Hour, "60:00", "120:00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at, row := at(tc.pos, tc.length)
+			if got := lipgloss.Width(row); got != at.width {
+				t.Errorf("the row is %d cells, want %d: %q", got, at.width, row)
+			}
+			if !strings.HasPrefix(row, tc.wantAt+" ") {
+				t.Errorf("the row starts %q, want %q", row, tc.wantAt)
+			}
+			if !strings.HasSuffix(row, " "+tc.wantTo) {
+				t.Errorf("the row ends %q, want %q", row, tc.wantTo)
+			}
+			// The bar starts just past the position it is drawn after.
+			start, width := at.barGeometry()
+			if want := lipgloss.Width(tc.wantAt) + 1; start != want {
+				t.Errorf("the bar starts at %d, want %d", start, want)
+			}
+			// And the three of them come to the whole row. Cells, not bytes:
+			// the ellipsis is one cell and three of them.
+			if got := lipgloss.Width(tc.wantAt) + 1 + width + 1 +
+				lipgloss.Width(tc.wantTo); got != at.width {
+				t.Errorf("position, bar and length come to %d of %d", got, at.width)
+			}
+		})
 	}
 }
 
@@ -588,8 +604,9 @@ func TestTheTimesGiveWayOnANarrowRow(t *testing.T) {
 		}
 		start, barWidth := m.barGeometry()
 		if m.barShowsTimes() {
-			if start != barTimeWidth+1 {
-				t.Errorf("width %d: the bar starts at %d", width, start)
+			at, _ := m.barTimes()
+			if want := lipgloss.Width(at) + 1; start != want {
+				t.Errorf("width %d: the bar starts at %d, want %d", width, start, want)
 			}
 			if barWidth < barLeastWidth {
 				t.Errorf("width %d: only %d cells of bar left", width, barWidth)

@@ -548,9 +548,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		_, barWidth := m.barGeometry()
-		m.bar.SetWidth(barWidth)
-		m.pausedBar.SetWidth(barWidth)
+		// The bar's width is not settled here: it depends on how wide the
+		// times beside it read, which changes without the terminal doing
+		// anything. renderBar sets it on the copy it draws.
 		m.scroll()
 		// The page may be a different colour than it was; ask again.
 		return m, tea.RequestBackgroundColor
@@ -1208,9 +1208,8 @@ func (m Model) barGeometry() (start, width int) {
 	if !m.barShowsTimes() {
 		return contentLeft, m.contentWidth()
 	}
-	// The time and the space beside it, either side.
-	flank := barTimeWidth + 1
-	return contentLeft + flank, max(m.contentWidth()-2*flank, 0)
+	left, right := m.barFlanks()
+	return contentLeft + left, max(m.contentWidth()-left-right, 0)
 }
 
 // fraction is how far through the track the position is.
@@ -1677,11 +1676,9 @@ func newBar(fill progress.ColorFunc) progress.Model {
 	return bar
 }
 
-// barTimeWidth is the room kept either side of the bar for a time. Five
-// cells fits MM:SS, which is every track that is not an hour long, and it is
-// kept whether or not there is a time to put in it so that the bar does not
-// move as the seconds tick over.
-const barTimeWidth = 5
+// The times either side of the bar are as wide as they read and no wider, so
+// the bar gives up a cell when a track passes ten minutes and takes it back
+// on the next one. Nothing is held for a digit that is not there.
 
 // barLeastWidth is how much bar is worth keeping. Under that the times give
 // way: they are a hint about the bar, and a hint that has eaten the thing it
@@ -1698,9 +1695,25 @@ const (
 	labelIdleLength   = "…"
 )
 
+// barTimes is what goes either side of the bar, trimmed to what it reads.
+func (m Model) barTimes() (at, runs string) {
+	if m.Length <= 0 {
+		return labelIdlePosition, labelIdleLength
+	}
+	return strings.TrimSpace(formatDuration(m.Position)),
+		strings.TrimSpace(formatDuration(m.Length))
+}
+
+// barFlanks is what the times and the space beside each of them occupy.
+func (m Model) barFlanks() (left, right int) {
+	at, runs := m.barTimes()
+	return lipgloss.Width(at) + 1, lipgloss.Width(runs) + 1
+}
+
 // barShowsTimes reports whether there is room for them.
 func (m Model) barShowsTimes() bool {
-	return m.contentWidth() >= 2*(barTimeWidth+1)+barLeastWidth
+	left, right := m.barFlanks()
+	return m.contentWidth() >= left+right+barLeastWidth
 }
 
 // renderBar draws the position between the time it is at and the time it
@@ -1720,18 +1733,17 @@ func (m Model) renderBar() string {
 		bar = m.pausedBar
 	}
 	bar.EmptyColor = m.highlightColor()
+	// The width is settled here and not on a resize, because the times are as
+	// wide as they read and what is left over is the bar's. barGeometry works
+	// it out the same way for the click that lands on it.
+	_, width := m.barGeometry()
+	bar.SetWidth(width)
 
 	if !m.barShowsTimes() {
 		return bar.ViewAs(m.fraction())
 	}
-	at, runs := labelIdlePosition, labelIdleLength
-	if m.Length > 0 {
-		at, runs = formatDuration(m.Position), formatDuration(m.Length)
-	}
-	field := func(s string) string {
-		return dim.Render(padLeft(truncate(s, barTimeWidth), barTimeWidth))
-	}
-	return field(at) + " " + bar.ViewAs(m.fraction()) + " " + field(runs)
+	at, runs := m.barTimes()
+	return dim.Render(at) + " " + bar.ViewAs(m.fraction()) + " " + dim.Render(runs)
 }
 
 // truncate cuts a string to fit a number of screen cells, ending it with an
