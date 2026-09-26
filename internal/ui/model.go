@@ -129,6 +129,7 @@ type Model struct {
 	// Nil until it answers, and some never do.
 	highlight color.Color
 	dimmed    color.Color
+	quiet     color.Color
 
 	// restoring is what the last session was playing, held until the
 	// pieces it names exist: the library for the tab, that tab's listing
@@ -528,9 +529,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.IsDark() {
 			m.highlight = lipgloss.Lighten(msg, highlightTint)
 			m.dimmed = lipgloss.Lighten(msg, dimmedTint)
+			m.quiet = lipgloss.Lighten(msg, quietTint)
 		} else {
 			m.highlight = lipgloss.Darken(msg, highlightTint)
 			m.dimmed = lipgloss.Darken(msg, dimmedTint)
+			m.quiet = lipgloss.Darken(msg, quietTint)
 		}
 		return m, nil
 
@@ -1127,7 +1130,19 @@ func (m Model) inactiveTab() lipgloss.Style {
 }
 
 func (m Model) tabGap() lipgloss.Style {
+	if m.detour.active {
+		return tabGapStyle.BorderForeground(m.quietColor())
+	}
 	return tabGapStyle.BorderForeground(m.dimmedColor())
+}
+
+// quietTab is a tab with something in front of the whole row: no faint, which
+// is a step off whatever colour it is on, but the quiet colour outright.
+func (m Model) quietTab() lipgloss.Style {
+	return inactiveTabStyle.
+		Faint(false).
+		Foreground(m.quietColor()).
+		BorderForeground(m.quietColor())
 }
 
 const (
@@ -1141,6 +1156,14 @@ const (
 	maxTabTitle  = 18
 	tabFurniture = 4 // a border and a space either side
 )
+
+// tabRuleColor is the rule the tabs sit on, which sinks with them.
+func (m Model) tabRuleColor() color.Color {
+	if m.detour.active {
+		return m.quietColor()
+	}
+	return m.dimmedColor()
+}
 
 // listHeight is how many tracks fit under the table's header.
 func (m Model) listHeight() int { return max(m.bodyHeight()-headerRows, 1) }
@@ -1293,16 +1316,18 @@ func (m Model) renderTabs() string {
 		// With no tabs the row still has to be exactly as tall, or
 		// everything below it moves up and the mouse lands on the wrong
 		// thing. Two empty lines and the rule the tabs would have sat on.
-		return "\n\n" + lipgloss.NewStyle().Foreground(m.dimmedColor()).
+		return "\n\n" + lipgloss.NewStyle().Foreground(m.tabRuleColor()).
 			Render(strings.Repeat("─", max(0, m.width)))
 	}
 	rendered := make([]string, 0, len(spans))
 	for _, s := range spans {
-		// With a popover in front, no tab is the tab in front: the one that
-		// was stops being drawn as it, which is the whole of what the row
-		// has to say about being behind something.
+		// With a popover in front, no tab is the tab in front and the whole
+		// row sinks towards the page.
 		style := m.inactiveTab()
-		if s.index == m.tabCursor && !m.detour.active {
+		switch {
+		case m.detour.active:
+			style = m.quietTab()
+		case s.index == m.tabCursor:
 			style = activeTabStyle
 		}
 		rendered = append(rendered, style.Render(truncate(m.tabAt(s.index).Title, maxTabTitle)))
@@ -1326,6 +1351,7 @@ func (m Model) table(width, height int) trackTable {
 		sort:        m.sort,
 		highlight:   m.highlightColor(),
 		inactive:    m.detour.active,
+		quiet:       m.quietColor(),
 		now:         m.clock(),
 		tracks:      m.Tracks,
 		cursor:      m.trackCursor,
@@ -1517,6 +1543,16 @@ const highlightTint = 0.10
 // way the page runs.
 const dimmedTint = 0.50
 
+// quietTint is how far a frame with something in front of it moves off the
+// page. A quarter, which is nearer the page than anything else here: it is
+// lighter than the dimmed line on a light theme and darker on a dark one,
+// because both mean the same thing — closer to the page it is sinking into.
+//
+// It is knowingly under the contrast floor the rest of the frame holds to.
+// That floor is for things being read, and nothing in a frame behind a
+// popover is being read. It is only ever used while one is in front.
+const quietTint = 0.25
+
 // A note on switching themes underneath a running app.
 //
 // Everything drawn in a named palette entry follows a theme change on its
@@ -1555,6 +1591,16 @@ func (m Model) highlightColor() color.Color {
 func (m Model) dimmedColor() color.Color {
 	if m.dimmed != nil {
 		return m.dimmed
+	}
+	return muted
+}
+
+// quietColor is what a frame behind a popover is drawn in. Until the terminal
+// says what colour it is the scheme's dim entry stands in, which is the
+// nearest thing it has to a page and is what faint used to do here.
+func (m Model) quietColor() color.Color {
+	if m.quiet != nil {
+		return m.quiet
 	}
 	return muted
 }

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 	"testing"
 	"time"
@@ -56,7 +57,7 @@ func TestTheMainViewAndThePopoverShareOneTable(t *testing.T) {
 	want := trackTable{
 		tracks: tracks, cursor: 1, width: width, height: height,
 		showRating: true, playing: "c", highlight: m.highlightColor(),
-		inactive: true,
+		inactive: true, quiet: m.quietColor(),
 	}.render()
 	if got := m.table(width, height).render(); got != want {
 		t.Errorf("the main view's rows differ from the table's:\n got %q\nwant %q", got, want)
@@ -478,7 +479,7 @@ func TestTheScrollbarMarksThePlayingTrack(t *testing.T) {
 	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
 		playing: "v50"}
 
-	bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow(), table.highlight, false)
+	bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow(), table.highlight, false, table.quiet)
 	if len(bar) != height {
 		t.Fatalf("the scrollbar is %d cells", len(bar))
 	}
@@ -515,7 +516,7 @@ func TestThePlayingMarkStaysOnTheTrough(t *testing.T) {
 	for _, at := range []int{0, 1, 18, 35, 36} {
 		table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
 			playing: fmt.Sprintf("v%d", at)}
-		bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow(), table.highlight, false)
+		bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow(), table.highlight, false, table.quiet)
 		// Found by colour: the mark is a block wherever it lands.
 		found := -1
 		for i, cell := range bar {
@@ -541,7 +542,7 @@ func TestNoMarkForATrackThatIsNotInTheList(t *testing.T) {
 		if got := table.playingRow(); got != -1 {
 			t.Errorf("playing %q gave row %d", playing, got)
 		}
-		bar := scrollbarFor(table.rowCount(), table.offset, 10, table.playingRow(), table.highlight, false)
+		bar := scrollbarFor(table.rowCount(), table.offset, 10, table.playingRow(), table.highlight, false, table.quiet)
 		for i, cell := range bar {
 			if sgrCodes(cell)[emphasisFG] {
 				t.Errorf("playing %q still marked row %d", playing, i)
@@ -570,7 +571,7 @@ func TestTheMarkAndTheThumbShareACell(t *testing.T) {
 	// top both the thumb and a mark for an early track are on row 0.
 	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
 		playing: "v0"}
-	bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow(), table.highlight, false)
+	bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow(), table.highlight, false, table.quiet)
 
 	cell := bar[0]
 	if !strings.Contains(plain(cell), "█") {
@@ -717,16 +718,17 @@ func TestARatingMarksTheTitleRatherThanAColumn(t *testing.T) {
 	}
 }
 
-// An inactive block is one faint run per row, not a row with faint parts in
+// An inactive block is one colour run per row, not a row with dim parts in
 // it. That matters beyond looks: a nested style ends in a reset, and a reset
-// inside the row would cancel the faint from there to the end of the line.
-func TestAnInactiveRowIsFaintAllTheWayAcross(t *testing.T) {
+// inside the row would drop the colour from there to the end of the line.
+func TestAnInactiveRowIsOneColourAllTheWayAcross(t *testing.T) {
 	tracks := tableTracks()
 	live := trackTable{tracks: tracks, width: 50, height: len(tracks),
 		showRating: true, cursor: 0, playing: tracks[0].VideoID,
 		highlight: surface}
 	off := live
-	off.inactive = true
+	off.inactive, off.quiet = true, color.RGBA{0xBF, 0xBF, 0xBF, 0xFF}
+	want := "\x1b[38;2;191;191;191m"
 
 	// Live, the title is plain and the columns after it are faint.
 	liveRow := live.rows()[1]
@@ -737,13 +739,16 @@ func TestAnInactiveRowIsFaintAllTheWayAcross(t *testing.T) {
 		t.Fatalf("a live row has no faint columns, so this proves nothing: %q", liveRow)
 	}
 
-	// Inactive, the whole row is one faint run.
+	// Inactive, the whole row is one run of the quiet colour.
 	offRow := off.rows()[1]
-	if !strings.HasPrefix(offRow, "\x1b[2m") {
-		t.Errorf("an inactive row does not start faint: %q", offRow)
+	if !strings.HasPrefix(offRow, want) {
+		t.Errorf("an inactive row does not start in the quiet colour: %q", offRow)
+	}
+	if strings.Contains(offRow, "\x1b[2m") {
+		t.Errorf("an inactive row is faint as well as coloured: %q", offRow)
 	}
 	// One reset, at the end of the row's own text — anything earlier would
-	// drop the faint for the rest of the line.
+	// drop the colour for the rest of the line.
 	if n := strings.Count(offRow, "\x1b[m"); n != 1 {
 		t.Errorf("an inactive row has %d resets in it: %q", n, offRow)
 	}

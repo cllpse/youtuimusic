@@ -622,7 +622,7 @@ func TestTheScrollbarThumbFollowsTheWindow(t *testing.T) {
 	height := m.listHeight()
 
 	thumbTop := func(m Model) int {
-		for i, cell := range scrollbarFor(len(m.Tracks), m.trackOffset, height, -1, m.highlightColor(), false) {
+		for i, cell := range scrollbarFor(len(m.Tracks), m.trackOffset, height, -1, m.highlightColor(), false, m.quietColor()) {
 			if strings.Contains(cell, "█") {
 				return i
 			}
@@ -1335,9 +1335,9 @@ func TestAnInactiveTabIsDimAllTheWayRound(t *testing.T) {
 }
 
 // With a popover in front, the frame behind it says nothing: no tab is the
-// tab in front, no row is selected, no row is playing, and every line is at
-// one quiet weight. The player is not among them — the transport still works
-// with a popover open, so dimming it would be a lie.
+// tab in front, no row is selected, no row is playing, and the whole of it
+// sinks towards the page. The player is not among them — the transport still
+// works with a popover open, so dimming it would be a lie.
 func TestTheFrameBehindAPopoverGoesQuiet(t *testing.T) {
 	m := sample()
 	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
@@ -1347,53 +1347,69 @@ func TestTheFrameBehindAPopoverGoesQuiet(t *testing.T) {
 	m.trackCursor = 4
 	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
 
-	live := strings.Split(m.View().Content, "\n")
-	m.detour = detour{active: true, tracks: m.Tracks,
+	behind := m
+	behind.detour = detour{active: true, tracks: m.Tracks,
 		tab: Playlist{ID: "MPRE", Title: "Cherry", kind: tabAlbum}}
-	behind := strings.Split(m.View().Content, "\n")
 
-	// The tab row: emphasised while nothing is in front, not after.
-	if !sgrCodes(live[1])[emphasisFG] {
+	r, g, b, _ := m.quietColor().RGBA()
+	quiet := fmt.Sprintf("38;2;%d;%d;%d", r>>8, g>>8, b>>8)
+
+	// The tab row: one tab in front while nothing is over it, the whole row
+	// in the quiet colour once something is.
+	live, off := m.renderTabs(), behind.renderTabs()
+	if !sgrCodes(live)[emphasisFG] {
 		t.Fatal("no tab was in front to begin with; this proves nothing")
 	}
-	if sgrCodes(behind[1])[emphasisFG] {
+	if sgrCodes(off)[emphasisFG] {
 		t.Error("a tab is still drawn as the one in front")
 	}
+	if !strings.Contains(off, quiet) {
+		t.Errorf("the tabs are not in the quiet colour %s", quiet)
+	}
 
-	// Rows the popover does not cover: the strip either side of it.
-	x, _, width, _ := m.modalBounds()
-	strip := func(lines []string, row int) string {
-		line := lines[row]
-		return line[:colToByte(plain(line), x)]
+	// The list: nothing selected, nothing playing, all of it quiet.
+	liveList := m.renderTracks(m.width, m.bodyHeight())
+	offList := behind.renderTracks(m.width, behind.bodyHeight())
+	hr, hg, hb, _ := m.highlightColor().RGBA()
+	fill := fmt.Sprintf("48;2;%d;%d;%d", hr>>8, hg>>8, hb>>8)
+	if !sgrCodes(liveList)[emphasisFG] {
+		t.Fatal("the live list does not mark what is playing; this proves nothing")
 	}
-	_ = width
+	if !strings.Contains(liveList, fill) {
+		t.Fatal("the live list does not fill the chosen row; this proves nothing")
+	}
+	if sgrCodes(offList)[emphasisFG] {
+		t.Error("the list behind still marks what is playing")
+	}
+	if strings.Contains(offList, fill) {
+		t.Error("the list behind still fills the chosen row")
+	}
+	if !strings.Contains(offList, quiet) {
+		t.Errorf("the list behind is not in the quiet colour %s", quiet)
+	}
 
-	// Nothing on the left strip is emphasised or filled any more.
-	for row := tabsHeight; row < tabsHeight+m.bodyHeight(); row++ {
-		codes := sgrCodes(strip(behind, row))
-		if codes[emphasisFG] {
-			t.Errorf("row %d is still drawn as playing", row)
-		}
-		if codes[highlightSGR] {
-			t.Errorf("row %d is still drawn as selected", row)
-		}
-	}
-	// And it is faint, which is what quiet means here.
-	var faint bool
-	for row := tabsHeight; row < tabsHeight+m.bodyHeight(); row++ {
-		if sgrCodes(strip(behind, row))[faintSGR] {
-			faint = true
-		}
-	}
-	if !faint {
-		t.Error("the list behind is not dimmed at all")
+	// The quiet colour really is nearer the page than the dimmed one — that
+	// is the whole of what makes it read as switched off.
+	qr, _, _, _ := m.quietColor().RGBA()
+	dr, _, _, _ := m.dimmedColor().RGBA()
+	if qr <= dr {
+		t.Errorf("quiet %v is not nearer a white page than dimmed %v",
+			m.quietColor(), m.dimmedColor())
 	}
 
 	// The player is untouched: it still works, so it still looks like it.
+	// Compared by what is on them rather than byte for byte: a frame with a
+	// popover on it goes through the compositor, which writes the same cells
+	// out with its own escapes.
+	liveFrame := strings.Split(m.View().Content, "\n")
+	offFrame := strings.Split(behind.View().Content, "\n")
 	for _, row := range []int{m.barRow(), m.controlsRow(), m.statusRow()} {
-		if plain(live[row]) != plain(behind[row]) {
+		if plain(liveFrame[row]) != plain(offFrame[row]) {
 			t.Errorf("row %d changed behind the popover:\n live %q\n then %q",
-				row, plain(live[row]), plain(behind[row]))
+				row, plain(liveFrame[row]), plain(offFrame[row]))
+		}
+		if strings.Contains(offFrame[row], quiet) {
+			t.Errorf("row %d of the player went quiet: %q", row, offFrame[row])
 		}
 	}
 }
