@@ -649,10 +649,9 @@ func TestClickingAwayClosesEveryPopover(t *testing.T) {
 	}
 
 	// Outside the artist as well as the album. Inside the artist is a step
-	// back to it now, which is what the inset is for.
-	artist := m
-	artist.detour = m.history[0]
-	x, y, _, _ := artist.modalBounds()
+	// back to it now, which is what the inset is for. Its bounds come from
+	// its own depth — the bottom of the stack, which takes the whole space.
+	x, y, _, _ := m.modalBoundsAt(0)
 	next, cmd = m.Update(click(max(x-1, 0), max(y-1, 0)))
 	m = drain(t, next.(Model), cmd)
 
@@ -726,7 +725,7 @@ func TestTheArtistShowsBehindTheAlbumAndTakesTheClick(t *testing.T) {
 	}
 	// The album's border is on the next row down, inset inside the artist's
 	// sides, which are still drawn either side of it.
-	below := plain(frame[ay+albumInsetY])
+	below := plain(frame[ay+stackInsetY])
 	inner := below[colToByte(below, ax):colToByte(below, ax+awidth)]
 	if !strings.HasPrefix(inner, "│") || !strings.HasSuffix(inner, "│") {
 		t.Errorf("the artist's sides are not drawn beside the album: %q", inner)
@@ -895,11 +894,11 @@ func TestAnAlbumSitsInsideAnArtist(t *testing.T) {
 	}
 	bx, _, albumWidth, _ := album.modalBounds()
 
-	if want := artistWidth - 2*albumInsetX; albumWidth != want {
+	if want := artistWidth - 2*stackInsetX; albumWidth != want {
 		t.Errorf("the album is %d wide, want %d", albumWidth, want)
 	}
 	// Inset on both sides, not just narrower on one.
-	if want := ax + albumInsetX; bx != want {
+	if want := ax + stackInsetX; bx != want {
 		t.Errorf("the album starts at %d, want %d", bx, want)
 	}
 }
@@ -1157,5 +1156,75 @@ func TestASearchKeepsItsPlaceUnderAnAlbum(t *testing.T) {
 	shut := drain(t, n5.(Model), c5)
 	if shut.detour.active {
 		t.Error("the search would not close")
+	}
+}
+
+// Three deep: a search with an artist on it and an album on that. Each one
+// steps in from the one below, so all three are on the screen at once.
+func TestAThreeDeepStackShowsEveryLevel(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	lib.results = []ytm.Track{{VideoID: "z", Title: "Found", Artist: "Z",
+		ArtistID: "UCdaphni"}}
+	lib.tracks["UCdaphni"] = []ytm.Track{{Title: "Cherry", AlbumID: "MPREbCherry"}}
+	lib.tracks["MPREbCherry"] = []ytm.Track{{VideoID: "c1", Title: "Cherry Track"}}
+
+	next, cmd := m.openSearch()
+	m = drain(t, next.(Model), cmd)
+	for _, k := range []string{"f", "o", "u", "n", "d"} {
+		n, c := m.Update(keyPress(k))
+		m = drain(t, n.(Model), c)
+	}
+	n, c := m.Update(keyPress("enter"))
+	m = drain(t, n.(Model), c)
+
+	n, c = m.goTo(Playlist{ID: "UCdaphni", Title: "DAPHNI", kind: tabArtist})
+	m = drain(t, n.(Model), c)
+	n, c = m.goTo(Playlist{ID: "MPREbCherry", Title: "Cherry", kind: tabAlbum})
+	m = drain(t, n.(Model), c)
+
+	if len(m.history) != 2 {
+		t.Fatalf("the stack is %d deep", len(m.history))
+	}
+	if m.history[0].tab.kind != tabSearch || m.history[1].tab.kind != tabArtist {
+		t.Fatalf("the stack is %v then %v", m.history[0].tab.kind, m.history[1].tab.kind)
+	}
+
+	// Each level steps in from the one below it, by the same amount.
+	var last struct{ x, width int }
+	for depth := range 3 {
+		x, _, width, _ := m.modalBoundsAt(depth)
+		if depth > 0 {
+			if x != last.x+stackInsetX {
+				t.Errorf("level %d starts at %d, want %d", depth, x, last.x+stackInsetX)
+			}
+			if width != last.width-2*stackInsetX {
+				t.Errorf("level %d is %d wide, want %d", depth, width, last.width-2*stackInsetX)
+			}
+		}
+		last.x, last.width = x, width
+	}
+
+	// And all three are drawn: the search's own border shows outside the
+	// artist's, which shows outside the album's.
+	frame := strings.Split(m.View().Content, "\n")
+	for depth := range 3 {
+		x, y, width, _ := m.modalBoundsAt(depth)
+		row := plain(frame[y])
+		edge := row[colToByte(row, x):colToByte(row, x+width)]
+		if !strings.HasPrefix(edge, "╭") || !strings.HasSuffix(edge, "╮") {
+			t.Errorf("level %d is not drawn on its own top row: %q", depth, edge)
+		}
+	}
+
+	// Stepping back goes search-ward one level at a time.
+	for _, want := range []tabKind{tabArtist, tabSearch} {
+		n, c := m.leaveDetour()
+		m = drain(t, n, c)
+		if m.detour.tab.kind != want {
+			t.Fatalf("stepped back to %v, want %v", m.detour.tab.kind, want)
+		}
+	}
+	if m.detour.query != "found" {
+		t.Errorf("the search came back as %q", m.detour.query)
 	}
 }

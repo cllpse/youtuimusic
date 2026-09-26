@@ -14,15 +14,18 @@ const (
 	modalMarginY = 1
 	modalChrome  = 4 // border and padding, both sides
 	modalHeader  = 2 // the title, and the blank line under it
-	// albumInset sits an album inside the artist it usually opened from, so
-	// that the artist is still there around it rather than replaced by it.
+	// stackInset sits each popover inside the one it opened from, so that
+	// what is behind is still there around it rather than replaced by it.
+	// It is a step per level and not a rule about albums: a search with an
+	// artist on it and an album on that is three, and the search has to be
+	// wider than the artist to be seen under it at all.
 	//
 	// It insets vertically as well, by a row. Two columns either side only
-	// uncovers the artist's own border, which reads as a double line rather
-	// than as something behind; a row off the top and bottom uncovers the
-	// header it is showing, which reads as what it is.
-	albumInsetX = 2
-	albumInsetY = 1
+	// uncovers the one behind's own border, which reads as a double line
+	// rather than as something behind; a row off the top and bottom gives
+	// that border a row of its own, which reads as what it is.
+	stackInsetX = 2
+	stackInsetY = 1
 )
 
 // labelClose closes the popover it is drawn on, stepping back to whatever was
@@ -49,11 +52,14 @@ var modalBox = lipgloss.NewStyle().
 // it. It deliberately does not reach the tabs or the player — covering the
 // transport would mean the thing playing could not be paused.
 func (m Model) modalBounds() (x, y, width, height int) {
+	return m.modalBoundsAt(len(m.history))
+}
+
+// modalBoundsAt is where the popover at a depth sits: the one at the bottom
+// of the stack takes the whole space and each one on top of it steps in.
+func (m Model) modalBoundsAt(depth int) (x, y, width, height int) {
 	available := m.bodyHeight()
-	insetX, insetY := 0, 0
-	if m.detour.tab.kind == tabAlbum {
-		insetX, insetY = albumInsetX, albumInsetY
-	}
+	insetX, insetY := depth*stackInsetX, depth*stackInsetY
 	width = min(max(m.width-2*modalMarginX-2*insetX, 24), m.width)
 	height = min(max(available-2*modalMarginY-2*insetY, 4), available)
 	return (m.width - width) / 2, tabsHeight + (available-height)/2, width, height
@@ -231,17 +237,15 @@ func (m Model) modalContains(x, y int) bool {
 }
 
 // behindContains reports whether a point is on the popover immediately
-// behind the front one. Only that one: with the album inset on its artist
-// there is never a third, and popping blindly until a point lands would
+// behind the front one. Only that one: stepping back one is what a click on
+// the strip it leaves showing means, and popping until a point landed would
 // close more than was clicked.
 func (m Model) behindContains(x, y int) bool {
 	n := len(m.history)
 	if n == 0 {
 		return false
 	}
-	under := m
-	under.detour = m.history[n-1]
-	mx, my, width, height := under.modalBounds()
+	mx, my, width, height := m.modalBoundsAt(n - 1)
 	return x >= mx && x < mx+width && y >= my && y < my+height
 }
 

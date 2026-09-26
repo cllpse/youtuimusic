@@ -1212,9 +1212,12 @@ func (m Model) View() tea.View {
 		// Every popover in the stack, not only the one in front: an album
 		// is inset on the artist it opened from so that the artist is still
 		// there around it, and it can only be there if it is drawn.
-		for _, behind := range m.history {
+		for depth, behind := range m.history {
 			under := m
 			under.detour = behind
+			// Its own depth, not the front one's: a popover renders at the
+			// size its place in the stack gives it.
+			under.history = m.history[:depth]
 			x, y, _, _ := under.modalBounds()
 			layers = append(layers,
 				lipgloss.NewLayer(under.renderModal()).X(x).Y(y).Z(z))
