@@ -622,7 +622,7 @@ func TestTheScrollbarThumbFollowsTheWindow(t *testing.T) {
 	height := m.listHeight()
 
 	thumbTop := func(m Model) int {
-		for i, cell := range scrollbarFor(len(m.Tracks), m.trackOffset, height, -1, m.highlightColor()) {
+		for i, cell := range scrollbarFor(len(m.Tracks), m.trackOffset, height, -1, m.highlightColor(), false) {
 			if strings.Contains(cell, "█") {
 				return i
 			}
@@ -1331,5 +1331,69 @@ func TestAnInactiveTabIsDimAllTheWayRound(t *testing.T) {
 	}
 	if !sgrCodes(rendered)[emphasisFG] {
 		t.Error("the tab in front is not emphasised")
+	}
+}
+
+// With a popover in front, the frame behind it says nothing: no tab is the
+// tab in front, no row is selected, no row is playing, and every line is at
+// one quiet weight. The player is not among them — the transport still works
+// with a popover open, so dimming it would be a lie.
+func TestTheFrameBehindAPopoverGoesQuiet(t *testing.T) {
+	m := sample()
+	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
+	m = answered.(Model)
+	m.Tracks = rows(100)
+	m.playing, m.Length, m.Position = m.Tracks[2], time.Minute, 20*time.Second
+	m.trackCursor = 4
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
+
+	live := strings.Split(m.View().Content, "\n")
+	m.detour = detour{active: true, tracks: m.Tracks,
+		tab: Playlist{ID: "MPRE", Title: "Cherry", kind: tabAlbum}}
+	behind := strings.Split(m.View().Content, "\n")
+
+	// The tab row: emphasised while nothing is in front, not after.
+	if !sgrCodes(live[1])[emphasisFG] {
+		t.Fatal("no tab was in front to begin with; this proves nothing")
+	}
+	if sgrCodes(behind[1])[emphasisFG] {
+		t.Error("a tab is still drawn as the one in front")
+	}
+
+	// Rows the popover does not cover: the strip either side of it.
+	x, _, width, _ := m.modalBounds()
+	strip := func(lines []string, row int) string {
+		line := lines[row]
+		return line[:colToByte(plain(line), x)]
+	}
+	_ = width
+
+	// Nothing on the left strip is emphasised or filled any more.
+	for row := tabsHeight; row < tabsHeight+m.bodyHeight(); row++ {
+		codes := sgrCodes(strip(behind, row))
+		if codes[emphasisFG] {
+			t.Errorf("row %d is still drawn as playing", row)
+		}
+		if codes[highlightSGR] {
+			t.Errorf("row %d is still drawn as selected", row)
+		}
+	}
+	// And it is faint, which is what quiet means here.
+	var faint bool
+	for row := tabsHeight; row < tabsHeight+m.bodyHeight(); row++ {
+		if sgrCodes(strip(behind, row))[faintSGR] {
+			faint = true
+		}
+	}
+	if !faint {
+		t.Error("the list behind is not dimmed at all")
+	}
+
+	// The player is untouched: it still works, so it still looks like it.
+	for _, row := range []int{m.barRow(), m.controlsRow(), m.statusRow()} {
+		if plain(live[row]) != plain(behind[row]) {
+			t.Errorf("row %d changed behind the popover:\n live %q\n then %q",
+				row, plain(live[row]), plain(behind[row]))
+		}
 	}
 }

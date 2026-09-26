@@ -35,8 +35,12 @@ type trackTable struct {
 	// highlight is the selected row's fill, derived from the terminal's own
 	// background so that it follows the theme.
 	highlight color.Color
-	sort      sortSpec
-	now       time.Time
+	// inactive draws the whole block at one quiet weight: something is in
+	// front of it and none of what it usually says — this row is selected,
+	// this one is playing — is being said to anyone.
+	inactive bool
+	sort     sortSpec
+	now      time.Time
 
 	// more draws one extra row at the end, offering the next page. While
 	// that page is on its way it becomes the same loader the rest of the
@@ -122,7 +126,8 @@ func (t trackTable) layout(width int) layout {
 // above it without splitting a string apart again.
 func (t trackTable) rows() []string {
 	width := t.width
-	bar := scrollbarFor(t.rowCount(), t.offset, t.rowsHeight(), t.playingRow(), t.highlight)
+	bar := scrollbarFor(t.rowCount(), t.offset, t.rowsHeight(), t.playingRow(),
+		t.highlight, t.inactive)
 	if bar != nil {
 		width -= scrollbarWidth
 	}
@@ -138,10 +143,17 @@ func (t trackTable) rows() []string {
 		case index >= 0 && index < len(t.tracks):
 			track := t.tracks[index]
 			playing := t.playing != "" && track.VideoID == t.playing
-			style, styled := rowStyle(playing, index == t.cursor, t.highlight)
+			style, styled := rowStyle(playing, index == t.cursor, t.highlight, t.inactive)
 			line = t.trackLine(track, cols, styled)
 			if styled {
 				line = style.Render(line)
+			}
+			if t.inactive {
+				// One faint over the whole line, which is why trackLine
+				// leaves its own parts unstyled when the block is inactive:
+				// a nested style ends in a reset and the reset would cancel
+				// the faint from there on.
+				line = dim.Render(line)
 			}
 		}
 		line = pad(line, width)
@@ -165,7 +177,7 @@ func (t trackTable) moreRow(width int) string {
 		return lipgloss.PlaceHorizontal(width, lipgloss.Center, t.loader)
 	}
 	centred := lipgloss.PlaceHorizontal(width, lipgloss.Center, labelLoadMore)
-	if t.cursor == len(t.tracks) {
+	if t.cursor == len(t.tracks) && !t.inactive {
 		return rowSelected(t.highlight).Render(centred)
 	}
 	return dim.Render(centred)
@@ -187,7 +199,11 @@ func rowSelected(highlight color.Color) lipgloss.Style {
 // rowStyle picks how a row is drawn, and reports whether it is styled at
 // all. An unstyled row mutes its own columns; a styled one must not, since
 // dimmed text on a filled background is nothing.
-func rowStyle(playing, selected bool, highlight color.Color) (lipgloss.Style, bool) {
+func rowStyle(playing, selected bool, highlight color.Color, inactive bool) (lipgloss.Style, bool) {
+	if inactive {
+		// Nothing is selected or playing as far as this block is concerned.
+		return lipgloss.Style{}, false
+	}
 	switch {
 	case playing && selected:
 		return rowPlaying.Background(highlight), true
@@ -216,8 +232,10 @@ func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string
 		}
 	}
 	// A release is the artist's own work rather than a song of theirs, and
-	// weight is what says so now that it has no icon.
-	if track.isRelease() {
+	// weight is what says so now that it has no icon. Not while the block is
+	// inactive: weight is what inactive takes away, and a style here would
+	// end in a reset that cancels the faint the caller puts over the row.
+	if track.isRelease() && !t.inactive {
 		title = releaseStyle.Render(title)
 	}
 
@@ -235,7 +253,7 @@ func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string
 	if !track.isRelease() {
 		length = padLeft(truncate(formatDuration(track.Duration), cols.length), cols.length)
 	}
-	if !highlighted {
+	if !highlighted && !t.inactive {
 		artist, length = dim.Render(artist), dim.Render(length)
 	}
 	return pad(truncate(title, cols.title), cols.title) + " " + artist + " " + length
@@ -255,7 +273,9 @@ var releaseStyle = lipgloss.NewStyle().Bold(true)
 // the status bar and the progress groove use. Shape carries the meaning here
 // — a block where the window is, a line where it is not — so the colour is
 // free to say only "furniture".
-func scrollbarFor(total, offset, height, playingAt int, highlight color.Color) []string {
+func scrollbarFor(total, offset, height, playingAt int, highlight color.Color,
+	inactive bool,
+) []string {
 	if !needsScrollbar(total, height) {
 		return nil
 	}
@@ -277,11 +297,17 @@ func scrollbarFor(total, offset, height, playingAt int, highlight color.Color) [
 	// share a cell — which they do the whole time the playing track is on
 	// screen — without either hiding the other.
 	furniture := lipgloss.NewStyle().Foreground(highlight)
+	// The mark stays where it is but stops being the lit thing: the block is
+	// behind something and has nothing to draw the eye to.
+	marked := active
+	if inactive {
+		marked = furniture
+	}
 	out := make([]string, height)
 	for i := range out {
 		switch {
 		case i == mark:
-			out[i] = " " + active.Render("█") + " "
+			out[i] = " " + marked.Render("█") + " "
 		case i >= start && i < start+thumb:
 			out[i] = " " + furniture.Render("█") + " "
 		default:

@@ -1298,8 +1298,11 @@ func (m Model) renderTabs() string {
 	}
 	rendered := make([]string, 0, len(spans))
 	for _, s := range spans {
+		// With a popover in front, no tab is the tab in front: the one that
+		// was stops being drawn as it, which is the whole of what the row
+		// has to say about being behind something.
 		style := m.inactiveTab()
-		if s.index == m.tabCursor {
+		if s.index == m.tabCursor && !m.detour.active {
 			style = activeTabStyle
 		}
 		rendered = append(rendered, style.Render(truncate(m.tabAt(s.index).Title, maxTabTitle)))
@@ -1322,6 +1325,7 @@ func (m Model) table(width, height int) trackTable {
 	return trackTable{
 		sort:        m.sort,
 		highlight:   m.highlightColor(),
+		inactive:    m.detour.active,
 		now:         m.clock(),
 		tracks:      m.Tracks,
 		cursor:      m.trackCursor,
