@@ -1741,10 +1741,36 @@ func TestTheSeparatorFollowsTheLikedTab(t *testing.T) {
 	}
 }
 
+// styledRuns splits a line into its runs of styling: the SGR parameters in
+// force and the plain text drawn under them. Which cells carry a colour is the
+// whole question when a line is made of several things.
+func styledRuns(line string) []struct{ codes, text string } {
+	var out []struct{ codes, text string }
+	codes := ""
+	for line != "" {
+		if at := ansiSequence.FindStringIndex(line); at != nil && at[0] == 0 {
+			codes = strings.TrimSuffix(strings.TrimPrefix(line[:at[1]], "\x1b["), "m")
+			line = line[at[1]:]
+			continue
+		}
+		next := len(line)
+		if at := ansiSequence.FindStringIndex(line); at != nil {
+			next = at[0]
+		}
+		out = append(out, struct{ codes, text string }{codes, line[:next]})
+		line = line[next:]
+	}
+	return out
+}
+
 // The rule the tabs sit on goes magenta with the liked playlist while that is
 // the tab in front: the line is the top edge of the page below it, and the page
-// is one of its rows. The whole rule — the bottom edge of every other tab and
-// the stub past the last one — and nothing else of those tabs.
+// is one of its rows.
+//
+// The rule only. Every tab keeps its own two feet in its own colour, which is
+// what stops the magenta looking like it has leaked into playlists it has
+// nothing to say about — a foot is the glyph that carries a tick up into the
+// tab's own walls.
 func TestTheRuleTheTabsSitOnFollowsTheLikedTab(t *testing.T) {
 	m := sample()
 	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
@@ -1760,27 +1786,44 @@ func TestTheRuleTheTabsSitOnFollowsTheLikedTab(t *testing.T) {
 	rule := func(m Model) string { return strings.Split(m.renderTabs(), "\n")[2] }
 	tops := func(m Model) string { return strings.Split(m.renderTabs(), "\n")[0] }
 
-	// In front: the rule is one colour from end to end.
+	// In front: the rule between the feet is magenta, and the feet are not.
 	m.tabCursor = 0
-	if !sgrCodes(rule(m))[likedFG] {
-		t.Errorf("the rule is not magenta: %q", rule(m))
+	line := rule(m)
+	if !sgrCodes(line)[likedFG] {
+		t.Fatalf("the rule is not magenta at all: %q", line)
 	}
-	for _, other := range []string{dimmed, "\x1b[" + emphasisFG} {
-		if strings.Contains(rule(m), other) {
-			t.Errorf("the rule is part %s as well: %q", other, rule(m))
+	for _, run := range styledRuns(line) {
+		switch {
+		case strings.Contains(run.codes, likedFG):
+			// The rule itself, and the liked tab's own open bottom edge.
+			if strings.Trim(run.text, "─╯╰ ") != "" {
+				t.Errorf("magenta reaches %q, which is not rule: %q", run.text, line)
+			}
+		case strings.Contains(run.codes, dimmed):
+			// Another tab's feet, and nothing else.
+			if strings.Trim(run.text, "┴") != "" {
+				t.Errorf("a dimmed run is %q, want feet: %q", run.text, line)
+			}
 		}
 	}
-	// And only the rule: the other tabs keep their own outlines.
+	// The rule really does run between the feet rather than stopping at them.
+	if !strings.Contains(line, "\x1b[35m─") {
+		t.Errorf("no magenta rule between the feet: %q", line)
+	}
+	// And the other tabs keep the rest of their outlines.
 	if !strings.Contains(tops(m), dimmed) {
 		t.Errorf("the other tabs' tops were recoloured too: %q", tops(m))
 	}
 
 	// Another tab in front, and the rule is the dimmed colour again. The liked
-	// tab's own bottom edge stays magenta, because that tab is magenta all the
-	// way round whether it is in front or not.
+	// tab's own feet stay magenta, because that tab is magenta all the way round
+	// whether it is in front or not.
 	m.tabCursor = 1
 	if !strings.Contains(rule(m), dimmed) {
 		t.Errorf("the rule is not dimmed on another playlist: %q", rule(m))
+	}
+	if !sgrCodes(rule(m))[likedFG] {
+		t.Errorf("the liked tab lost its own feet: %q", rule(m))
 	}
 
 	// Behind a popover the whole row sinks, the rule with it.
@@ -1790,12 +1833,16 @@ func TestTheRuleTheTabsSitOnFollowsTheLikedTab(t *testing.T) {
 		t.Errorf("the rule is still magenta behind a popover: %q", rule(m))
 	}
 
-	// Colour costs no cells: the row is the width it was.
+	// Colour costs no cells: every row of the tab bar is the window's width.
 	m.detour = detour{}
-	for _, cursor := range []int{0, 1} {
+	for _, cursor := range []int{0, 1, 2} {
 		m.tabCursor = cursor
-		for row, line := range strings.Split(m.renderTabs(), "\n") {
-			if got := lipgloss.Width(plain(line)); got != m.width {
+		rows := strings.Split(m.renderTabs(), "\n")
+		if len(rows) != tabsHeight {
+			t.Fatalf("the tab bar is %d rows, want %d", len(rows), tabsHeight)
+		}
+		for row, text := range rows {
+			if got := lipgloss.Width(plain(text)); got != m.width {
 				t.Errorf("cursor %d row %d is %d cells, want %d", cursor, row, got, m.width)
 			}
 		}

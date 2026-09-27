@@ -1160,12 +1160,6 @@ var (
 			Foreground(emphasis).
 			Faint(false).
 			Bold(true)
-	// The gap is the rule that carries on past the last tab. It inherits the
-	// tab's padding unless that is cleared, which would push the row two
-	// cells past the terminal.
-	tabGapStyle = inactiveTabStyle.
-			BorderTop(false).BorderLeft(false).BorderRight(false).
-			Padding(0, 0)
 )
 
 // A tab that is not in front is dim all the way round: its label faint, its
@@ -1174,16 +1168,6 @@ var (
 // answers for it.
 func (m Model) inactiveTab() lipgloss.Style {
 	return inactiveTabStyle.BorderForeground(m.dimmedColor())
-}
-
-func (m Model) tabGap() lipgloss.Style {
-	if m.covered() {
-		return tabGapStyle.BorderForeground(m.quietColor())
-	}
-	if m.likedTabInFront() {
-		return tabGapStyle.BorderForeground(liked)
-	}
-	return tabGapStyle.BorderForeground(m.dimmedColor())
 }
 
 // likedTabInFront reports whether the tab in front is the liked playlist. What
@@ -1224,10 +1208,29 @@ const (
 // movement for a shrug.
 func (m Model) covered() bool { return m.detour.active || m.sheetOpen }
 
-// tabRuleColor is the rule the tabs sit on, which sinks with them.
+// tabRuleColor is the rule the tabs sit on, which sinks with them and takes the
+// liked playlist's colour while that is the tab in front.
 func (m Model) tabRuleColor() color.Color {
-	if m.covered() {
+	switch {
+	case m.covered():
 		return m.quietColor()
+	case m.likedTabInFront():
+		return liked
+	}
+	return m.dimmedColor()
+}
+
+// tabPen is the colour a tab's own outline takes, which is not the rule's: the
+// liked playlist's magenta, the emphasis for the one in front, the dimmed
+// colour for the rest, and the quiet one for all of them behind a popover.
+func (m Model) tabPen(index int) color.Color {
+	switch {
+	case m.covered():
+		return m.quietColor()
+	case m.tabAt(index).ID == likedPlaylistID:
+		return liked
+	case index == m.tabCursor:
+		return emphasis
 	}
 	return m.dimmedColor()
 }
@@ -1413,35 +1416,62 @@ func (m Model) renderTabs() string {
 		}
 		// The liked playlist is what you think of a track, a tab of it, so it is
 		// drawn in the same magenta a liked row is — its outline as well as its
-		// label, so the tab reads as one thing rather than as a label with a
-		// box of its own round it.
-		//
-		// Which tab is in front is still said, by the shape: the one in front
-		// has no bottom edge, and the others are closed. And not while
-		// something is in front of the row — covered, nothing on it is saying
-		// anything.
+		// label, so the tab reads as one thing rather than as a label with a box
+		// of its own round it.
 		//
 		// The outline of an inactive one comes out a shade stronger than its
 		// label, because lipgloss draws a border as a colour and faint is an
 		// attribute that cannot reach it.
-		//
-		// While it is the tab in front, the rule the whole row sits on goes with
-		// it: that line is the top edge of the page below, and the page is one
-		// of its rows. Only the bottom edge of the other tabs, which is what
-		// that rule is made of — they are other playlists and their own outlines
-		// stay their own.
-		switch {
-		case m.covered():
-		case m.tabAt(s.index).ID == likedPlaylistID:
-			style = style.Foreground(liked).BorderForeground(liked)
-		case m.likedTabInFront():
-			style = style.BorderBottomForeground(liked)
+		if !m.covered() && m.tabAt(s.index).ID == likedPlaylistID {
+			style = style.Foreground(liked)
 		}
+		// The bottom edge is not the tab's to draw. See tabRule.
+		style = style.BorderForeground(m.tabPen(s.index)).BorderBottom(false)
 		rendered = append(rendered, style.Render(truncate(m.tabAt(s.index).Title, maxTabTitle)))
 	}
-	row := lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
-	gap := m.tabGap().Render(strings.Repeat(" ", max(0, m.width-lipgloss.Width(row))))
-	return lipgloss.JoinHorizontal(lipgloss.Bottom, row, gap)
+
+	// The tabs are two rows now — their top edge and their label — and the row
+	// they sit in is as wide as the window whether they fill it or not.
+	above := strings.Split(lipgloss.JoinHorizontal(lipgloss.Top, rendered...), "\n")
+	for i, line := range above {
+		above[i] = line + strings.Repeat(" ", max(0, m.width-lipgloss.Width(line)))
+	}
+	return strings.Join(append(above, m.tabRule(spans)), "\n")
+}
+
+// tabRule is the line the tabs sit on, drawn as one line rather than as the
+// bottom edge of each of them.
+//
+// That is what keeps a colour on the rule off the tabs. The line used to be six
+// borders in a row, so colouring it meant colouring part of every tab — and a
+// tab's two corner glyphs carry a tick up into its own walls, which made the
+// colour look like it was leaking into playlists it had nothing to say about.
+// Now each tab puts two feet in the rule, in its own colour, and everything
+// between and around them belongs to the rule.
+//
+// The tab in front is open underneath rather than closed, which is what says it
+// is in front.
+func (m Model) tabRule(spans []tabSpan) string {
+	rule := lipgloss.NewStyle().Foreground(m.tabRuleColor())
+	var b strings.Builder
+	at := 0
+	for _, s := range spans {
+		if s.start > at {
+			b.WriteString(rule.Render(strings.Repeat("─", s.start-at)))
+		}
+		feet := lipgloss.NewStyle().Foreground(m.tabPen(s.index))
+		inner := max(s.end-s.start-2, 0)
+		if s.index == m.tabCursor && !m.covered() {
+			b.WriteString(feet.Render("╯") + strings.Repeat(" ", inner) + feet.Render("╰"))
+		} else {
+			b.WriteString(feet.Render("┴") + rule.Render(strings.Repeat("─", inner)) + feet.Render("┴"))
+		}
+		at = s.end
+	}
+	if at < m.width {
+		b.WriteString(rule.Render(strings.Repeat("─", m.width-at)))
+	}
+	return b.String()
 }
 
 func (m Model) renderTracks(width, height int) string {
