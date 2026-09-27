@@ -19,10 +19,10 @@ const menuGap = "  "
 type menuItem int
 
 const (
-	menuLike menuItem = iota
-	menuDislike
-	menuAlbum
+	menuAlbum menuItem = iota
 	menuArtist
+	menuLike
+	menuDislike
 )
 
 // trackMenu is the menu a right-click on a track opens.
@@ -50,8 +50,9 @@ type menuRow struct {
 	hue color.Color
 }
 
-// dividerAfter is the item the rule follows. The ratings are about this track;
-// everything under the rule is about going somewhere else.
+// dividerAfter is the item the rule follows. Above it are the places this row
+// leads; below it, what you think of it. Going somewhere is the commoner errand
+// of the two and reads first.
 const dividerAfter = 1
 
 func (m Model) menuRows() []menuRow {
@@ -71,10 +72,10 @@ func (m Model) menuRows() []menuRow {
 		dislike = menuRow{menuDislike, "Remove dislike", true, disliked}
 	}
 	return []menuRow{
-		like,
-		dislike,
 		{menuAlbum, "Go to album…", t.AlbumID != "", nil},
 		{menuArtist, "Go to artist…", t.ArtistID != "", nil},
+		like,
+		dislike,
 	}
 }
 
@@ -123,9 +124,19 @@ func (m Model) menuSize() (width, height int) {
 }
 
 // openMenu puts the menu on screen at a point, nudged so that all of it
-// fits.
+// fits, with the first row that can be chosen already chosen.
+//
+// Not simply the first row: the ones that go somewhere are dead on a track
+// with no album page or no linked artist, and a menu that opens on a dead row
+// swallows the first thing you press.
 func (m Model) openMenu(t Track, x, y int) Model {
 	m.menu = trackMenu{open: true, track: t}
+	for i, row := range m.menuRows() {
+		if row.enabled {
+			m.menu.cursor = i
+			break
+		}
+	}
 	width, height := m.menuSize()
 	m.menu.x = min(max(x, 0), max(0, m.width-width))
 	m.menu.y = min(max(y, 0), max(0, m.height-height))

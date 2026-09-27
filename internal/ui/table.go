@@ -280,26 +280,48 @@ func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string
 // not one of its songs.
 var releaseStyle = lipgloss.NewStyle().Bold(true)
 
-// markCell is where a row of the list falls on the trough, which stands for
-// the whole of it. The thumb is placed by the same proportion.
-func markCell(row, total, height int) int {
-	return min(row*height/total, height-1)
+// The trough is drawn out of blocks: a whole one for the window, halves for the
+// marks in it, and a line where there is neither. All three are block elements,
+// which is the one part of Unicode a terminal font can be relied on for — see
+// the note on emptyCell, which went through the same search.
+const (
+	blockFull  = "█"
+	blockUpper = "▀"
+	blockLower = "▄"
+	troughLine = "│"
+)
+
+// markHalves is how many marks one cell of the trough can hold.
+//
+// Two, because a cell is one character and a character can be half one colour
+// and half another: an upper half block drawn in one colour over a background
+// of the other. The progress bar already gets sub-cell resolution this way.
+//
+// It is worth the trouble because a cell is not one row. Seventy tracks in a
+// twenty row window puts three or four of them in every cell, so two tracks
+// liked one after the other landed in the same cell and the second had nowhere
+// to go — which read, correctly, as only one of them being marked.
+const markHalves = 2
+
+// markAt is which half of the trough a row falls on, the trough standing for
+// the whole list. The thumb is placed by the same proportion, in whole cells.
+func markAt(row, total, halves int) int {
+	return min(row*halves/total, halves-1)
 }
 
-// scrollbarMarks is what each cell of the trough has to say about the rows
-// that fall in it, by cell. A cell is one colour, so where several things fall
-// in one it says the most notable of them.
+// scrollbarMarks is what each half of each cell has to say about the rows that
+// fall in it: half 2i is the top of cell i and 2i+1 the bottom.
 //
-// A dislike outranks a like because there are fewer of them and they are the
-// ones worth finding. The playing track outranks both — not because it matters
-// more, but because its mark is the one that moves, and a mark you are
-// following cannot go missing every time the track it stands for is liked. On
-// a row the order is the other way round, and can be: a row has a weight as
-// well as a colour, so it says both at once. A cell has only the colour.
+// Two rows in the same half still have to share one colour, so the more notable
+// of them takes it. A dislike outranks a like because there are fewer of them
+// and they are the ones worth finding. The playing track outranks both — not
+// because it matters more, but because its mark is the one that moves, and a
+// mark you are following cannot go missing every time the track it stands for
+// is liked.
 func (t trackTable) scrollbarMarks() map[int]color.Color {
-	total, height := t.rowCount(), t.rowsHeight()
+	total, halves := t.rowCount(), t.rowsHeight()*markHalves
 	marks := map[int]color.Color{}
-	if total <= 0 || height <= 0 {
+	if total <= 0 || halves <= 0 {
 		return marks
 	}
 
@@ -308,14 +330,14 @@ func (t trackTable) scrollbarMarks() map[int]color.Color {
 		if !rated {
 			continue
 		}
-		cell := markCell(i, total, height)
-		if marks[cell] == disliked {
+		at := markAt(i, total, halves)
+		if marks[at] == disliked {
 			continue
 		}
-		marks[cell] = hue
+		marks[at] = hue
 	}
 	if at := t.playingRow(); at >= 0 && at < total {
-		marks[markCell(at, total, height)] = live
+		marks[markAt(at, total, halves)] = live
 	}
 	return marks
 }
@@ -344,21 +366,47 @@ func (t trackTable) scrollbar() []string {
 
 	out := make([]string, height)
 	for i := range out {
-		style, glyph := furniture, "│"
-		switch {
-		case marks[i] != nil:
-			glyph = "█"
-			if !t.inactive {
-				style = lipgloss.NewStyle().Foreground(marks[i])
-			}
-			// Inactive it keeps its place and stops being the lit thing: the
-			// block is behind something and has nothing to draw the eye to.
-		case i >= start && i < start+thumb:
-			glyph = "█"
-		}
-		out[i] = " " + style.Render(glyph) + " "
+		out[i] = " " + t.troughCell(
+			marks[i*markHalves], marks[i*markHalves+1],
+			i >= start && i < start+thumb, furniture) + " "
 	}
 	return out
+}
+
+// troughCell draws one cell of the trough: what falls in its two halves, and
+// whether the window covers it.
+func (t trackTable) troughCell(top, bottom color.Color, inThumb bool, furniture lipgloss.Style) string {
+	if t.inactive {
+		// Behind a popover nothing is lit. The marks keep their place — the
+		// cell is still a block — and stop drawing the eye.
+		if top != nil || bottom != nil || inThumb {
+			return furniture.Render(blockFull)
+		}
+		return furniture.Render(troughLine)
+	}
+	switch {
+	case top != nil && bottom != nil:
+		// Two marks in one cell, one above the other: the upper is drawn and
+		// the lower is what it is drawn on.
+		return lipgloss.NewStyle().Foreground(top).Background(bottom).Render(blockUpper)
+	case top != nil:
+		return halfMark(blockUpper, top, inThumb, t.highlight)
+	case bottom != nil:
+		return halfMark(blockLower, bottom, inThumb, t.highlight)
+	case inThumb:
+		return furniture.Render(blockFull)
+	}
+	return furniture.Render(troughLine)
+}
+
+// halfMark is a mark in one half of a cell. Inside the window the other half
+// is the thumb, drawn as this one's background so that neither hides the other.
+func halfMark(glyph string, hue color.Color, inThumb bool, highlight color.Color) string {
+	style := lipgloss.NewStyle().Foreground(hue)
+	if inThumb {
+		style = style.Background(highlight)
+	}
+	return style.Render(glyph)
 }
 
 // highlightOr is the bar's own colour, which sinks with the block it belongs

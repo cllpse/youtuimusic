@@ -484,6 +484,7 @@ func TestTheScrollbarMarksThePlayingTrack(t *testing.T) {
 	}
 
 	// The mark is a block like the thumb, so it is the colour that finds it.
+	// Half a block: two marks fit in a cell, one above the other.
 	at := -1
 	for i, cell := range bar {
 		if sgrCodes(cell)[liveFG] {
@@ -500,9 +501,15 @@ func TestTheScrollbarMarksThePlayingTrack(t *testing.T) {
 	if want := 5; at != want {
 		t.Errorf("the mark is at %d, want %d", at, want)
 	}
-	if got := plain(bar[at]); !strings.Contains(got, "█") {
-		t.Errorf("the mark is not a block: %q", got)
+	if !hasMark(bar[at]) {
+		t.Errorf("the mark is not a block: %q", plain(bar[at]))
 	}
+}
+
+// hasMark reports whether a cell of the trough draws a mark, which is half a
+// block: a cell holds two of them, so a mark takes the half it falls in.
+func hasMark(cell string) bool {
+	return strings.ContainsAny(plain(cell), blockUpper+blockLower)
 }
 
 // The ends of the list are reachable: a mark must never fall off the trough.
@@ -559,7 +566,8 @@ func plainAll(cells []string) []string {
 }
 
 // The mark and the thumb land on the same cell whenever the playing track
-// is on screen. Neither may swallow the other.
+// is on screen. Neither may swallow the other: the mark takes its half of the
+// cell and the thumb is what that half is drawn on.
 func TestTheMarkAndTheThumbShareACell(t *testing.T) {
 	var tracks []Track
 	for i := range 300 {
@@ -569,15 +577,20 @@ func TestTheMarkAndTheThumbShareACell(t *testing.T) {
 	// A long list moves its thumb by well under a cell per row, so at the
 	// top both the thumb and a mark for an early track are on row 0.
 	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
-		playing: "v0"}
+		playing: "v0", highlight: surface}
 	bar := table.scrollbar()
 
 	cell := bar[0]
-	if !strings.Contains(plain(cell), "█") {
-		t.Errorf("the thumb lost its shape: %q", plain(cell))
+	if !hasMark(cell) {
+		t.Errorf("the mark lost its shape: %q", plain(cell))
 	}
-	if codes := sgrCodes(cell); !codes[liveFG] {
+	codes := sgrCodes(cell)
+	if !codes[liveFG] {
 		t.Errorf("the shared cell does not say the track is there: %v", codes)
+	}
+	// And the thumb is still under it, as the background of that half.
+	if !codes[highlightSGR] {
+		t.Errorf("the thumb is not behind the mark: %v", codes)
 	}
 	// Below the thumb the trough is its ordinary self.
 	if got := plain(bar[height-1]); !strings.Contains(got, "│") {
@@ -820,10 +833,10 @@ func TestTheScrollbarMarksRatedTracks(t *testing.T) {
 			if !sgrCodes(cell)[code] {
 				t.Errorf("cell %d is not SGR %s: %q", i, code, cell)
 			}
-			// A mark is a block wherever it lands, thumb or trough, so that
-			// it reads the same in both.
-			if got := plain(cell); !strings.Contains(got, "█") {
-				t.Errorf("the mark in cell %d is not a block: %q", i, got)
+			// A mark is half a block wherever it lands, thumb or trough, so
+			// that it reads the same in both.
+			if !hasMark(cell) {
+				t.Errorf("the mark in cell %d is not a block: %q", i, plain(cell))
 			}
 			continue
 		}
@@ -861,7 +874,10 @@ func TestAScrollbarCellSaysTheMostNotableThingInIt(t *testing.T) {
 			dislikedFG, []string{likedFG, liveFG}},
 		{"and the playing track over that", func() trackTable {
 			at := base
-			at.tracks, at.playing = playing, "v2"
+			// v1 is in the same half as the ratings; v2 would be in the one
+			// below, where it would have a colour of its own — see
+			// TestTwoMarksShareACellOneAbleTheOther.
+			at.tracks, at.playing = playing, "v1"
 			return at
 		}(), liveFG, []string{likedFG, dislikedFG}},
 	} {
@@ -922,5 +938,42 @@ func TestAnInactiveScrollbarHasNoMarks(t *testing.T) {
 	}
 	if !strings.Contains(joined, "38;2;191;191;191m") {
 		t.Errorf("the bar is not in the quiet colour: %q", joined)
+	}
+}
+
+// Two things in one cell, one above the other, are both drawn: the upper half
+// in its own colour and the lower half as what that half is drawn on. Without
+// the halves the second of them had nowhere to go, which read — correctly — as
+// only one of two liked tracks being marked.
+func TestTwoMarksShareACellOneAbleTheOther(t *testing.T) {
+	const height, total = 10, 40
+	tracks := trough(total)
+	// Four rows to a cell here, two to a half: rows 0 and 2 are the halves of
+	// cell 0.
+	tracks[0].Rating = RatingUp
+	tracks[2].Rating = RatingDown
+	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
+		showRating: true, highlight: surface}
+
+	cell := table.scrollbar()[0]
+	codes := sgrCodes(cell)
+	if !codes[likedFG] {
+		t.Errorf("the upper half is not the like: %q", cell)
+	}
+	if !codes[dislikedBG] {
+		t.Errorf("the lower half is not the dislike as a background: %q", cell)
+	}
+	if got := plain(cell); !strings.Contains(got, blockUpper) {
+		t.Errorf("the cell is %q, want an upper half block", got)
+	}
+
+	// Two likes, one after the other, land in the two halves rather than in
+	// one: the case that looked like a bug.
+	near := trough(total)
+	near[0].Rating, near[2].Rating = RatingUp, RatingUp
+	at := table
+	at.tracks = near
+	if got := at.scrollbarMarks(); len(got) != 2 {
+		t.Errorf("two liked tracks made %d marks: %v", len(got), got)
 	}
 }

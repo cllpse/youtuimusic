@@ -35,6 +35,27 @@ func menuModel(t *testing.T) (Model, *fakeLibrary, *fakeStreams, *fakeAudio) {
 	return m, lib, st, au
 }
 
+// menuLine is the rendered line of the menu holding a label, since which line
+// that is depends on the order of the rows and the rule between them.
+func menuLine(m Model, label string) string {
+	for _, line := range strings.Split(m.renderMenu(), "\n") {
+		if strings.Contains(plain(line), label) {
+			return line
+		}
+	}
+	return ""
+}
+
+// rowIndex is where an item sits among the rows.
+func rowIndex(m Model, item menuItem) int {
+	for i, row := range m.menuRows() {
+		if row.item == item {
+			return i
+		}
+	}
+	return -1
+}
+
 // rowAt is the screen position of a menu row.
 func rowAt(m Model, item menuItem) (x, y int) {
 	for i, row := range m.menuRows() {
@@ -358,14 +379,12 @@ func TestRowsThatLeadNowhereAreDisabled(t *testing.T) {
 	}
 	// And they are drawn dimmed rather than looking available. Dimming is
 	// the terminal's own faint, not a grey, so that it lands on any theme.
-	// Lines 1 and 2 are the ratings, 3 the rule, 4 the album row.
-	lines := strings.Split(m.renderMenu(), "\n")
-	if !sgrCodes(lines[4])[faintSGR] {
-		t.Errorf("a dead row is not dimmed: %v", sgrCodes(lines[4]))
+	if line := menuLine(m, "Go to album…"); !sgrCodes(line)[faintSGR] {
+		t.Errorf("a dead row is not dimmed: %q", line)
 	}
-	for _, row := range []int{1, 2} {
-		if sgrCodes(lines[row])[faintSGR] {
-			t.Errorf("rating row %d is dimmed too; nothing distinguishes them", row)
+	for _, label := range []string{"Like track", "Dislike track"} {
+		if line := menuLine(m, label); sgrCodes(line)[faintSGR] {
+			t.Errorf("%q is dimmed too; nothing distinguishes them", label)
 		}
 	}
 
@@ -502,9 +521,8 @@ func TestALikedTrackOffersToUnlikeWithACross(t *testing.T) {
 	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
 	m = drain(t, next.(Model), cmd)
 
-	rows := m.menuRows()
-	if rows[0].label != "Unlike track" {
-		t.Errorf("label = %q", rows[0].label)
+	if got := m.menuRows()[rowIndex(m, menuLike)].label; got != "Unlike track" {
+		t.Errorf("label = %q", got)
 	}
 	if rendered := plain(m.renderMenu()); !strings.Contains(rendered, "Unlike track") {
 		t.Errorf("the row does not say what it does:\n%s", rendered)
@@ -1361,7 +1379,8 @@ func TestTheMenuRatingRowsCarryTheirColours(t *testing.T) {
 			track := m.Tracks[0]
 			track.Rating = tc.rating
 			at := m.openMenu(track, 4, 4)
-			at.menu.cursor = 2 // the cursor off the ratings, so no weight is in play
+			// The cursor off the ratings, so no weight is in play.
+			at.menu.cursor = rowIndex(at, menuAlbum)
 
 			found := false
 			for _, line := range strings.Split(at.renderMenu(), "\n") {
@@ -1393,13 +1412,8 @@ func TestTheMenuRatingRowsCarryTheirColours(t *testing.T) {
 	// Under the cursor it keeps the colour and takes the weight, rather than
 	// turning into the emphasis every other row uses.
 	at := m.openMenu(m.Tracks[0], 4, 4)
-	at.menu.cursor = 0
-	row := ""
-	for _, line := range strings.Split(at.renderMenu(), "\n") {
-		if strings.Contains(plain(line), "Like track") {
-			row = line
-		}
-	}
+	at.menu.cursor = rowIndex(at, menuLike)
+	row := menuLine(at, "Like track")
 	if row == "" {
 		t.Fatal("no rating row in the menu")
 	}
@@ -1476,10 +1490,90 @@ func TestTheRatingRowsAreDeadOnARelease(t *testing.T) {
 		}
 	}
 	// Drawn dimmed, like any other row with nothing behind it.
-	lines := strings.Split(at.renderMenu(), "\n")
-	for _, row := range []int{1, 2} {
-		if !sgrCodes(lines[row])[faintSGR] {
-			t.Errorf("rating row %d is not dimmed on a release: %q", row, lines[row])
+	for _, label := range []string{"Like track", "Dislike track"} {
+		if line := menuLine(at, label); !sgrCodes(line)[faintSGR] {
+			t.Errorf("%q is not dimmed on a release: %q", label, line)
 		}
+	}
+}
+
+// The menu reads places first and opinions second: where this row leads, then
+// the rule, then what you think of it. Going somewhere is the commoner errand.
+func TestTheMenuPutsTheRatingsLast(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+	at := m.openMenu(m.Tracks[0], 4, 4)
+
+	want := []menuItem{menuAlbum, menuArtist, menuLike, menuDislike}
+	rows := at.menuRows()
+	if len(rows) != len(want) {
+		t.Fatalf("the menu has %d rows, want %d", len(rows), len(want))
+	}
+	for i, item := range want {
+		if rows[i].item != item {
+			t.Errorf("row %d is %v, want %v", i, rows[i].item, item)
+		}
+	}
+
+	// And the rule sits between the two halves of it. Searched inside the box:
+	// its own top border is a run of the same character.
+	lines := strings.Split(at.renderMenu(), "\n")
+	where := func(needle string) int {
+		for i, line := range lines[1 : len(lines)-1] {
+			if strings.Contains(plain(line), needle) {
+				return i + 1
+			}
+		}
+		return -1
+	}
+	album, rule, like := where("Go to album…"), where("───"), where("Like track")
+	if album < 0 || rule < 0 || like < 0 {
+		t.Fatalf("album %d, rule %d, like %d", album, rule, like)
+	}
+	if !(album < rule && rule < like) {
+		t.Errorf("the rule is on line %d, between %d and %d", rule, album, like)
+	}
+}
+
+// A menu that opens with a dead row chosen swallows the first thing you press.
+// That could not happen while liking was the first row, because a track can
+// always be rated; it can now, because where a row leads may be nowhere.
+func TestTheMenuOpensOnARowThatCanBeChosen(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+
+	for _, tc := range []struct {
+		name  string
+		track Track
+		want  menuItem
+	}{
+		{"a track that links somewhere", m.Tracks[0], menuAlbum},
+		{"one that links nowhere", m.Tracks[1], menuLike},
+		{"a release, which cannot be rated", Track{Title: "Cherry", AlbumID: "MPRE"}, menuAlbum},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at := m.openMenu(tc.track, 4, 4)
+			rows := at.menuRows()
+			if at.menu.cursor < 0 || at.menu.cursor >= len(rows) {
+				t.Fatalf("the cursor is on row %d of %d", at.menu.cursor, len(rows))
+			}
+			row := rows[at.menu.cursor]
+			if !row.enabled {
+				t.Errorf("the menu opened on %v, which cannot be chosen", row.item)
+			}
+			if row.item != tc.want {
+				t.Errorf("the menu opened on %v, want %v", row.item, tc.want)
+			}
+		})
+	}
+
+	// And enter on a freshly opened menu does that row rather than nothing.
+	next, cmd := m.Update(rightClick(trackX, trackRow(1)))
+	at := drain(t, next.(Model), cmd)
+	next, cmd = at.Update(keyPress("enter"))
+	at = drain(t, next.(Model), cmd)
+	if at.menu.open {
+		t.Error("enter on a fresh menu did nothing at all")
+	}
+	if at.Tracks[1].Rating != RatingUp {
+		t.Errorf("the row is %v, want the first row to have run", at.Tracks[1].Rating)
 	}
 }

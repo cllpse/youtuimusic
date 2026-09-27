@@ -481,6 +481,13 @@ const (
 	// purpose — see the palette.
 	likedFG    = "35"
 	dislikedFG = "31"
+	// And the same two as a background, which is how the lower half of a
+	// scrollbar cell is drawn: the upper half is a foreground over it. Note
+	// that dislikedBG is the same parameter as alertBG — one code, two
+	// meanings, which is why the monochrome test can no longer say where a red
+	// fill is allowed.
+	likedBG    = "45"
+	dislikedBG = "41"
 	// liveFG is the same blue as text: what is playing takes it wherever it
 	// is pointed at — the row in the list, its mark in the scrollbar, the
 	// played part of the bar.
@@ -1153,8 +1160,11 @@ var chromaticCodes = []string{
 // rather than what it holds — which of those it says is
 // TestTheStateBlockIsColouredByState's.
 //
-// Red as a foreground is a dislike or an error message; red as a fill is only
-// ever the block. Cyan and every bright hue are still nothing at all.
+// All four of those appear as a background as well as a foreground: two marks
+// in one cell of the scrollbar are drawn as one over the other. Which means red
+// as a fill can no longer be placed — it is the state block and it is a
+// disliked track's half of a cell, in the same SGR parameter. Cyan, the bright
+// sixteen and green or yellow anywhere but the block are still nothing at all.
 func TestNothingIsColouredButThePlayerAndTheRatings(t *testing.T) {
 	m := sample()
 	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
@@ -1193,14 +1203,13 @@ func TestNothingIsColouredButThePlayerAndTheRatings(t *testing.T) {
 					switch {
 					case code == liveFG || code == liveBG:
 						// The player's own colour, wherever it is pointing.
-					case code == likedFG || code == dislikedFG:
-						// What you think of a row, on the row or its button.
+					case code == likedFG || code == dislikedFG,
+						code == likedBG || code == dislikedBG:
+						// What you think of a row: on the row, in the trough.
 					case row == at.statusRow() && (code == goodBG || code == busyBG):
 						// The state block, on the row the state block is on.
 					case slices.Contains(chromaticCodes, code):
 						t.Errorf("a hue got in on row %d: SGR %s", row, code)
-					case code == alertBG:
-						t.Errorf("a red fill without trouble on row %d", row)
 					}
 				}
 			}
