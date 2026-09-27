@@ -1513,7 +1513,10 @@ func TestAnInactiveTabIsDimAllTheWayRound(t *testing.T) {
 	m := sample()
 	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
 	m = answered.(Model)
-	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
+	// Neither of them the liked playlist: that one is magenta whether it is in
+	// front or not, which is what TestTheLikedTabIsMagenta is for and would
+	// leave nothing here to compare against.
+	m.Playlists = []Playlist{{ID: "PL1", Title: "Favorites"}, {ID: "PL2", Title: "Mixes"}}
 	m.tabCursor = 0
 
 	rendered := m.renderTabs()
@@ -1548,7 +1551,9 @@ func TestTheFrameBehindAPopoverGoesQuiet(t *testing.T) {
 	m.Tracks = rows(100)
 	m.playing, m.Length, m.Position = m.Tracks[2], time.Minute, 20*time.Second
 	m.trackCursor = 4
-	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
+	// Not the liked playlist in front: it carries magenta of its own, and the
+	// emphasis is what this checks for.
+	m.Playlists = []Playlist{{ID: "PL1", Title: "Favorites"}, {ID: "PL2", Title: "Mixes"}}
 
 	behind := m
 	behind.detour = detour{active: true, tracks: m.Tracks,
@@ -1620,10 +1625,11 @@ func TestTheFrameBehindAPopoverGoesQuiet(t *testing.T) {
 	}
 }
 
-// The liked playlist is a tab of what you think of a track, so its label is
-// drawn in the same magenta the rows and the rating buttons take. The label
-// only: the border is what says which tab is in front.
-func TestTheLikedTabLabelIsMagenta(t *testing.T) {
+// The liked playlist is a tab of what you think of a track, so it is drawn in
+// the same magenta the rows and its menu rows take — outline and label both, so
+// it reads as one thing. Which tab is in front is said by the shape: the front
+// one has no bottom edge and the others are closed.
+func TestTheLikedTabIsMagenta(t *testing.T) {
 	m := sample()
 	m.Playlists = []Playlist{
 		{ID: likedPlaylistID, Title: "Liked Music"},
@@ -1641,14 +1647,17 @@ func TestTheLikedTabLabelIsMagenta(t *testing.T) {
 			at := m
 			at.tabCursor = tc.cursor
 			lines := strings.Split(at.renderTabs(), "\n")
-			if !sgrCodes(lines[1])[likedFG] {
-				t.Errorf("the label is not magenta: %q", lines[1])
-			}
-			// Not the borders above and below it.
-			for _, row := range []int{0, 2} {
-				if sgrCodes(lines[row])[likedFG] {
-					t.Errorf("row %d of the tab is magenta too: %q", row, lines[row])
+			// All three rows of it: the outline above and below, and the label.
+			for row, line := range lines {
+				if !sgrCodes(line)[likedFG] {
+					t.Errorf("row %d of the tab is not magenta: %q", row, line)
 				}
+			}
+			// The shape still says which one is in front: an open bottom edge.
+			front := strings.HasPrefix(plain(lines[2]), "╯")
+			if front != (tc.cursor == 0) {
+				t.Errorf("the bottom edge reads front=%v with the cursor on %d: %q",
+					front, tc.cursor, plain(lines[2]))
 			}
 		})
 	}
