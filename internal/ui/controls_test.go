@@ -568,7 +568,7 @@ func TestTheWholeButtonIsClickable(t *testing.T) {
 func TestAButtonIsAsWideAsItsHitbox(t *testing.T) {
 	for _, label := range []string{labelPrevious, labelPause, labelRepeatOne} {
 		for _, state := range []buttonState{buttonDefault, buttonActive, buttonDisabled} {
-			lines := strings.Split(renderButton(label, state), "\n")
+			lines := strings.Split(renderButton(label, state, nil), "\n")
 			if len(lines) != controlsRows {
 				t.Errorf("%q %v draws %d rows, want %d",
 					label, state, len(lines), controlsRows)
@@ -876,16 +876,35 @@ func TestLikingWhatIsPlayingStaysPut(t *testing.T) {
 func TestTheButtonComponentsThreeStates(t *testing.T) {
 	const label = "Prev (p)"
 
-	def := renderButton(label, buttonDefault)
-	act := renderButton(label, buttonActive)
-	off := renderButton(label, buttonDisabled)
+	def := renderButton(label, buttonDefault, nil)
+	act := renderButton(label, buttonActive, nil)
+	off := renderButton(label, buttonDisabled, nil)
 
 	if def != padded(label) {
 		t.Errorf("the default state draws %q, want just the label", def)
 	}
 	if act != def {
-		t.Errorf("active draws %q where default draws %q; they are the same for now",
+		t.Errorf("active draws %q where default draws %q; without a hue they are the same",
 			act, def)
+	}
+	// Given one, active is drawn in it and default is not: the ratings say
+	// which rating they are that way, and nothing else passes a hue.
+	hued := renderButton(label, buttonActive, liked)
+	if hued == def {
+		t.Error("active with a hue draws the same as default")
+	}
+	if !sgrCodes(hued)[likedFG] {
+		t.Errorf("active with a hue is not drawn in it: %v", sgrCodes(hued))
+	}
+	if plain(hued) != padded(label) {
+		t.Errorf("a hue changed the label to %q", plain(hued))
+	}
+	if got, want := lipgloss.Width(hued), buttonWidth(label); got != want {
+		t.Errorf("a hued button is %d cells, buttonWidth is %d", got, want)
+	}
+	if plain(renderButton(label, buttonDefault, liked)) != padded(label) ||
+		sgrCodes(renderButton(label, buttonDefault, liked))[likedFG] {
+		t.Error("a hue reached a button that is not active")
 	}
 	if off == def {
 		t.Error("disabled draws the same as default")
@@ -913,7 +932,7 @@ func TestAButtonHasNoAirOfItsOwn(t *testing.T) {
 		t.Errorf("buttonPadding is %d, want none", buttonPadding)
 	}
 	for _, label := range []string{labelPrevious, labelClose, labelHelp} {
-		if got := renderButton(label, buttonDefault); got != label {
+		if got := renderButton(label, buttonDefault, nil); got != label {
 			t.Errorf("%q drew %q, want the label alone", label, got)
 		}
 		if got, want := buttonWidth(label), lipgloss.Width(label); got != want {

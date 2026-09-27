@@ -476,6 +476,11 @@ const (
 	goodBG  = "42"
 	busyBG  = "43"
 	liveBG  = "44"
+	// likedFG and dislikedFG are what you think of a row, which used to be a
+	// pair of thumbs in front of the title. Red is shared with trouble on
+	// purpose — see the palette.
+	likedFG    = "35"
+	dislikedFG = "31"
 	// liveFG is the same blue as text: what is playing takes it wherever it
 	// is pointed at — the row in the list, its mark in the scrollbar, the
 	// played part of the bar.
@@ -541,54 +546,70 @@ func TestThePlayerIsUnboxedRows(t *testing.T) {
 	}
 }
 
-// A liked row is marked with the same icon the control below it uses.
-func TestALikedRowIsMarkedWithTheThumb(t *testing.T) {
+// A rated row says so by its colour: magenta liked, red disliked. It used to
+// carry a thumb in front of the title, which cost two cells of the title and a
+// glyph out of the reader's font.
+func TestARatedRowIsColoured(t *testing.T) {
 	m := sample()
 	m.Tracks[0].Rating = RatingUp
 	m.Tracks[1].Rating = RatingDown
+	// Off the rated rows, so the cursor's fill is not what is being read.
+	m.trackCursor = 2
 
 	lines := strings.Split(m.View().Content, "\n")
-	if !strings.Contains(lines[tabsHeight+headerRows], iconThumbUp) {
-		t.Errorf("no thumbs-up on the liked row: %q", plain(lines[tabsHeight+headerRows]))
+	like, dislike := lines[tabsHeight+headerRows], lines[tabsHeight+headerRows+1]
+
+	if !sgrCodes(like)[likedFG] {
+		t.Errorf("the liked row is not magenta: %v", sgrCodes(like))
 	}
-	if !strings.Contains(lines[tabsHeight+headerRows+1], iconThumbDown) {
-		t.Errorf("no thumbs-down on the disliked row: %q", plain(lines[tabsHeight+headerRows+1]))
+	if !sgrCodes(dislike)[dislikedFG] {
+		t.Errorf("the disliked row is not red: %v", sgrCodes(dislike))
 	}
-	if strings.ContainsAny(plain(lines[tabsHeight+headerRows]), "+-") {
-		t.Error("the old plus/minus is still there")
+	if sgrCodes(like)[dislikedFG] || sgrCodes(dislike)[likedFG] {
+		t.Error("the two ratings are drawn in each other's colour")
+	}
+	// The whole row takes it, columns included: one colour run, because a
+	// nested style would end in a reset and drop it for the rest of the line.
+	for _, want := range []string{"Alpha", "A", "1:00"} {
+		if !strings.Contains(plain(like), want) {
+			t.Errorf("the liked row lost %q: %q", want, plain(like))
+		}
+	}
+	if sgrCodes(like)[faintSGR] {
+		t.Errorf("part of a coloured row is faint as well: %q", like)
+	}
+	// And nothing is drawn in front of the title, by mark or by space.
+	if got := column(plain(like), "Alpha"); got != 0 {
+		t.Errorf("the title starts at column %d, want the edge: %q", got, plain(like))
 	}
 }
 
-// Everything in the liked playlist is liked, so the column would say the
-// same thing all the way down.
-func TestTheLikedPlaylistDropsTheRatingColumn(t *testing.T) {
+// Everything in the liked playlist is liked, so a page of magenta would say
+// nothing a page of plain rows does not.
+func TestTheLikedPlaylistDropsTheRatingColour(t *testing.T) {
 	m := sample()
 	m.Tracks[0].Rating = RatingUp
+	m.trackCursor = 2
 
-	elsewhere := plain(strings.Split(m.View().Content, "\n")[tabsHeight+headerRows])
+	elsewhere := strings.Split(m.View().Content, "\n")[tabsHeight+headerRows]
 
 	m.showingID = likedPlaylistID
-	liked := plain(strings.Split(m.View().Content, "\n")[tabsHeight+headerRows])
+	inLiked := strings.Split(m.View().Content, "\n")[tabsHeight+headerRows]
 
-	if strings.Contains(liked, iconThumbUp) {
-		t.Errorf("the thumb is still drawn in the liked playlist: %q", liked)
+	if sgrCodes(inLiked)[likedFG] {
+		t.Errorf("the row is still magenta in the liked playlist: %q", inLiked)
 	}
-	if !strings.Contains(elsewhere, iconThumbUp) {
-		t.Fatalf("the comparison is wrong; no thumb elsewhere either: %q", elsewhere)
+	if !sgrCodes(elsewhere)[likedFG] {
+		t.Fatalf("the comparison is wrong; not magenta elsewhere either: %q", elsewhere)
 	}
-	// The liked row has nothing in front of its title, because nothing is
-	// reserved for a mark any more: a mark goes on the front of the title
-	// when there is one, and that playlist draws none.
-	if got := column(liked, "Alpha"); got != 0 {
-		t.Errorf("the title starts at column %d, want the edge: %q", got, liked)
+	// The rows are identical apart from the colour: dropping a rating cannot
+	// move a title any more, because a rating never took any room.
+	if plain(inLiked) != plain(elsewhere) {
+		t.Errorf("the rows differ by more than their colour:\n liked %q\n other %q",
+			plain(inLiked), plain(elsewhere))
 	}
-	// Elsewhere the mark pushes it along, which is the difference.
-	if column(elsewhere, "Alpha") <= column(liked, "Alpha") {
-		t.Errorf("a marked row does not sit further in:\n liked %q\n other %q",
-			liked, elsewhere)
-	}
-	if lipgloss.Width(liked) != lipgloss.Width(elsewhere) {
-		t.Errorf("row widths differ: %d vs %d", lipgloss.Width(liked), lipgloss.Width(elsewhere))
+	if got := column(plain(inLiked), "Alpha"); got != 0 {
+		t.Errorf("the title starts at column %d, want the edge: %q", got, plain(inLiked))
 	}
 }
 
@@ -1119,18 +1140,22 @@ var chromaticCodes = []string{
 	"92", "93", "94", "95", "96", "102", "103", "104", "105", "106",
 }
 
-// The interface is monochrome but for the player. Everything else that has to
-// stand out does it by weight or by being turned inside out, so a hue anywhere
-// else is a regression — and an easy one to make, since reaching for a colour
-// is the obvious way to mark something.
+// The interface is monochrome but for the player and what you think of a
+// track. Everything else that has to stand out does it by weight or by being
+// turned inside out, so a hue anywhere else is a regression — and an easy one
+// to make, since reaching for a colour is the obvious way to mark something.
 //
-// Two things earn a hue. The player's blue goes wherever the track playing is
+// Three things earn one. The player's blue goes wherever the track playing is
 // pointed at: the row in the list, its mark in the scrollbar, the played part
-// of the bar, the state block. And the block alone also carries green, yellow
+// of the bar, the state block. Magenta and red are a rating, on the row and on
+// the button that sets it. And the state block alone also carries green, yellow
 // or red, since it is the one thing on screen that says how the app is going
 // rather than what it holds — which of those it says is
 // TestTheStateBlockIsColouredByState's.
-func TestNothingIsColouredButThePlayer(t *testing.T) {
+//
+// Red as a foreground is a dislike or an error message; red as a fill is only
+// ever the block. Cyan and every bright hue are still nothing at all.
+func TestNothingIsColouredButThePlayerAndTheRatings(t *testing.T) {
 	m := sample()
 	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
 	m = next.(Model)
@@ -1168,12 +1193,14 @@ func TestNothingIsColouredButThePlayer(t *testing.T) {
 					switch {
 					case code == liveFG || code == liveBG:
 						// The player's own colour, wherever it is pointing.
+					case code == likedFG || code == dislikedFG:
+						// What you think of a row, on the row or its button.
 					case row == at.statusRow() && (code == goodBG || code == busyBG):
 						// The state block, on the row the state block is on.
 					case slices.Contains(chromaticCodes, code):
 						t.Errorf("a hue got in on row %d: SGR %s", row, code)
-					case code == "31" || code == alertBG:
-						t.Errorf("red without trouble on row %d: SGR %s", row, code)
+					case code == alertBG:
+						t.Errorf("a red fill without trouble on row %d", row)
 					}
 				}
 			}
@@ -1185,6 +1212,75 @@ func TestNothingIsColouredButThePlayer(t *testing.T) {
 	codes := sgrCodes(m.View().Content)
 	if !codes[alertBG] && !codes["31"] {
 		t.Errorf("an error is not red: %v", codes)
+	}
+}
+
+// privateUse finds the first glyph from a Private Use Area, which is where
+// every Nerd Font icon lives: the BMP's own area at U+E000..U+F8FF and the two
+// supplementary planes. Nothing in a text interface has business in one — a
+// codepoint there means whatever the reader's font decides it means, and a font
+// without it draws a box.
+func privateUse(s string) (rune, bool) {
+	for _, r := range s {
+		switch {
+		case r >= 0xE000 && r <= 0xF8FF,
+			r >= 0xF0000 && r <= 0xFFFFD,
+			r >= 0x100000 && r <= 0x10FFFD:
+			return r, true
+		}
+	}
+	return 0, false
+}
+
+// The app draws no icons at all. It lost them a pair at a time — the
+// transport's, the menu's, the leading column's — and the thumbs on a rated row
+// were the last of them, replaced by the colour of the row. Everything drawn
+// now is a glyph any terminal font has.
+func TestNothingDrawsAnIcon(t *testing.T) {
+	m := sized(sample(), 120, 40)
+	m.Tracks = rows(40)
+	m.Tracks[0].Rating, m.Tracks[1].Rating = RatingUp, RatingDown
+	m.playing, m.Length, m.Position = m.Tracks[0], time.Minute, 20*time.Second
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
+
+	for _, state := range []struct {
+		name  string
+		setup func(Model) Model
+	}{
+		{"the frame", func(m Model) Model { return m }},
+		{"paused", func(m Model) Model { m.Paused = true; return m }},
+		{"loading", func(m Model) Model { m.loading = true; return m }},
+		{"trouble", func(m Model) Model { m.Err = errors.New("no"); return m }},
+		{"the track menu", func(m Model) Model { return m.openMenu(m.Tracks[0], 4, 6) }},
+		{"a popover", func(m Model) Model {
+			m.detour = detour{active: true, tracks: m.Tracks,
+				tab: Playlist{ID: "MPRE", Title: "Cherry", kind: tabAlbum}}
+			return m
+		}},
+		{"a search with nothing found", func(m Model) Model {
+			m.detour = detour{active: true, searched: "x",
+				tab: Playlist{Title: "Search", kind: tabSearch}}
+			return m
+		}},
+		{"the keys sheet", func(m Model) Model { m.sheetOpen = true; return m }},
+	} {
+		t.Run(state.name, func(t *testing.T) {
+			frame := plain(state.setup(m).View().Content)
+			if glyph, found := privateUse(frame); found {
+				t.Errorf("%U is drawn on the frame:\n%s", glyph, frame)
+			}
+		})
+	}
+
+	// Including the labels themselves, which are read in isolation elsewhere.
+	for _, label := range []string{
+		labelPrevious, labelPlay, labelPause, labelNext, labelLike, labelUnlike,
+		labelDislike, labelRepeatOff, labelRepeatOn, labelRepeatOne,
+		labelClose, labelHelp, labelKeys, labelLoadMore, labelTypeToSearch,
+	} {
+		if glyph, found := privateUse(label); found {
+			t.Errorf("the label %q carries %U", label, glyph)
+		}
 	}
 }
 

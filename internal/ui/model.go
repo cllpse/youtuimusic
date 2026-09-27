@@ -31,19 +31,21 @@ const (
 	RatingDown
 )
 
-// glyph marks a rated row with the same icon the control below it uses, so
-// the two cannot be read as different things.
-// glyph is the mark a rated track carries in front of its title. An unrated
-// one carries nothing: it used to carry a space, because the mark had a
-// column of its own to be blank in, and it has not had one since.
-func (r Rating) glyph() string {
+// hue is the colour a rated track is drawn in, and false for an unrated one,
+// which is drawn in nothing in particular.
+//
+// It replaces a mark in front of the title. A mark costs two cells of every
+// rated row and says nothing the row could not have said by being a colour,
+// and it cost a glyph that had to exist in the reader's font — which is the
+// last thing in the app that did.
+func (r Rating) hue() (color.Color, bool) {
 	switch r {
 	case RatingUp:
-		return iconThumbUp
+		return liked, true
 	case RatingDown:
-		return iconThumbDown
+		return disliked, true
 	default:
-		return ""
+		return nil, false
 	}
 }
 
@@ -66,9 +68,6 @@ type Playlist struct {
 
 // Track is one row in the table. A release is a Track too: an artist's page
 // lists albums beside songs, and there is nothing to play in an album.
-//
-// glyph is the mark in the leading column — what a release is, or how a
-// track is rated.
 type Track struct {
 	VideoID  string
 	Title    string
@@ -991,6 +990,17 @@ var (
 	busy = lipgloss.Yellow
 	live = lipgloss.Blue
 
+	// liked and disliked are what you think of a track, which the list said
+	// with a pair of thumbs until a hue could say it without spending a cell
+	// of the title on it.
+	//
+	// Magenta because it was the one hue in the scheme nothing else here had
+	// taken. The dislike shares red with trouble, deliberately: it is the one
+	// mark on a row you would not want more of, and a scheme of sixteen has
+	// only so many ways to say that.
+	liked    = lipgloss.Magenta
+	disliked = lipgloss.Red
+
 	// background and foreground are the terminal's own two ends, whichever
 	// way round the theme has them.
 	background = lipgloss.Black
@@ -1502,7 +1512,7 @@ func (m Model) renderStatusBar() string {
 		if m.sheetOpen {
 			state = buttonActive
 		}
-		tail = fill.Render(renderButton(labelHelp, state) + " ")
+		tail = fill.Render(renderButton(labelHelp, state, nil) + " ")
 		room -= helpButtonWidth + 1
 	}
 	return block + fillRow(m.statusSegments(), fill, room) + tail

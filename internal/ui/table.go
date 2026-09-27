@@ -24,8 +24,9 @@ type trackTable struct {
 	width  int
 	// height is the whole block, the header included.
 	height int
-	// showRating is false where every row would carry the same mark, as in
-	// the liked playlist.
+	// showRating is false where every row would be drawn the same, as in the
+	// liked playlist: a page of magenta says nothing a page of plain rows does
+	// not.
 	showRating bool
 	// titleOnly drops every column but the first. An album is one artist's
 	// record, so naming them down the page says the same thing each time.
@@ -144,8 +145,7 @@ func (t trackTable) rows() []string {
 			line = t.moreRow(width)
 		case index >= 0 && index < len(t.tracks):
 			track := t.tracks[index]
-			playing := t.playing != "" && track.VideoID == t.playing
-			style, styled := rowStyle(playing, index == t.cursor, t.highlight, t.inactive)
+			style, styled := t.rowStyle(track, index == t.cursor)
 			line = t.trackLine(track, cols, styled)
 			if styled {
 				line = style.Render(line)
@@ -185,17 +185,6 @@ func (t trackTable) moreRow(width int) string {
 	return dim.Render(centred)
 }
 
-// A row carries two independent things: whether it is the track playing, and
-// whether it is the one under the cursor. Colour says the first and a filled
-// background says the second, so a row can say both at once — which it has
-// to, since the cursor is usually on the track that is playing.
-//
-// The colour is the player's blue, the same one the state block and the played
-// part of the bar take: the thing they are all pointing at is one thing. The
-// weight stays with it, so the row is still marked where a terminal renders
-// blue close to its own foreground.
-var rowPlaying = lipgloss.NewStyle().Bold(true).Foreground(live)
-
 // rowSelected fills a row with the highlight. No foreground is set with it:
 // the highlight is a tint of the terminal's own background, so the
 // terminal's own text colour still reads on it whatever the theme is.
@@ -203,41 +192,63 @@ func rowSelected(highlight color.Color) lipgloss.Style {
 	return lipgloss.NewStyle().Background(highlight)
 }
 
-// rowStyle picks how a row is drawn, and reports whether it is styled at
-// all. An unstyled row mutes its own columns; a styled one must not, since
-// dimmed text on a filled background is nothing.
-func rowStyle(playing, selected bool, highlight color.Color, inactive bool) (lipgloss.Style, bool) {
-	if inactive {
-		// Nothing is selected or playing as far as this block is concerned.
+// rowStyle picks how a row is drawn, and reports whether it is styled at all.
+// An unstyled row mutes its own columns; a styled one must not, since dimmed
+// text on a filled background is nothing.
+//
+// A row carries three independent things: what you think of the track, whether
+// it is the one playing, and whether it is the one under the cursor. There are
+// three ways to say something here and one goes to each — the hue is the
+// rating, the weight is the player, the fill is the cursor — so a row can say
+// all three at once, which it has to: the cursor is usually on the track
+// playing, and that track is as likely to be rated as any other.
+//
+// Where there is no rating the hue says the player instead, in its own blue.
+// A rating displaces that because the player has three other places to say
+// where it is — the state block, the bar, the mark in the scrollbar — and a
+// rating has only this one.
+func (t trackTable) rowStyle(track Track, selected bool) (lipgloss.Style, bool) {
+	if t.inactive {
+		// Nothing is rated, selected or playing as far as this block is
+		// concerned: something is in front of it.
 		return lipgloss.Style{}, false
 	}
-	switch {
-	case playing && selected:
-		return rowPlaying.Background(highlight), true
+	style, styled := lipgloss.NewStyle(), false
+	playing := t.playing != "" && track.VideoID == t.playing
+
+	switch hue, rated := t.ratingHue(track); {
+	case rated:
+		style, styled = style.Foreground(hue), true
 	case playing:
-		return rowPlaying, true
-	case selected:
-		return rowSelected(highlight), true
+		style, styled = style.Foreground(live), true
 	}
-	return lipgloss.Style{}, false
+	if playing {
+		style, styled = style.Bold(true), true
+	}
+	if selected {
+		style, styled = style.Background(t.highlight), true
+	}
+	return style, styled
 }
 
-// trackLine draws one row. The leading column is the same two cells whether
-// or not it holds a mark, so the titles line up across tabs.
+// ratingHue is the colour a row is drawn in for what you think of it, where
+// the block shows that at all.
+func (t trackTable) ratingHue(track Track) (color.Color, bool) {
+	if !t.showRating {
+		return nil, false
+	}
+	return track.Rating.hue()
+}
+
+// trackLine draws one row. Every title starts at the edge: nothing goes in
+// front of one, now that how a track is rated is the colour of the row rather
+// than a mark on it.
 //
 // Everything but the title is muted, which leaves the eye one thing to read
-// down. A highlighted row is drawn plain and coloured whole by the caller —
-// dimming part of it would fight the highlight.
+// down. A styled row is drawn plain and coloured whole by the caller — dimming
+// part of it would fight the colour.
 func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string {
-	// The mark goes on the front of the title rather than in a column of its
-	// own. A column of its own is two cells of nothing on every unrated row,
-	// and most rows are unrated.
 	title := track.Title
-	if t.showRating {
-		if glyph := track.Rating.glyph(); glyph != "" {
-			title = glyph + " " + title
-		}
-	}
 	// A release is the artist's own work rather than a song of theirs, and
 	// weight is what says so now that it has no icon. Not while the block is
 	// inactive: weight is what inactive takes away, and a style here would

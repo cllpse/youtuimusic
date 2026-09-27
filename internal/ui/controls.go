@@ -1,25 +1,17 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
-// Material Design icons from Nerd Fonts, by the names glyphnames.json gives
-// them. The codepoints were checked against that file rather than typed from
-// memory, and against the installed fonts with fontconfig.
-// Filled, both of them. The outline pair — md-thumb_up_outline at U+F0514 and
-// md-thumb_down_outline at U+F0512 — was there to show an unrated track back
-// when the transport was icons; the transport is words now and the only thing
-// left drawing a thumb is a liked row, which is rated by definition. Checked
-// against Nerd Fonts glyphnames 3.5.1: these two were the only outlines in
-// the set.
-const (
-	iconThumbUp   = "\U000f0513" // md-thumb_up
-	iconThumbDown = "\U000f0511" // md-thumb_down
-)
+// The app draws no icons at all. The last pair was a thumbs-up and a
+// thumbs-down on a rated row — md-thumb_up at U+F0513 and md-thumb_down at
+// U+F0511, from Nerd Fonts — and a rating is a colour now, which asks nothing
+// of the reader's font.
 
 // The transport is labelled rather than pictured. An icon has to be learned;
 // a word does not, and there is room for words here.
@@ -116,6 +108,10 @@ type button struct {
 	control control
 	label   string
 	state   buttonState
+	// hue is what active looks like for this one. The ratings have a colour of
+	// their own — the same one the rows take — and everything else is nil,
+	// where active and default read the same.
+	hue color.Color
 	// start and end are half-open columns.
 	start, end int
 }
@@ -175,9 +171,11 @@ func (m Model) controlButtons() []button {
 	// belongs when it is the row being rated rather than the player.
 	var rightGroup []button
 	if m.showsRating() {
-		liked := m.playing.Rating == RatingUp
+		// up, not liked: liked is the colour, and a rating button in force is
+		// drawn in it.
+		up := m.playing.Rating == RatingUp
 		like := labelLike
-		if liked {
+		if up {
 			like = labelUnlike
 		}
 		// A rating with nothing to rate cannot be pressed; one the track
@@ -193,9 +191,9 @@ func (m Model) controlButtons() []button {
 		}
 		rightGroup = []button{
 			{control: controlThumbUp, label: steady(like, likeLabels),
-				state: rating(liked)},
+				state: rating(up), hue: liked},
 			{control: controlThumbDown, label: labelDislike,
-				state: rating(m.playing.Rating == RatingDown)},
+				state: rating(m.playing.Rating == RatingDown), hue: disliked},
 		}
 	}
 
@@ -248,7 +246,7 @@ func (m Model) renderControls() string {
 		at[i] = contentLeft
 	}
 	for _, btn := range buttons {
-		lines := strings.Split(renderButton(btn.label, btn.state), "\n")
+		lines := strings.Split(renderButton(btn.label, btn.state, btn.hue), "\n")
 		for r := range rows {
 			if r >= len(lines) {
 				continue

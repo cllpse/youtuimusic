@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -63,9 +64,16 @@ func padded(label string) string {
 }
 
 // renderButton draws one button in a state.
-func renderButton(label string, state buttonState) string {
-	if state == buttonDisabled {
+//
+// hue is what active is drawn in, and nil for the buttons that have no colour
+// of their own — which is all of them but the two ratings, where active means
+// "the playing track carries this" and the colour says which.
+func renderButton(label string, state buttonState, hue color.Color) string {
+	switch {
+	case state == buttonDisabled:
 		return disabledButton.Render(padded(label))
+	case state == buttonActive && hue != nil:
+		return lipgloss.NewStyle().Foreground(hue).Bold(true).Render(padded(label))
 	}
 	return padded(label)
 }

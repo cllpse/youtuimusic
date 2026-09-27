@@ -401,11 +401,10 @@ func TestAnAlbumsTableIsTitlesOnly(t *testing.T) {
 			t.Errorf("row %d is %d cells", i, lipgloss.Width(plain(row)))
 		}
 	}
-	// Exactly the mark and the title, and nothing after them. Checked whole
-	// rather than by substring: the artist here is "A", which is inside
-	// "Alpha".
+	// Exactly the title and nothing after it. Checked whole rather than by
+	// substring: the artist here is "A", which is inside "Alpha".
 	first := plain(album.rows()[0])
-	if got, want := strings.TrimSpace(first), iconThumbUp+" Alpha"; got != want {
+	if got, want := strings.TrimSpace(first), "Alpha"; got != want {
 		t.Errorf("row reads %q, want %q", got, want)
 	}
 
@@ -686,35 +685,46 @@ func TestTheLastColumnIsRightAligned(t *testing.T) {
 	}
 }
 
-// A mark goes on the front of the title, with a space after it, and only
-// where there is a mark. Nothing is reserved for one.
-func TestARatingMarksTheTitleRatherThanAColumn(t *testing.T) {
-	liked := Track{VideoID: "a", Title: "Alpha", Artist: "A", Rating: RatingUp}
-	disliked := Track{VideoID: "b", Title: "Beta", Artist: "B", Rating: RatingDown}
+// A rating is the colour of the row and nothing in the row: no mark in front
+// of the title, no room held for one, every title at the edge.
+func TestARatingIsAColourAndNotAMark(t *testing.T) {
+	up := Track{VideoID: "a", Title: "Alpha", Artist: "A", Rating: RatingUp}
+	down := Track{VideoID: "b", Title: "Beta", Artist: "B", Rating: RatingDown}
 	plainTrack := Track{VideoID: "c", Title: "Gamma", Artist: "C"}
-	tracks := []Track{liked, disliked, plainTrack}
+	tracks := []Track{up, down, plainTrack}
 	table := trackTable{tracks: tracks, width: 80, height: 3, showRating: true}
 	cols := table.layout(80)
 
-	for _, tc := range []struct {
-		track Track
-		want  string
-	}{
-		{liked, iconThumbUp + " " + liked.Title},
-		{disliked, iconThumbDown + " " + disliked.Title},
-		{plainTrack, plainTrack.Title},
-	} {
-		row := plain(table.trackLine(tc.track, cols, false))
-		if !strings.HasPrefix(row, tc.want) {
-			t.Errorf("%q starts %q, want %q", tc.track.Title, row, tc.want)
+	for _, track := range tracks {
+		row := plain(table.trackLine(track, cols, false))
+		if !strings.HasPrefix(row, track.Title) {
+			t.Errorf("%q starts %q, want the title at the edge", track.Title, row)
 		}
 	}
 
-	// And an unmarked row starts at the very edge, with nothing held for a
-	// mark it does not have.
-	row := plain(table.trackLine(plainTrack, cols, false))
-	if strings.HasPrefix(row, " ") {
-		t.Errorf("space is reserved for a mark: %q", row)
+	// The colour comes from the row's style instead, and only where there is
+	// something to say.
+	for _, tc := range []struct {
+		track Track
+		hue   color.Color
+		rated bool
+	}{
+		{up, liked, true},
+		{down, disliked, true},
+		{plainTrack, nil, false},
+	} {
+		hue, rated := table.ratingHue(tc.track)
+		if rated != tc.rated || hue != tc.hue {
+			t.Errorf("%q is drawn in %v (rated %v), want %v (%v)",
+				tc.track.Title, hue, rated, tc.hue, tc.rated)
+		}
+	}
+
+	// And the liked playlist says nothing at all about a rating.
+	quiet := table
+	quiet.showRating = false
+	if _, rated := quiet.ratingHue(up); rated {
+		t.Error("a block that shows no ratings still coloured one")
 	}
 }
 
@@ -753,17 +763,28 @@ func TestAnInactiveRowIsOneColourAllTheWayAcross(t *testing.T) {
 		t.Errorf("an inactive row has %d resets in it: %q", n, offRow)
 	}
 
-	// And nothing in the block is selected or playing any more.
+	// And nothing in the block is rated, selected or playing any more.
 	whole := strings.Join(off.rows(), "\n")
-	if sgrCodes(whole)[liveFG] {
-		t.Errorf("an inactive block still marks what is playing: %q", whole)
+	for _, hue := range []string{liveFG, likedFG, dislikedFG} {
+		if sgrCodes(whole)[hue] {
+			t.Errorf("an inactive block still carries SGR %s: %q", hue, whole)
+		}
 	}
 	if sgrCodes(whole)[highlightSGR] {
 		t.Errorf("an inactive block still fills the cursor row: %q", whole)
 	}
-	// The live one does both, so the comparison means something.
+	// The live one does, so the comparison means something. The first track
+	// here is both playing and liked, which is the precedence rowStyle sets:
+	// the hue is the rating and the weight is the player, so a liked track
+	// does not stop looking liked the moment it starts playing.
 	liveWhole := strings.Join(live.rows(), "\n")
-	if !sgrCodes(liveWhole)[liveFG] || !sgrCodes(liveWhole)[highlightSGR] {
+	if !sgrCodes(liveWhole)[likedFG] || !sgrCodes(liveWhole)[highlightSGR] {
 		t.Fatalf("the live block marks neither: %q", liveWhole)
+	}
+	if sgrCodes(liveWhole)[liveFG] {
+		t.Errorf("the rating did not displace the player's blue: %q", liveWhole)
+	}
+	if !sgrCodes(liveWhole)["1"] {
+		t.Errorf("the playing row lost its weight: %q", liveWhole)
 	}
 }

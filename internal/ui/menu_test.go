@@ -67,12 +67,10 @@ func TestRightClickOpensTheMenuOnThatTrack(t *testing.T) {
 			t.Errorf("menu is missing %q:\n%s", want, got)
 		}
 	}
-	// Words only: the thumbs are the one pair of icons left in the app, and
-	// they mark a rated row rather than a menu entry.
-	for _, icon := range []string{iconThumbUp, iconThumbDown} {
-		if strings.Contains(got, icon) {
-			t.Errorf("the menu draws an icon:\n%s", got)
-		}
+	// Words only — see TestNothingDrawsAnIcon, which holds that for the whole
+	// frame now that the last pair of thumbs has gone.
+	if glyph, found := privateUse(got); found {
+		t.Errorf("the menu draws %U:\n%s", glyph, got)
 	}
 }
 
