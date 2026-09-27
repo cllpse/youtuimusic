@@ -1401,6 +1401,14 @@ func (m Model) renderTabs() string {
 		case s.index == m.tabCursor:
 			style = activeTabStyle
 		}
+		// The liked playlist is what you think of a track, a tab of it, so its
+		// label is drawn in the same magenta a liked row is. Only the label:
+		// the border still says which tab is in front, and whether anything is
+		// in front of the row. Not while something is — covered, nothing on the
+		// row is saying anything.
+		if !m.covered() && m.tabAt(s.index).ID == likedPlaylistID {
+			style = style.Foreground(liked)
+		}
 		rendered = append(rendered, style.Render(truncate(m.tabAt(s.index).Title, maxTabTitle)))
 	}
 	row := lipgloss.JoinHorizontal(lipgloss.Top, rendered...)

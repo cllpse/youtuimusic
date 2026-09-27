@@ -1335,3 +1335,55 @@ func TestTheSearchNoteTellsUntypedFromUnfound(t *testing.T) {
 		t.Errorf("a fruitless search does not say so: %q", got)
 	}
 }
+
+// The menu's rating row is drawn in the same magenta, both ways round: it is
+// about what you think of this track, which is what that colour means
+// everywhere else in the app.
+func TestTheMenuRatingRowCarriesItsColour(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+
+	for _, rating := range []Rating{RatingNone, RatingUp} {
+		track := m.Tracks[0]
+		track.Rating = rating
+		at := m.openMenu(track, 4, 4)
+		at.menu.cursor = 1 // the cursor elsewhere, so the weight is not in play
+
+		lines := strings.Split(at.renderMenu(), "\n")
+		for _, line := range lines {
+			bare := plain(line)
+			switch {
+			case strings.Contains(bare, "Like track") || strings.Contains(bare, "Unlike track"):
+				if !sgrCodes(line)[likedFG] {
+					t.Errorf("the rating row is not magenta: %q", line)
+				}
+				if sgrCodes(line)["1"] {
+					t.Errorf("the rating row is bold without the cursor: %q", line)
+				}
+			case strings.Contains(bare, "Go to"):
+				if sgrCodes(line)[likedFG] {
+					t.Errorf("a row that goes somewhere is magenta: %q", line)
+				}
+			}
+		}
+	}
+
+	// Under the cursor it keeps the colour and takes the weight, rather than
+	// turning into the emphasis every other row uses.
+	at := m.openMenu(m.Tracks[0], 4, 4)
+	at.menu.cursor = 0
+	row := ""
+	for _, line := range strings.Split(at.renderMenu(), "\n") {
+		if strings.Contains(plain(line), "Like track") {
+			row = line
+		}
+	}
+	if row == "" {
+		t.Fatal("no rating row in the menu")
+	}
+	if !sgrCodes(row)[likedFG] || !sgrCodes(row)["1"] {
+		t.Errorf("the chosen rating row is %v, want magenta and bold", sgrCodes(row))
+	}
+	if sgrCodes(row)[emphasisFG] {
+		t.Errorf("the chosen rating row took the emphasis as well: %q", row)
+	}
+}

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -38,6 +39,10 @@ type menuRow struct {
 	// enabled is false when the row has nowhere to go: a single with no
 	// album page, or a track whose artist is not linked.
 	enabled bool
+	// hue is a colour of the row's own, for the one row that has a subject
+	// with a colour: rating this track, in the magenta a liked row takes. The
+	// rows that go somewhere have none, and are drawn like any other menu.
+	hue color.Color
 }
 
 // dividerAfter is the item the rule follows. Liking is about this track;
@@ -48,14 +53,14 @@ func (m Model) menuRows() []menuRow {
 	t := m.menu.track
 	// The row says what pressing it does, so a liked track offers to undo
 	// it rather than offering to do it again.
-	like := menuRow{menuLike, "Like track", true}
+	like := menuRow{menuLike, "Like track", true, liked}
 	if t.Rating == RatingUp {
-		like = menuRow{menuLike, "Unlike track", true}
+		like = menuRow{menuLike, "Unlike track", true, liked}
 	}
 	return []menuRow{
 		like,
-		{menuAlbum, "Go to album…", t.AlbumID != ""},
-		{menuArtist, "Go to artist…", t.ArtistID != ""},
+		{menuAlbum, "Go to album…", t.AlbumID != "", nil},
+		{menuArtist, "Go to artist…", t.ArtistID != "", nil},
 	}
 }
 
@@ -124,6 +129,14 @@ func (m Model) renderMenu() string {
 		switch {
 		case !row.enabled:
 			line = dim.Render(line)
+		case row.hue != nil:
+			// A row with a colour of its own keeps it, and takes the weight
+			// rather than the emphasis when it is the one under the cursor:
+			// two ways to say a thing, one each, as on a row of the list.
+			line = lipgloss.NewStyle().
+				Foreground(row.hue).
+				Bold(i == m.menu.cursor).
+				Render(line)
 		case i == m.menu.cursor:
 			line = menuSelected.Render(line)
 		}

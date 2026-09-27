@@ -1610,3 +1610,59 @@ func TestTheFrameBehindAPopoverGoesQuiet(t *testing.T) {
 		}
 	}
 }
+
+// The liked playlist is a tab of what you think of a track, so its label is
+// drawn in the same magenta the rows and the rating buttons take. The label
+// only: the border is what says which tab is in front.
+func TestTheLikedTabLabelIsMagenta(t *testing.T) {
+	m := sample()
+	m.Playlists = []Playlist{
+		{ID: likedPlaylistID, Title: "Liked Music"},
+		{ID: "PL1", Title: "Favorites"},
+	}
+
+	for _, tc := range []struct {
+		name   string
+		cursor int
+	}{
+		{"in front", 0},
+		{"behind another", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at := m
+			at.tabCursor = tc.cursor
+			lines := strings.Split(at.renderTabs(), "\n")
+			if !sgrCodes(lines[1])[likedFG] {
+				t.Errorf("the label is not magenta: %q", lines[1])
+			}
+			// Not the borders above and below it.
+			for _, row := range []int{0, 2} {
+				if sgrCodes(lines[row])[likedFG] {
+					t.Errorf("row %d of the tab is magenta too: %q", row, lines[row])
+				}
+			}
+		})
+	}
+
+	// It follows the playlist's id and not its title: a playlist of your own
+	// called Liked Music is somebody's playlist, not the liked playlist.
+	renamed := m
+	renamed.Playlists[0].ID = "PL0"
+	if sgrCodes(strings.Split(renamed.renderTabs(), "\n")[1])[likedFG] {
+		t.Error("a tab that is not the liked playlist is magenta")
+	}
+
+	// And it goes quiet with the rest of the row when something is in front of
+	// it: covered, no tab is saying anything.
+	for name, cover := range map[string]func(Model) Model{
+		"a popover": func(m Model) Model {
+			m.detour = detour{active: true, tab: Playlist{Title: "Cherry", kind: tabAlbum}}
+			return m
+		},
+		"the keys sheet": func(m Model) Model { m.sheetOpen = true; return m },
+	} {
+		if sgrCodes(strings.Split(cover(m).renderTabs(), "\n")[1])[likedFG] {
+			t.Errorf("the label is still magenta behind %s", name)
+		}
+	}
+}

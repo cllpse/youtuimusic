@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 	"time"
@@ -887,24 +888,29 @@ func TestTheButtonComponentsThreeStates(t *testing.T) {
 		t.Errorf("active draws %q where default draws %q; without a hue they are the same",
 			act, def)
 	}
-	// Given one, active is drawn in it and default is not: the ratings say
-	// which rating they are that way, and nothing else passes a hue.
-	hued := renderButton(label, buttonActive, liked)
-	if hued == def {
-		t.Error("active with a hue draws the same as default")
+	// Given one, the button is drawn in it either way round: the hue says what
+	// the button is about, not what state it is in. Active adds the weight,
+	// which is all that is left to say the playing track carries it — dislike
+	// has no second word for its other state.
+	for _, state := range []buttonState{buttonDefault, buttonActive} {
+		hued := renderButton(label, state, liked)
+		if !sgrCodes(hued)[likedFG] {
+			t.Errorf("%v with a hue is not drawn in it: %v", state, sgrCodes(hued))
+		}
+		if plain(hued) != padded(label) {
+			t.Errorf("a hue changed the label to %q", plain(hued))
+		}
+		if got, want := lipgloss.Width(hued), buttonWidth(label); got != want {
+			t.Errorf("a hued button is %d cells, buttonWidth is %d", got, want)
+		}
+		if bold := sgrCodes(hued)["1"]; bold != (state == buttonActive) {
+			t.Errorf("%v is bold=%v", state, bold)
+		}
 	}
-	if !sgrCodes(hued)[likedFG] {
-		t.Errorf("active with a hue is not drawn in it: %v", sgrCodes(hued))
-	}
-	if plain(hued) != padded(label) {
-		t.Errorf("a hue changed the label to %q", plain(hued))
-	}
-	if got, want := lipgloss.Width(hued), buttonWidth(label); got != want {
-		t.Errorf("a hued button is %d cells, buttonWidth is %d", got, want)
-	}
-	if plain(renderButton(label, buttonDefault, liked)) != padded(label) ||
-		sgrCodes(renderButton(label, buttonDefault, liked))[likedFG] {
-		t.Error("a hue reached a button that is not active")
+	// And a hue does not rescue a button that cannot be pressed: nothing to
+	// rate is nothing to colour.
+	if got := renderButton(label, buttonDisabled, liked); got != off {
+		t.Errorf("disabled with a hue draws %q, want the faint label %q", got, off)
 	}
 	if off == def {
 		t.Error("disabled draws the same as default")
@@ -966,5 +972,67 @@ func TestThePopoverButtonIsTheSameComponent(t *testing.T) {
 	}
 	if want := buttonWidth(labelClose); width != want {
 		t.Errorf("its hitbox is %d, the component draws %d", width, want)
+	}
+}
+
+// The two ratings carry their colours whether or not the playing track is
+// rated: magenta is which button it is, not which state it is in. The label
+// says the state where English has a word for it, and the weight says it where
+// it does not — there is no undislike.
+func TestTheRatingButtonsCarryTheirColour(t *testing.T) {
+	m, _, _, _ := playingModel(t)
+	m.playing.Rating = RatingNone
+
+	for _, tc := range []struct {
+		which control
+		hue   color.Color
+		code  string
+	}{
+		{controlThumbUp, liked, likedFG},
+		{controlThumbDown, disliked, dislikedFG},
+	} {
+		b, ok := buttonAt(m, tc.which)
+		if !ok {
+			t.Fatalf("%v is not on the row", tc.which)
+		}
+		if b.hue != tc.hue {
+			t.Errorf("%v carries %v, want %v", tc.which, b.hue, tc.hue)
+		}
+		if b.state != buttonDefault {
+			t.Errorf("an unrated track leaves %v in %v", tc.which, b.state)
+		}
+		drawn := renderButton(b.label, b.state, b.hue)
+		if !strings.Contains(controlsLine(m), drawn) {
+			t.Errorf("the row does not draw %v through the component", tc.which)
+		}
+		if !sgrCodes(drawn)[tc.code] {
+			t.Errorf("%v unrated is not SGR %s: %v", tc.which, tc.code, sgrCodes(drawn))
+		}
+		if sgrCodes(drawn)["1"] {
+			t.Errorf("%v is bold with nothing rated", tc.which)
+		}
+	}
+
+	// Carried, it is the same colour with the weight added.
+	m.playing.Rating = RatingUp
+	up, _ := buttonAt(m, controlThumbUp)
+	held := renderButton(up.label, up.state, up.hue)
+	if !sgrCodes(held)[likedFG] || !sgrCodes(held)["1"] {
+		t.Errorf("a liked track does not bolden the like: %v", sgrCodes(held))
+	}
+	if got := strings.TrimSpace(up.label); got != labelUnlike {
+		t.Errorf("it reads %q, want %q", got, labelUnlike)
+	}
+
+	// Nothing to rate is nothing to colour: the button goes faint instead.
+	idle := m
+	idle.playing = Track{}
+	off, _ := buttonAt(idle, controlThumbUp)
+	blank := renderButton(off.label, off.state, off.hue)
+	if sgrCodes(blank)[likedFG] {
+		t.Errorf("a rating with nothing to rate is still coloured: %v", sgrCodes(blank))
+	}
+	if !sgrCodes(blank)[faintSGR] {
+		t.Errorf("a rating with nothing to rate is not faint: %v", sgrCodes(blank))
 	}
 }
