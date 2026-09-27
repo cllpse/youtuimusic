@@ -1625,141 +1625,6 @@ func TestTheFrameBehindAPopoverGoesQuiet(t *testing.T) {
 	}
 }
 
-// The liked playlist's tab says whose it is with its label and nothing else. Its
-// outline is every other tab's — the emphasis in front, the dimmed colour behind
-// — because the outline is already saying which tab is in front, and a second
-// thing on the same line reads as an argument.
-//
-// Which tab is in front is also said by the shape: the front one has no bottom
-// edge and the others are closed.
-func TestOnlyTheLikedTabsLabelIsMagenta(t *testing.T) {
-	m := sample()
-	m.Playlists = []Playlist{
-		{ID: likedPlaylistID, Title: "Liked Music"},
-		{ID: "PL1", Title: "Favorites"},
-	}
-
-	for _, tc := range []struct {
-		name   string
-		cursor int
-	}{
-		{"in front", 0},
-		{"behind another", 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			at := m
-			at.tabCursor = tc.cursor
-			lines := strings.Split(at.renderTabs(), "\n")
-			// The label, and only the label: not the top edge above it, not the
-			// walls beside it on the same row, not the feet below it.
-			if !sgrCodes(lines[1])[likedFG] {
-				t.Errorf("the label is not magenta: %q", lines[1])
-			}
-			if sgrCodes(lines[0])[likedFG] {
-				t.Errorf("the top edge is magenta: %q", lines[0])
-			}
-			// The walls on the label's own row, and the feet on the rule
-			// below it. Not the rule itself: that is the page's, and while
-			// this tab is in front the page is this playlist's.
-			for row, glyphs := range map[int]string{1: "│", 2: "╯╰┴"} {
-				for _, run := range styledRuns(lines[row]) {
-					if !strings.Contains(run.codes, likedFG) {
-						continue
-					}
-					if strings.ContainsAny(run.text, glyphs) {
-						t.Errorf("magenta reaches the outline %q on row %d: %q",
-							run.text, row, lines[row])
-					}
-				}
-			}
-			// The shape still says which one is in front: an open bottom edge.
-			front := strings.HasPrefix(plain(lines[2]), "╯")
-			if front != (tc.cursor == 0) {
-				t.Errorf("the bottom edge reads front=%v with the cursor on %d: %q",
-					front, tc.cursor, plain(lines[2]))
-			}
-		})
-	}
-
-	// It follows the playlist's id and not its title: a playlist of your own
-	// called Liked Music is somebody's playlist, not the liked playlist.
-	renamed := m
-	renamed.Playlists[0].ID = "PL0"
-	if sgrCodes(strings.Split(renamed.renderTabs(), "\n")[1])[likedFG] {
-		t.Error("a tab that is not the liked playlist is magenta")
-	}
-
-	// And it goes quiet with the rest of the row when something is in front of
-	// it: covered, no tab is saying anything.
-	for name, cover := range map[string]func(Model) Model{
-		"a popover": func(m Model) Model {
-			m.detour = detour{active: true, tab: Playlist{Title: "Cherry", kind: tabAlbum}}
-			return m
-		},
-		"the keys sheet": func(m Model) Model { m.sheetOpen = true; return m },
-	} {
-		if sgrCodes(strings.Split(cover(m).renderTabs(), "\n")[1])[likedFG] {
-			t.Errorf("the label is still magenta behind %s", name)
-		}
-	}
-}
-
-// The line above the player takes the liked playlist's magenta while that is
-// the tab in front: it closes off a page of that playlist's rows, so it says
-// which page the way the tab does.
-func TestTheSeparatorFollowsTheLikedTab(t *testing.T) {
-	m := sample()
-	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
-	m = answered.(Model)
-	m.Playlists = []Playlist{
-		{ID: likedPlaylistID, Title: "Liked Music"},
-		{ID: "PL1", Title: "Favorites"},
-	}
-	r, g, b, _ := m.dimmedColor().RGBA()
-	dimmed := fmt.Sprintf("38;2;%d;%d;%d", r>>8, g>>8, b>>8)
-
-	row := func(m Model) string {
-		return strings.Split(m.View().Content, "\n")[m.playerTop()]
-	}
-
-	m.tabCursor = 0
-	front := row(m)
-	if !sgrCodes(front)[likedFG] {
-		t.Errorf("the separator is not magenta on the liked playlist: %q", front)
-	}
-	if strings.Contains(front, dimmed) {
-		t.Errorf("it is still the dimmed colour as well: %q", front)
-	}
-
-	m.tabCursor = 1
-	elsewhere := row(m)
-	if sgrCodes(elsewhere)[likedFG] {
-		t.Errorf("the separator is magenta on another playlist: %q", elsewhere)
-	}
-	if !strings.Contains(elsewhere, dimmed) {
-		t.Errorf("the separator is not the dimmed colour %s: %q", dimmed, elsewhere)
-	}
-
-	// Either way it is a line the width of the window, and it is the line
-	// directly above the buttons.
-	for _, line := range []string{front, elsewhere} {
-		if got := lipgloss.Width(plain(line)); got != m.width {
-			t.Errorf("the separator is %d cells, want %d", got, m.width)
-		}
-		if got := strings.TrimRight(plain(line), "─"); got != "" {
-			t.Errorf("the separator is not all rule: %q", plain(line))
-		}
-	}
-
-	// And a popover over the list does not touch it: the player stays live
-	// under one, so the line above the player does too.
-	m.tabCursor = 0
-	m.detour = detour{active: true, tab: Playlist{Title: "Cherry", kind: tabAlbum}}
-	if !sgrCodes(row(m))[likedFG] {
-		t.Errorf("the separator sank behind a popover: %q", row(m))
-	}
-}
-
 // styledRuns splits a line into its runs of styling: the SGR parameters in
 // force and the plain text drawn under them. Which cells carry a colour is the
 // whole question when a line is made of several things.
@@ -1782,15 +1647,11 @@ func styledRuns(line string) []struct{ codes, text string } {
 	return out
 }
 
-// The rule the tabs sit on goes magenta with the liked playlist while that is
-// the tab in front: the line is the top edge of the page below it, and the page
-// is one of its rows.
-//
-// The rule only. Every tab keeps its own two feet in its own colour, which is
-// what stops the magenta looking like it has leaked into playlists it has
-// nothing to say about — a foot is the glyph that carries a tick up into the
-// tab's own walls.
-func TestTheRuleTheTabsSitOnFollowsTheLikedTab(t *testing.T) {
+// The rule the tabs sit on is one line, not the bottom edge of six boxes. Each
+// tab puts two feet in it in its own colour — which is how a colour on the rule
+// can never be a colour on a tab — and the tab in front is open underneath,
+// which is what says it is in front.
+func TestTheRuleTheTabsSitOnIsItsOwnLine(t *testing.T) {
 	m := sample()
 	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
 	m = answered.(Model)
@@ -1802,59 +1663,33 @@ func TestTheRuleTheTabsSitOnFollowsTheLikedTab(t *testing.T) {
 	r, g, b, _ := m.dimmedColor().RGBA()
 	dimmed := fmt.Sprintf("38;2;%d;%d;%d", r>>8, g>>8, b>>8)
 
-	rule := func(m Model) string { return strings.Split(m.renderTabs(), "\n")[2] }
-	tops := func(m Model) string { return strings.Split(m.renderTabs(), "\n")[0] }
-
-	// In front: the rule between the feet is magenta, and the feet are not.
-	m.tabCursor = 0
-	line := rule(m)
-	if !sgrCodes(line)[likedFG] {
-		t.Fatalf("the rule is not magenta at all: %q", line)
-	}
+	m.tabCursor = 1
+	line := strings.Split(m.renderTabs(), "\n")[2]
 	for _, run := range styledRuns(line) {
 		switch {
-		case strings.Contains(run.codes, likedFG):
-			// The rule, and nothing that belongs to a tab: not even the feet of
-			// the playlist whose colour this is.
-			if strings.Trim(run.text, "─") != "" {
-				t.Errorf("magenta reaches %q, which is not rule: %q", run.text, line)
+		case strings.Contains(run.codes, emphasisFG):
+			// The tab in front, open underneath and nothing else.
+			if strings.Trim(run.text, "╯╰") != "" {
+				t.Errorf("the emphasis reaches %q: %q", run.text, line)
 			}
-		case strings.Contains(run.codes, dimmed), strings.Contains(run.codes, emphasisFG):
-			// Feet, and nothing else: another tab's, or the one in front.
-			if strings.Trim(run.text, "╯╰┴") != "" {
-				t.Errorf("a run of feet is %q: %q", run.text, line)
+		case strings.Contains(run.codes, dimmed):
+			// Every other tab's feet, and the rule between and past them.
+			if strings.Trim(run.text, "┴─") != "" {
+				t.Errorf("a dimmed run is %q: %q", run.text, line)
 			}
+		case strings.TrimSpace(run.text) != "":
+			t.Errorf("%q is drawn %s, which is neither feet nor rule: %q",
+				run.text, run.codes, line)
 		}
 	}
-	// The rule really does run between the feet rather than stopping at them.
-	if !strings.Contains(line, "\x1b[35m─") {
-		t.Errorf("no magenta rule between the feet: %q", line)
-	}
-	// And the other tabs keep the rest of their outlines.
-	if !strings.Contains(tops(m), dimmed) {
-		t.Errorf("the other tabs' tops were recoloured too: %q", tops(m))
+	// The open span belongs to the tab in front, wherever that is. By column and
+	// not by byte: the glyphs up there are three bytes each.
+	if got := column(plain(line), "╯"); got != m.tabSpans()[1].start {
+		t.Errorf("the open edge starts at %d, want %d", got, m.tabSpans()[1].start)
 	}
 
-	// Another tab in front, and the rule is the dimmed colour again.
-	m.tabCursor = 1
-	if !strings.Contains(rule(m), dimmed) {
-		t.Errorf("the rule is not dimmed on another playlist: %q", rule(m))
-	}
-	// And with it behind another tab there is no magenta on that line at all:
-	// the rule is not its page's, and its feet were never its own.
-	if sgrCodes(rule(m))[likedFG] {
-		t.Errorf("the rule carries magenta with another playlist in front: %q", rule(m))
-	}
-
-	// Behind a popover the whole row sinks, the rule with it.
-	m.tabCursor = 0
-	m.detour = detour{active: true, tab: Playlist{Title: "Cherry", kind: tabAlbum}}
-	if sgrCodes(rule(m))[likedFG] {
-		t.Errorf("the rule is still magenta behind a popover: %q", rule(m))
-	}
-
-	// Colour costs no cells: every row of the tab bar is the window's width.
-	m.detour = detour{}
+	// Three rows, every one of them the window's width, whichever tab is in
+	// front: the mouse counts its rows off this.
 	for _, cursor := range []int{0, 1, 2} {
 		m.tabCursor = cursor
 		rows := strings.Split(m.renderTabs(), "\n")
@@ -1866,6 +1701,50 @@ func TestTheRuleTheTabsSitOnFollowsTheLikedTab(t *testing.T) {
 				t.Errorf("cursor %d row %d is %d cells, want %d", cursor, row, got, m.width)
 			}
 		}
+	}
+}
+
+// Nothing in the tab bar says whose playlist a tab holds. The liked playlist had
+// its label in magenta for a while and the rule under the row went with it; the
+// row has enough to say already — which tab is in front, which holds the track
+// playing — and what a playlist is belongs to the page, where the rows and the
+// scrollbar say it.
+//
+// The line above the player is the same: it went magenta on that playlist by a
+// misreading and has no business saying anything about a playlist either.
+func TestTheTabRowCarriesNoPlaylistColour(t *testing.T) {
+	m := sized(sample(), 120, 20)
+	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
+	m = answered.(Model)
+	m.Playlists = []Playlist{
+		{ID: likedPlaylistID, Title: "Liked Music"},
+		{ID: "PL1", Title: "Favorites"},
+	}
+	m.Tracks = rows(10)
+	m.showingID = likedPlaylistID
+
+	for _, cursor := range []int{0, 1} {
+		m.tabCursor = cursor
+		for row, line := range strings.Split(m.renderTabs(), "\n") {
+			for _, hue := range []string{likedFG, dislikedFG, likedBG, dislikedBG} {
+				if sgrCodes(line)[hue] {
+					t.Errorf("cursor %d row %d carries SGR %s: %q", cursor, row, hue, line)
+				}
+			}
+		}
+	}
+
+	// Nor the line above the player, on that playlist or any other.
+	m.tabCursor = 0
+	if got := strings.Split(m.View().Content, "\n")[m.playerTop()]; sgrCodes(got)[likedFG] {
+		t.Errorf("the line above the player is magenta: %q", got)
+	}
+
+	// The one hue left up there is the block for the tab holding what is
+	// playing, which is about the player rather than about the playlist.
+	m.playing = m.Tracks[0]
+	if !sgrCodes(strings.Split(m.renderTabs(), "\n")[1])[liveFG] {
+		t.Error("the tab holding the playing track lost its block")
 	}
 }
 

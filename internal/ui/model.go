@@ -1170,30 +1170,21 @@ func (m Model) tabPen(index int) color.Color {
 }
 
 // tabLabel is how a tab's own name reads: faint behind, bold and emphasised in
-// front, the quiet colour behind a popover — and the liked playlist's magenta
-// wherever it sits, because that is whose playlist it is rather than where it
-// is.
+// front, the quiet colour behind a popover.
+//
+// Nothing in the row says whose playlist it is. The liked playlist had its label
+// in magenta for a while, and the row has a lot to say already — which tab is in
+// front, which of them is loading, and now which holds the track playing. What
+// a playlist is is the page's business, not the tab's.
 func (m Model) tabLabel(index int) lipgloss.Style {
 	style := lipgloss.NewStyle()
 	switch {
 	case m.covered():
 		return style.Foreground(m.quietColor())
 	case index == m.tabCursor:
-		style = style.Bold(true).Foreground(emphasis)
-	default:
-		style = style.Faint(true)
+		return style.Bold(true).Foreground(emphasis)
 	}
-	if m.tabAt(index).ID == likedPlaylistID {
-		style = style.Foreground(liked)
-	}
-	return style
-}
-
-// likedTabInFront reports whether the tab in front is the liked playlist. What
-// is under it is a page of that playlist, and the lines that close the page off
-// — the rule the tabs sit on, and the one above the player — say so.
-func (m Model) likedTabInFront() bool {
-	return m.tabAt(m.tabCursor).ID == likedPlaylistID
+	return style.Faint(true)
 }
 
 // tabMarker is the blue block a tab carries while the track playing is in its
@@ -1254,14 +1245,10 @@ const (
 // movement for a shrug.
 func (m Model) covered() bool { return m.detour.active || m.sheetOpen }
 
-// tabRuleColor is the rule the tabs sit on, which sinks with them and takes the
-// liked playlist's colour while that is the tab in front.
+// tabRuleColor is the rule the tabs sit on, which sinks with them.
 func (m Model) tabRuleColor() color.Color {
-	switch {
-	case m.covered():
+	if m.covered() {
 		return m.quietColor()
-	case m.likedTabInFront():
-		return liked
 	}
 	return m.dimmedColor()
 }
@@ -1655,6 +1642,10 @@ func (m Model) statusKey() string {
 	return word
 }
 
+// labelNothingPlaying ends in an ellipsis for the same reason the search box and
+// the load-more row do: it is waiting on you rather than reporting on itself.
+const labelNothingPlaying = "Nothing playing…"
+
 // statusSegments is what the wide block holds: the trouble, or the track.
 func (m Model) statusSegments() []statusSegment {
 	fill := m.statusBarStyle()
@@ -1662,7 +1653,7 @@ func (m Model) statusSegments() []statusSegment {
 	case m.Err != nil:
 		return []statusSegment{{m.Err.Error(), fill}}
 	case m.playing.VideoID == "":
-		return []statusSegment{{"Nothing playing", fill}}
+		return []statusSegment{{labelNothingPlaying, fill}}
 	case m.playing.Album == "":
 		return []statusSegment{{m.playing.Title, fill.Bold(true)}}
 	}
@@ -1711,24 +1702,11 @@ func fillRow(segments []statusSegment, fill lipgloss.Style, width int) string {
 // costs no height.
 // separator divides the list from the player. A line is enough to say where
 // one ends and the other begins, and it costs the row a box cost four sides
-// of.
+// of. It takes the dimmed colour and not the quiet one: the player stays live
+// with a popover in front of it, so the line above it does too.
 func (m Model) separator() string {
-	return lipgloss.NewStyle().Foreground(m.separatorColor()).
+	return lipgloss.NewStyle().Foreground(m.dimmedColor()).
 		Render(strings.Repeat("─", max(m.width, 0)))
-}
-
-// separatorColor is the dimmed colour, or the liked playlist's magenta while
-// that is the tab in front: the line closes off a page of its rows, and it says
-// which page that is the way the tab does.
-//
-// Dimmed and not quiet, and magenta whatever is in front of the list: the
-// player stays live with a popover over it, so the line above the player does
-// too.
-func (m Model) separatorColor() color.Color {
-	if m.likedTabInFront() {
-		return liked
-	}
-	return m.dimmedColor()
 }
 
 // contentLeft is the column the bar and the buttons are laid out from, and
@@ -1886,7 +1864,7 @@ const barLeastWidth = 8
 // fields said the same thing by saying nothing, which reads as a bar that
 // has not finished drawing.
 const (
-	labelIdlePosition = "00:00"
+	labelIdlePosition = "0:00"
 	labelIdleLength   = "…"
 )
 

@@ -83,7 +83,7 @@ func TestRightClickOpensTheMenuOnThatTrack(t *testing.T) {
 	}
 
 	got := plain(m.renderMenu())
-	for _, want := range []string{"Like track", "Go to album…", "Go to artist…"} {
+	for _, want := range []string{"Like track", "Go to album", "Go to artist"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("menu is missing %q:\n%s", want, got)
 		}
@@ -379,7 +379,7 @@ func TestRowsThatLeadNowhereAreDisabled(t *testing.T) {
 	}
 	// And they are drawn dimmed rather than looking available. Dimming is
 	// the terminal's own faint, not a grey, so that it lands on any theme.
-	if line := menuLine(m, "Go to album…"); !sgrCodes(line)[faintSGR] {
+	if line := menuLine(m, "Go to album"); !sgrCodes(line)[faintSGR] {
 		t.Errorf("a dead row is not dimmed: %q", line)
 	}
 	for _, label := range []string{"Like track", "Dislike track"} {
@@ -1394,8 +1394,8 @@ func TestTheMenuRatingRowsCarryTheirColours(t *testing.T) {
 					if sgrCodes(line)[tc.other] {
 						t.Errorf("%q also carries SGR %s: %q", tc.label, tc.other, line)
 					}
-					if sgrCodes(line)["1"] {
-						t.Errorf("%q is bold without the cursor: %q", tc.label, line)
+					if sgrCodes(line)[highlightSGR] {
+						t.Errorf("%q is filled without the cursor: %q", tc.label, line)
 					}
 				case strings.Contains(bare, "Go to"):
 					if sgrCodes(line)[likedFG] || sgrCodes(line)[dislikedFG] {
@@ -1409,19 +1409,19 @@ func TestTheMenuRatingRowsCarryTheirColours(t *testing.T) {
 		})
 	}
 
-	// Under the cursor it keeps the colour and takes the weight, rather than
-	// turning into the emphasis every other row uses.
+	// Under the cursor it keeps the colour and is filled, rather than turning
+	// into something else: the fill is how a chosen row reads in the list too.
 	at := m.openMenu(m.Tracks[0], 4, 4)
 	at.menu.cursor = rowIndex(at, menuLike)
 	row := menuLine(at, "Like track")
 	if row == "" {
 		t.Fatal("no rating row in the menu")
 	}
-	if !sgrCodes(row)[likedFG] || !sgrCodes(row)["1"] {
-		t.Errorf("the chosen rating row is %v, want magenta and bold", sgrCodes(row))
+	if !sgrCodes(row)[likedFG] || !sgrCodes(row)[highlightSGR] {
+		t.Errorf("the chosen rating row is %v, want magenta on the fill", sgrCodes(row))
 	}
-	if sgrCodes(row)[emphasisFG] {
-		t.Errorf("the chosen rating row took the emphasis as well: %q", row)
+	if sgrCodes(row)["1"] || sgrCodes(row)[emphasisFG] {
+		t.Errorf("the chosen rating row took a weight or the emphasis: %q", row)
 	}
 }
 
@@ -1525,7 +1525,7 @@ func TestTheMenuPutsTheRatingsLast(t *testing.T) {
 		}
 		return -1
 	}
-	album, rule, like := where("Go to album…"), where("───"), where("Like track")
+	album, rule, like := where("Go to album"), where("───"), where("Like track")
 	if album < 0 || rule < 0 || like < 0 {
 		t.Fatalf("album %d, rule %d, like %d", album, rule, like)
 	}

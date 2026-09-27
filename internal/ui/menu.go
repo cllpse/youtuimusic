@@ -72,8 +72,8 @@ func (m Model) menuRows() []menuRow {
 		dislike = menuRow{menuDislike, "Remove dislike", true, disliked}
 	}
 	return []menuRow{
-		{menuAlbum, "Go to album…", t.AlbumID != "", nil},
-		{menuArtist, "Go to artist…", t.ArtistID != "", nil},
+		{menuAlbum, "Go to album", t.AlbumID != "", nil},
+		{menuArtist, "Go to artist", t.ArtistID != "", nil},
 		like,
 		dislike,
 	}
@@ -110,7 +110,13 @@ var (
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(foreground).
 		Padding(0, 1)
-	menuSelected = lipgloss.NewStyle().Bold(true).Foreground(emphasis)
+	// The row under the cursor is filled, the way a chosen row of the list is.
+	// It was bold and emphasised, which is two things at once and left the two
+	// rating rows nothing to be chosen with: they carry a colour of their own
+	// already, and a fill sits behind a colour where a weight fights it.
+	menuSelected = func(highlight color.Color) lipgloss.Style {
+		return lipgloss.NewStyle().Background(highlight)
+	}
 )
 
 // menuSize is the whole box, borders and padding included.
@@ -151,20 +157,20 @@ func (m Model) renderMenu() string {
 	lines := make([]string, 0, len(rows)+1)
 	for i, row := range rows {
 		line := pad(row.label, inner)
+		style := lipgloss.NewStyle()
 		switch {
 		case !row.enabled:
-			line = dim.Render(line)
+			style = dim
 		case row.hue != nil:
-			// A row with a colour of its own keeps it, and takes the weight
-			// rather than the emphasis when it is the one under the cursor:
-			// two ways to say a thing, one each, as on a row of the list.
-			line = lipgloss.NewStyle().
-				Foreground(row.hue).
-				Bold(i == m.menu.cursor).
-				Render(line)
-		case i == m.menu.cursor:
-			line = menuSelected.Render(line)
+			// A row with a colour of its own keeps it, and is filled when it is
+			// the one under the cursor: the colour says what the row is about
+			// and the fill says it is chosen, one each, as on a row of the list.
+			style = style.Foreground(row.hue)
 		}
+		if row.enabled && i == m.menu.cursor {
+			style = style.Background(m.highlightColor())
+		}
+		line = style.Render(line)
 		lines = append(lines, line)
 		if i == dividerAfter {
 			lines = append(lines, dim.Render(strings.Repeat("─", inner)))
