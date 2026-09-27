@@ -1180,7 +1180,17 @@ func (m Model) tabGap() lipgloss.Style {
 	if m.covered() {
 		return tabGapStyle.BorderForeground(m.quietColor())
 	}
+	if m.likedTabInFront() {
+		return tabGapStyle.BorderForeground(liked)
+	}
 	return tabGapStyle.BorderForeground(m.dimmedColor())
+}
+
+// likedTabInFront reports whether the tab in front is the liked playlist. What
+// is under it is a page of that playlist, and the lines that close the page off
+// — the rule the tabs sit on, and the one above the player — say so.
+func (m Model) likedTabInFront() bool {
+	return m.tabAt(m.tabCursor).ID == likedPlaylistID
 }
 
 // quietTab is a tab with something in front of the whole row: no faint, which
@@ -1414,8 +1424,18 @@ func (m Model) renderTabs() string {
 		// The outline of an inactive one comes out a shade stronger than its
 		// label, because lipgloss draws a border as a colour and faint is an
 		// attribute that cannot reach it.
-		if !m.covered() && m.tabAt(s.index).ID == likedPlaylistID {
+		//
+		// While it is the tab in front, the rule the whole row sits on goes with
+		// it: that line is the top edge of the page below, and the page is one
+		// of its rows. Only the bottom edge of the other tabs, which is what
+		// that rule is made of — they are other playlists and their own outlines
+		// stay their own.
+		switch {
+		case m.covered():
+		case m.tabAt(s.index).ID == likedPlaylistID:
 			style = style.Foreground(liked).BorderForeground(liked)
+		case m.likedTabInFront():
+			style = style.BorderBottomForeground(liked)
 		}
 		rendered = append(rendered, style.Render(truncate(m.tabAt(s.index).Title, maxTabTitle)))
 	}
@@ -1645,7 +1665,7 @@ func (m Model) separator() string {
 // player stays live with a popover over it, so the line above the player does
 // too.
 func (m Model) separatorColor() color.Color {
-	if m.tabAt(m.tabCursor).ID == likedPlaylistID {
+	if m.likedTabInFront() {
 		return liked
 	}
 	return m.dimmedColor()

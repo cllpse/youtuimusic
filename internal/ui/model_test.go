@@ -1740,3 +1740,64 @@ func TestTheSeparatorFollowsTheLikedTab(t *testing.T) {
 		t.Errorf("the separator sank behind a popover: %q", row(m))
 	}
 }
+
+// The rule the tabs sit on goes magenta with the liked playlist while that is
+// the tab in front: the line is the top edge of the page below it, and the page
+// is one of its rows. The whole rule — the bottom edge of every other tab and
+// the stub past the last one — and nothing else of those tabs.
+func TestTheRuleTheTabsSitOnFollowsTheLikedTab(t *testing.T) {
+	m := sample()
+	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
+	m = answered.(Model)
+	m.Playlists = []Playlist{
+		{ID: likedPlaylistID, Title: "Liked Music"},
+		{ID: "PL1", Title: "Favorites"},
+		{ID: "PL2", Title: "Mixes"},
+	}
+	r, g, b, _ := m.dimmedColor().RGBA()
+	dimmed := fmt.Sprintf("38;2;%d;%d;%d", r>>8, g>>8, b>>8)
+
+	rule := func(m Model) string { return strings.Split(m.renderTabs(), "\n")[2] }
+	tops := func(m Model) string { return strings.Split(m.renderTabs(), "\n")[0] }
+
+	// In front: the rule is one colour from end to end.
+	m.tabCursor = 0
+	if !sgrCodes(rule(m))[likedFG] {
+		t.Errorf("the rule is not magenta: %q", rule(m))
+	}
+	for _, other := range []string{dimmed, "\x1b[" + emphasisFG} {
+		if strings.Contains(rule(m), other) {
+			t.Errorf("the rule is part %s as well: %q", other, rule(m))
+		}
+	}
+	// And only the rule: the other tabs keep their own outlines.
+	if !strings.Contains(tops(m), dimmed) {
+		t.Errorf("the other tabs' tops were recoloured too: %q", tops(m))
+	}
+
+	// Another tab in front, and the rule is the dimmed colour again. The liked
+	// tab's own bottom edge stays magenta, because that tab is magenta all the
+	// way round whether it is in front or not.
+	m.tabCursor = 1
+	if !strings.Contains(rule(m), dimmed) {
+		t.Errorf("the rule is not dimmed on another playlist: %q", rule(m))
+	}
+
+	// Behind a popover the whole row sinks, the rule with it.
+	m.tabCursor = 0
+	m.detour = detour{active: true, tab: Playlist{Title: "Cherry", kind: tabAlbum}}
+	if sgrCodes(rule(m))[likedFG] {
+		t.Errorf("the rule is still magenta behind a popover: %q", rule(m))
+	}
+
+	// Colour costs no cells: the row is the width it was.
+	m.detour = detour{}
+	for _, cursor := range []int{0, 1} {
+		m.tabCursor = cursor
+		for row, line := range strings.Split(m.renderTabs(), "\n") {
+			if got := lipgloss.Width(plain(line)); got != m.width {
+				t.Errorf("cursor %d row %d is %d cells, want %d", cursor, row, got, m.width)
+			}
+		}
+	}
+}
