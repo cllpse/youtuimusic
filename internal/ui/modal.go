@@ -222,6 +222,7 @@ func (m Model) renderModal() string {
 		width:       inner,
 		height:      height,
 		showRating:  m.detour.tab.ID != likedPlaylistID,
+		likedList:   m.detour.tab.ID == likedPlaylistID,
 		titleOnly:   m.detour.tab.kind == tabAlbum,
 		playing:     m.playing.VideoID,
 		more:        m.detour.more.More(),

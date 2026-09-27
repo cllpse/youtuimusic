@@ -977,3 +977,76 @@ func TestTwoMarksShareACellOneAbleTheOther(t *testing.T) {
 		t.Errorf("two liked tracks made %d marks: %v", len(got), got)
 	}
 }
+
+// The scrollbar takes the liked playlist's magenta on a page of that playlist.
+// Shape still says which part of it is the window, so the colour is free to say
+// whose list it is — and that page cannot mark its rows, since every one of them
+// is liked, so the bar is all it has left to say it with.
+func TestTheScrollbarIsMagentaOnTheLikedPlaylist(t *testing.T) {
+	onLiked := trackTable{tracks: trough(40), width: 60, height: 10 + headerRows,
+		likedList: true, highlight: surface, quiet: color.RGBA{0xBF, 0xBF, 0xBF, 0xFF}}
+	elsewhere := onLiked
+	elsewhere.likedList = false
+
+	for _, cell := range onLiked.scrollbar() {
+		if !sgrCodes(cell)[likedFG] {
+			t.Errorf("a cell of the bar is not magenta: %q", cell)
+		}
+	}
+	// The thumb and the trough are the same colour there, as they are anywhere:
+	// a block where the window is, a line where it is not.
+	bar := plain(strings.Join(onLiked.scrollbar(), ""))
+	if !strings.Contains(bar, blockFull) || !strings.Contains(bar, troughLine) {
+		t.Errorf("the bar lost a shape: %q", bar)
+	}
+
+	// Anywhere else it is the row highlight, which is what every other quiet
+	// part of the frame is drawn in.
+	for _, cell := range elsewhere.scrollbar() {
+		if sgrCodes(cell)[likedFG] {
+			t.Errorf("a bar off the liked playlist is magenta: %q", cell)
+		}
+	}
+	// The bar draws its colour as a foreground, and this fixture's highlight is
+	// the scheme's dim entry, so that is colour 8 — what every derived colour
+	// falls back to when the terminal will not say what its page is.
+	if !sgrCodes(strings.Join(elsewhere.scrollbar(), ""))["90"] {
+		t.Error("the comparison is wrong: the other bar has no colour either")
+	}
+
+	// Behind a popover it sinks like the rest of the block.
+	behind := onLiked
+	behind.inactive = true
+	if sgrCodes(strings.Join(behind.scrollbar(), ""))[likedFG] {
+		t.Error("an inactive bar is still magenta")
+	}
+
+	// What is playing is still marked in its own colour on that page.
+	playing := onLiked
+	playing.playing = "v20"
+	if !sgrCodes(strings.Join(playing.scrollbar(), ""))[liveFG] {
+		t.Error("the playing track lost its mark on the liked playlist")
+	}
+}
+
+// And the main view hands it the flag: the page on screen is the liked playlist
+// or it is not.
+func TestTheMainViewColoursItsBarByThePageShown(t *testing.T) {
+	m := sized(sample(), 80, 20)
+	m.Tracks = rows(100)
+
+	m.showingID = likedPlaylistID
+	if !m.table(m.width, m.bodyHeight()).likedList {
+		t.Error("the table was not told it is the liked playlist")
+	}
+	frame := strings.Split(m.View().Content, "\n")[tabsHeight+headerRows]
+	if !sgrCodes(frame)[likedFG] {
+		t.Errorf("the row carries no magenta bar: %q", frame)
+	}
+
+	m.showingID = "PL1"
+	frame = strings.Split(m.View().Content, "\n")[tabsHeight+headerRows]
+	if sgrCodes(frame)[likedFG] {
+		t.Errorf("another playlist's row carries magenta: %q", frame)
+	}
+}

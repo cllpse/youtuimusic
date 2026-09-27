@@ -1626,9 +1626,12 @@ func TestTheFrameBehindAPopoverGoesQuiet(t *testing.T) {
 }
 
 // The liked playlist is a tab of what you think of a track, so it is drawn in
-// the same magenta the rows and its menu rows take — outline and label both, so
-// it reads as one thing. Which tab is in front is said by the shape: the front
-// one has no bottom edge and the others are closed.
+// the same magenta the rows and its menu rows take — its top edge, its two walls
+// and its label. Down to its feet and no further: those are where it meets the
+// rule, and they are the rule's business.
+//
+// Which tab is in front is said by the shape: the front one has no bottom edge
+// and the others are closed.
 func TestTheLikedTabIsMagenta(t *testing.T) {
 	m := sample()
 	m.Playlists = []Playlist{
@@ -1647,10 +1650,17 @@ func TestTheLikedTabIsMagenta(t *testing.T) {
 			at := m
 			at.tabCursor = tc.cursor
 			lines := strings.Split(at.renderTabs(), "\n")
-			// All three rows of it: the outline above and below, and the label.
-			for row, line := range lines {
-				if !sgrCodes(line)[likedFG] {
-					t.Errorf("row %d of the tab is not magenta: %q", row, line)
+			// Its top edge and the row its label is on.
+			for _, row := range []int{0, 1} {
+				if !sgrCodes(lines[row])[likedFG] {
+					t.Errorf("row %d of the tab is not magenta: %q", row, lines[row])
+				}
+			}
+			// Its feet are not. Found by glyph: they are the first thing on the
+			// rule when this tab is first in the row.
+			for _, run := range styledRuns(lines[2]) {
+				if strings.ContainsAny(run.text, "╯╰┴") && strings.Contains(run.codes, likedFG) {
+					t.Errorf("the feet %q are magenta: %q", run.text, lines[2])
 				}
 			}
 			// The shape still says which one is in front: an open bottom edge.
@@ -1795,14 +1805,15 @@ func TestTheRuleTheTabsSitOnFollowsTheLikedTab(t *testing.T) {
 	for _, run := range styledRuns(line) {
 		switch {
 		case strings.Contains(run.codes, likedFG):
-			// The rule itself, and the liked tab's own open bottom edge.
-			if strings.Trim(run.text, "─╯╰ ") != "" {
+			// The rule, and nothing that belongs to a tab: not even the feet of
+			// the playlist whose colour this is.
+			if strings.Trim(run.text, "─") != "" {
 				t.Errorf("magenta reaches %q, which is not rule: %q", run.text, line)
 			}
-		case strings.Contains(run.codes, dimmed):
-			// Another tab's feet, and nothing else.
-			if strings.Trim(run.text, "┴") != "" {
-				t.Errorf("a dimmed run is %q, want feet: %q", run.text, line)
+		case strings.Contains(run.codes, dimmed), strings.Contains(run.codes, emphasisFG):
+			// Feet, and nothing else: another tab's, or the one in front.
+			if strings.Trim(run.text, "╯╰┴") != "" {
+				t.Errorf("a run of feet is %q: %q", run.text, line)
 			}
 		}
 	}
@@ -1815,15 +1826,15 @@ func TestTheRuleTheTabsSitOnFollowsTheLikedTab(t *testing.T) {
 		t.Errorf("the other tabs' tops were recoloured too: %q", tops(m))
 	}
 
-	// Another tab in front, and the rule is the dimmed colour again. The liked
-	// tab's own feet stay magenta, because that tab is magenta all the way round
-	// whether it is in front or not.
+	// Another tab in front, and the rule is the dimmed colour again.
 	m.tabCursor = 1
 	if !strings.Contains(rule(m), dimmed) {
 		t.Errorf("the rule is not dimmed on another playlist: %q", rule(m))
 	}
-	if !sgrCodes(rule(m))[likedFG] {
-		t.Errorf("the liked tab lost its own feet: %q", rule(m))
+	// And with it behind another tab there is no magenta on that line at all:
+	// the rule is not its page's, and its feet were never its own.
+	if sgrCodes(rule(m))[likedFG] {
+		t.Errorf("the rule carries magenta with another playlist in front: %q", rule(m))
 	}
 
 	// Behind a popover the whole row sinks, the rule with it.

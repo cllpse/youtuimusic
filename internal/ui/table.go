@@ -28,6 +28,11 @@ type trackTable struct {
 	// liked playlist: a page of magenta says nothing a page of plain rows does
 	// not.
 	showRating bool
+	// likedList is that playlist itself. It says nothing about the rows — that
+	// is showRating's, and the two are opposites there — but the scrollbar takes
+	// the playlist's colour, since the whole page is one thing you have an
+	// opinion about.
+	likedList bool
 	// titleOnly drops every column but the first. An album is one artist's
 	// record, so naming them down the page says the same thing each time.
 	titleOnly bool
@@ -361,7 +366,7 @@ func (t trackTable) scrollbar() []string {
 		start = min(t.offset*span/furthest, span)
 	}
 
-	furniture := lipgloss.NewStyle().Foreground(highlightOr(t.highlight, t.inactive, t.quiet))
+	furniture := lipgloss.NewStyle().Foreground(t.barPen())
 	marks := t.scrollbarMarks()
 
 	out := make([]string, height)
@@ -409,13 +414,20 @@ func halfMark(glyph string, hue color.Color, inThumb bool, highlight color.Color
 	return style.Render(glyph)
 }
 
-// highlightOr is the bar's own colour, which sinks with the block it belongs
-// to.
-func highlightOr(highlight color.Color, inactive bool, quiet color.Color) color.Color {
-	if inactive {
-		return quiet
+// barPen is the scrollbar's own colour: the row highlight, which is the surface
+// every quiet part of the frame shares, or the liked playlist's magenta on a
+// page of that playlist. It sinks with the block it belongs to.
+//
+// Shape still says which part of it is the window — a block there, a line where
+// it is not — so the colour is free to say whose list this is.
+func (t trackTable) barPen() color.Color {
+	switch {
+	case t.inactive:
+		return t.quiet
+	case t.likedList:
+		return liked
 	}
-	return highlight
+	return t.highlight
 }
 
 // keepVisible moves a window the least it can to keep an index on screen,

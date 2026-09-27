@@ -1223,12 +1223,28 @@ func (m Model) tabRuleColor() color.Color {
 // tabPen is the colour a tab's own outline takes, which is not the rule's: the
 // liked playlist's magenta, the emphasis for the one in front, the dimmed
 // colour for the rest, and the quiet one for all of them behind a popover.
+//
+// Its top edge and its two walls, that is. Not its feet — see tabFootPen.
 func (m Model) tabPen(index int) color.Color {
 	switch {
 	case m.covered():
 		return m.quietColor()
 	case m.tabAt(index).ID == likedPlaylistID:
 		return liked
+	case index == m.tabCursor:
+		return emphasis
+	}
+	return m.dimmedColor()
+}
+
+// tabFootPen is the colour of the two glyphs a tab puts in the rule. They are
+// where the tab meets the line rather than part of the box above it, so the
+// liked playlist's colour stops before them: it runs from the top edge down the
+// walls and hands over at the floor.
+func (m Model) tabFootPen(index int) color.Color {
+	switch {
+	case m.covered():
+		return m.quietColor()
 	case index == m.tabCursor:
 		return emphasis
 	}
@@ -1459,7 +1475,7 @@ func (m Model) tabRule(spans []tabSpan) string {
 		if s.start > at {
 			b.WriteString(rule.Render(strings.Repeat("─", s.start-at)))
 		}
-		feet := lipgloss.NewStyle().Foreground(m.tabPen(s.index))
+		feet := lipgloss.NewStyle().Foreground(m.tabFootPen(s.index))
 		inner := max(s.end-s.start-2, 0)
 		if s.index == m.tabCursor && !m.covered() {
 			b.WriteString(feet.Render("╯") + strings.Repeat(" ", inner) + feet.Render("╰"))
@@ -1496,6 +1512,7 @@ func (m Model) table(width, height int) trackTable {
 		width:       width,
 		height:      height,
 		showRating:  m.showsRating(),
+		likedList:   m.showingID == likedPlaylistID,
 		playing:     m.playing.VideoID,
 		more:        m.more.More(),
 		loadingMore: m.loadingMore,
