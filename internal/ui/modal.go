@@ -107,7 +107,7 @@ func (m Model) openSearch() (tea.Model, tea.Cmd) {
 // a kind and a name on a popover, one word on the keys sheet — and where it
 // goes does not.
 func titleRow(inner int, title string) string {
-	close := renderButton(labelClose, buttonDefault, nil)
+	close := renderButton(labelClose, buttonDefault)
 	width := lipgloss.Width(title)
 	start := min(max((inner-width)/2, 0), max(inner-modalCloseWidth-width, 0))
 	return strings.Repeat(" ", start) + title +
@@ -130,7 +130,7 @@ func (m Model) modalHeader(inner int) string {
 	} else if query == "" {
 		query = dim.Render(labelTypeToSearch)
 	}
-	close := renderButton(labelClose, buttonDefault, nil)
+	close := renderButton(labelClose, buttonDefault)
 	room := max(inner-modalCloseWidth, 0)
 	return pad(truncate(query, room), room) + close
 }

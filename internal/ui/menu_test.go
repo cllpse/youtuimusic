@@ -346,9 +346,9 @@ func TestRowsThatLeadNowhereAreDisabled(t *testing.T) {
 
 	for _, row := range m.menuRows() {
 		switch row.item {
-		case menuLike:
+		case menuLike, menuDislike:
 			if !row.enabled {
-				t.Error("liking should always be possible")
+				t.Errorf("%v should always be possible on a track", row.item)
 			}
 		default:
 			if row.enabled {
@@ -358,13 +358,15 @@ func TestRowsThatLeadNowhereAreDisabled(t *testing.T) {
 	}
 	// And they are drawn dimmed rather than looking available. Dimming is
 	// the terminal's own faint, not a grey, so that it lands on any theme.
-	// Line 1 is the like row, 2 the rule, 3 the album row.
+	// Lines 1 and 2 are the ratings, 3 the rule, 4 the album row.
 	lines := strings.Split(m.renderMenu(), "\n")
-	if !sgrCodes(lines[3])[faintSGR] {
-		t.Errorf("a dead row is not dimmed: %v", sgrCodes(lines[3]))
+	if !sgrCodes(lines[4])[faintSGR] {
+		t.Errorf("a dead row is not dimmed: %v", sgrCodes(lines[4]))
 	}
-	if sgrCodes(lines[1])[faintSGR] {
-		t.Errorf("the like row is dimmed too; nothing distinguishes them")
+	for _, row := range []int{1, 2} {
+		if sgrCodes(lines[row])[faintSGR] {
+			t.Errorf("rating row %d is dimmed too; nothing distinguishes them", row)
+		}
 	}
 
 	// Clicking one does nothing at all, menu included.
@@ -1336,14 +1338,12 @@ func TestTheSearchNoteTellsUntypedFromUnfound(t *testing.T) {
 	}
 }
 
-// The menu's rating row is coloured by what pressing it does: magenta to like,
-// red to take a like away. It is the one row in the app that removes something,
-// and red is what the rest of the interface means by that.
-//
-// The transport's like button is magenta either way round — see
-// TestTheRatingButtonsCarryTheirColour — because down there the colour says
-// which of six buttons it is and the label says which way it will go.
-func TestTheMenuRatingRowSaysWhatPressingItDoes(t *testing.T) {
+// Each rating row is drawn in its own colour, both ways round: magenta is the
+// like whichever direction it will go, red is the dislike. The colour says which
+// rating the row is about and the label says the direction — a row that turned
+// red for taking a like off would read as a warning about a thing you are
+// allowed to do.
+func TestTheMenuRatingRowsCarryTheirColours(t *testing.T) {
 	m, _, _, _ := menuModel(t)
 
 	for _, tc := range []struct {
@@ -1353,38 +1353,41 @@ func TestTheMenuRatingRowSaysWhatPressingItDoes(t *testing.T) {
 		other  string
 	}{
 		{RatingNone, "Like track", likedFG, dislikedFG},
-		{RatingUp, "Unlike track", dislikedFG, likedFG},
+		{RatingUp, "Unlike track", likedFG, dislikedFG},
+		{RatingNone, "Dislike track", dislikedFG, likedFG},
+		{RatingDown, "Remove dislike", dislikedFG, likedFG},
 	} {
-		track := m.Tracks[0]
-		track.Rating = tc.rating
-		at := m.openMenu(track, 4, 4)
-		at.menu.cursor = 1 // the cursor elsewhere, so the weight is not in play
+		t.Run(tc.label, func(t *testing.T) {
+			track := m.Tracks[0]
+			track.Rating = tc.rating
+			at := m.openMenu(track, 4, 4)
+			at.menu.cursor = 2 // the cursor off the ratings, so no weight is in play
 
-		lines := strings.Split(at.renderMenu(), "\n")
-		found := false
-		for _, line := range lines {
-			bare := plain(line)
-			switch {
-			case strings.Contains(bare, tc.label):
-				found = true
-				if !sgrCodes(line)[tc.hue] {
-					t.Errorf("%q is not SGR %s: %q", tc.label, tc.hue, line)
-				}
-				if sgrCodes(line)[tc.other] {
-					t.Errorf("%q also carries SGR %s: %q", tc.label, tc.other, line)
-				}
-				if sgrCodes(line)["1"] {
-					t.Errorf("%q is bold without the cursor: %q", tc.label, line)
-				}
-			case strings.Contains(bare, "Go to"):
-				if sgrCodes(line)[likedFG] || sgrCodes(line)[dislikedFG] {
-					t.Errorf("a row that goes somewhere is coloured: %q", line)
+			found := false
+			for _, line := range strings.Split(at.renderMenu(), "\n") {
+				bare := plain(line)
+				switch {
+				case strings.Contains(bare, tc.label):
+					found = true
+					if !sgrCodes(line)[tc.hue] {
+						t.Errorf("%q is not SGR %s: %q", tc.label, tc.hue, line)
+					}
+					if sgrCodes(line)[tc.other] {
+						t.Errorf("%q also carries SGR %s: %q", tc.label, tc.other, line)
+					}
+					if sgrCodes(line)["1"] {
+						t.Errorf("%q is bold without the cursor: %q", tc.label, line)
+					}
+				case strings.Contains(bare, "Go to"):
+					if sgrCodes(line)[likedFG] || sgrCodes(line)[dislikedFG] {
+						t.Errorf("a row that goes somewhere is coloured: %q", line)
+					}
 				}
 			}
-		}
-		if !found {
-			t.Errorf("no %q row in the menu", tc.label)
-		}
+			if !found {
+				t.Errorf("no %q row in the menu", tc.label)
+			}
+		})
 	}
 
 	// Under the cursor it keeps the colour and takes the weight, rather than
@@ -1405,5 +1408,78 @@ func TestTheMenuRatingRowSaysWhatPressingItDoes(t *testing.T) {
 	}
 	if sgrCodes(row)[emphasisFG] {
 		t.Errorf("the chosen rating row took the emphasis as well: %q", row)
+	}
+}
+
+// Disliking from the menu rates the row it was opened on, and moves on if that
+// row is the one playing — the same rule the key has. The menu is where the
+// thumbs went when they left the transport, and it rates what you pointed at.
+func TestDislikeFromTheMenuRatesTheTrack(t *testing.T) {
+	m, lib, _, au := menuModel(t)
+	m.trackCursor = 1 // a different row is highlighted
+
+	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
+	m = drain(t, next.(Model), cmd)
+	x, y := rowAt(m, menuDislike)
+	next, cmd = m.Update(click(x, y))
+	m = drain(t, next.(Model), cmd)
+
+	if m.menu.open {
+		t.Error("the menu stayed open")
+	}
+	if len(lib.rated) != 1 || lib.rated[0].videoID != "a" ||
+		lib.rated[0].rating != ytm.RatingDown {
+		t.Fatalf("rated %+v, want a dislike of the right-clicked track", lib.rated)
+	}
+	if m.Tracks[0].Rating != RatingDown {
+		t.Errorf("the row is %v", m.Tracks[0].Rating)
+	}
+	// Nothing was playing, so nothing moved on.
+	if len(au.loaded) != 0 {
+		t.Errorf("it loaded %v", au.loaded)
+	}
+
+	// And a second time takes it off: the row says so, and says it in words,
+	// since English has none for undisliking.
+	next, cmd = m.Update(rightClick(trackX, trackRow(0)))
+	m = drain(t, next.(Model), cmd)
+	for _, row := range m.menuRows() {
+		if row.item == menuDislike && row.label != "Remove dislike" {
+			t.Errorf("a disliked track offers %q", row.label)
+		}
+	}
+	x, y = rowAt(m, menuDislike)
+	next, cmd = m.Update(click(x, y))
+	m = drain(t, next.(Model), cmd)
+	if len(lib.rated) != 2 || lib.rated[1].rating != ytm.RatingNone {
+		t.Fatalf("rated %+v, want it cleared", lib.rated)
+	}
+}
+
+// A release is not a track, so there is nothing to rate: an artist's albums
+// come back with no video id at all, and rating one used to look available and
+// do nothing.
+func TestTheRatingRowsAreDeadOnARelease(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+	at := m.openMenu(Track{Title: "Cherry", AlbumID: "MPREbCherry"}, 4, 4)
+
+	for _, row := range at.menuRows() {
+		switch row.item {
+		case menuLike, menuDislike:
+			if row.enabled {
+				t.Errorf("%v is enabled on a release", row.item)
+			}
+		case menuAlbum:
+			if !row.enabled {
+				t.Error("a release with an album id cannot be opened")
+			}
+		}
+	}
+	// Drawn dimmed, like any other row with nothing behind it.
+	lines := strings.Split(at.renderMenu(), "\n")
+	for _, row := range []int{1, 2} {
+		if !sgrCodes(lines[row])[faintSGR] {
+			t.Errorf("rating row %d is not dimmed on a release: %q", row, lines[row])
+		}
 	}
 }

@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"image/color"
 	"strings"
 	"testing"
 	"time"
@@ -47,9 +46,10 @@ func buttonAt(m Model, c control) (button, bool) {
 	return button{}, false
 }
 
-// Two groups: the transport with repeat on the end against the left, the
-// ratings against the right.
-func TestControlsSitLeftAndRight(t *testing.T) {
+// One group, against the left edge, repeat on the end of it. The ratings sat
+// against the right until they moved to the row menu, where the thing being
+// rated is the thing you pointed at.
+func TestTheTransportSitsAgainstTheLeft(t *testing.T) {
 	m, _, _, _ := playingModel(t)
 	row := plain(controlsLine(m))
 
@@ -78,20 +78,12 @@ func TestControlsSitLeftAndRight(t *testing.T) {
 		at = b.end + buttonGap
 	}
 
-	// The ratings end against the inside of the right border, in order, and
-	// clear of the transport.
-	up, _ := buttonAt(m, controlThumbUp)
-	down, _ := buttonAt(m, controlThumbDown)
-	if want := contentLeft + m.contentWidth(); down.end != want {
-		t.Errorf("dislike ends at %d, want the inside of the border %d", down.end, want)
-	}
-	if want := down.start - buttonGap; up.end != want {
-		t.Errorf("like ends at %d, want %d", up.end, want)
-	}
+	// Repeat is the last of them: nothing sits to its right any more.
 	rep, _ := buttonAt(m, controlRepeat)
-	if up.start < rep.end+buttonGap {
-		t.Errorf("the ratings run into the transport: %d < %d",
-			up.start, rep.end+buttonGap)
+	for _, b := range m.controlButtons() {
+		if b.start > rep.start {
+			t.Errorf("%v sits past repeat, at %d", b.control, b.start)
+		}
 	}
 
 	// And they are where the row actually draws them. The label is compared
@@ -150,38 +142,6 @@ func TestThePlayPauseLabelFollowsTheState(t *testing.T) {
 	paused, _ := buttonAt(stopped, controlPlayPause)
 	if a, b := buttonWidth(playing.label), buttonWidth(paused.label); a != b {
 		t.Errorf("Pause is %d wide and Play %d", a, b)
-	}
-}
-
-// The rating shows in whether the button is filled, not in its label.
-func TestTheRatingLitsItsButton(t *testing.T) {
-	m, _, _, _ := playingModel(t)
-
-	up, _ := buttonAt(m, controlThumbUp)
-	down, _ := buttonAt(m, controlThumbDown)
-	if strings.TrimSpace(up.label) != labelLike ||
-		strings.TrimSpace(down.label) != labelDislike {
-		t.Errorf("the labels are %q/%q", up.label, down.label)
-	}
-	if up.state == buttonActive || down.state == buttonActive {
-		t.Error("an unrated track makes a rating active")
-	}
-
-	m.playing.Rating = RatingUp
-	up, _ = buttonAt(m, controlThumbUp)
-	down, _ = buttonAt(m, controlThumbDown)
-	if up.state != buttonActive {
-		t.Errorf("rated up left Like %v", up.state)
-	}
-	if down.state == buttonActive {
-		t.Error("rated up made Dislike active too")
-	}
-
-	m.playing.Rating = RatingDown
-	up, _ = buttonAt(m, controlThumbUp)
-	down, _ = buttonAt(m, controlThumbDown)
-	if down.state != buttonActive || up.state == buttonActive {
-		t.Errorf("rated down: like %v, dislike %v", up.state, down.state)
 	}
 }
 
@@ -305,14 +265,6 @@ func TestClickingTheControls(t *testing.T) {
 				t.Errorf("toggles = %d", au.toggles)
 			}
 		}},
-		{"thumb up", controlThumbUp, func(t *testing.T, m Model, _ *fakeStreams, _ *fakeAudio, lib *fakeLibrary) {
-			if len(lib.rated) != 1 || lib.rated[0].videoID != "a" {
-				t.Errorf("rated %+v", lib.rated)
-			}
-			if m.playing.Rating != RatingUp {
-				t.Errorf("playing rating = %v", m.playing.Rating)
-			}
-		}},
 		{"repeat", controlRepeat, func(t *testing.T, m Model, _ *fakeStreams, _ *fakeAudio, _ *fakeLibrary) {
 			if m.repeat != RepeatAll {
 				t.Errorf("repeat = %v", m.repeat)
@@ -343,14 +295,13 @@ func TestControlsHitTestingCoversEveryColumn(t *testing.T) {
 			}
 		}
 	}
-	// And the space between two groups is not a button. Find a real gap
-	// rather than guessing a column.
-	transport, _ := buttonAt(m, controlNext)
-	thumbs, _ := buttonAt(m, controlThumbUp)
-	if thumbs.start <= transport.end {
-		t.Fatal("no gap between the groups to test")
+	// And the gap between two buttons is not a button.
+	skip, _ := buttonAt(m, controlNext)
+	repeat, _ := buttonAt(m, controlRepeat)
+	if repeat.start <= skip.end {
+		t.Fatal("no gap between the buttons to test")
 	}
-	for _, x := range []int{transport.end, thumbs.start - 1} {
+	for _, x := range []int{skip.end, repeat.start - 1} {
 		if where, n := m.hit(x, m.controlsRow()); where != regionNone {
 			t.Errorf("the gap at column %d answered %v, %d", x, where, n)
 		}
@@ -358,7 +309,7 @@ func TestControlsHitTestingCoversEveryColumn(t *testing.T) {
 	// Past the last button is not a button either. There is no border to
 	// test any more: the row runs edge to edge, and the first button starts
 	// at the first column.
-	last, _ := buttonAt(m, controlThumbDown)
+	last, _ := buttonAt(m, controlRepeat)
 	if last.end < m.width {
 		if where, _ := m.hit(m.width-1, m.controlsRow()); where != regionNone {
 			t.Errorf("the last column answered %v", where)
@@ -366,44 +317,35 @@ func TestControlsHitTestingCoversEveryColumn(t *testing.T) {
 	}
 }
 
-// The thumbs are beside the transport, so they rate what plays — not
-// whatever row the cursor happens to be on.
-func TestThumbsRateThePlayingTrackNotTheSelection(t *testing.T) {
+// The keys rate the row under the cursor, wherever playback happens to be —
+// the row menu is the mouse's half of that pair. Nothing rates what is playing
+// by position any more: the transport's thumbs did, which made them the one
+// control that acted on something other than what you were pointing at.
+func TestTheKeysRateTheHighlightedRow(t *testing.T) {
 	m, lib, _, _ := playingModel(t)
-	m.trackCursor = 1 // highlight the other track
+	m.trackCursor = 1 // not the track playing
 
-	b, _ := buttonAt(m, controlThumbUp)
-	next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+	next, cmd := m.Update(keyPress("+"))
 	m = drain(t, next.(Model), cmd)
 
-	if len(lib.rated) != 1 || lib.rated[0].videoID != "a" {
-		t.Fatalf("rated %+v, want the playing track", lib.rated)
-	}
-	if m.Tracks[1].Rating != RatingNone {
-		t.Error("the highlighted row was rated instead")
-	}
-	// The key still rates the selection, which is the other half of the pair.
-	next, cmd = m.Update(keyPress("+"))
-	m = drain(t, next.(Model), cmd)
-	if len(lib.rated) != 2 || lib.rated[1].videoID != "b" {
+	if len(lib.rated) != 1 || lib.rated[0].videoID != "b" {
 		t.Fatalf("rated %+v, want the highlighted row", lib.rated)
 	}
-}
-
-// A rating clears on a second press, through the controls as through the keys.
-func TestTheThumbControlTogglesOff(t *testing.T) {
-	m, lib, _, _ := playingModel(t)
-	b, _ := buttonAt(m, controlThumbUp)
-
-	for range 2 {
-		next, cmd := m.Update(click(b.start+1, m.controlsRow()))
-		m = drain(t, next.(Model), cmd)
+	if m.Tracks[1].Rating != RatingUp {
+		t.Errorf("the highlighted row is %v", m.Tracks[1].Rating)
 	}
+	if m.Tracks[0].Rating != RatingNone {
+		t.Error("the playing track was rated instead")
+	}
+
+	// A second press takes it off again.
+	next, cmd = m.Update(keyPress("+"))
+	m = drain(t, next.(Model), cmd)
 	if len(lib.rated) != 2 || lib.rated[1].rating != ytm.RatingNone {
-		t.Fatalf("rated %+v", lib.rated)
+		t.Fatalf("rated %+v, want it cleared", lib.rated)
 	}
-	if m.playing.Rating != RatingNone {
-		t.Errorf("rating = %v, want cleared", m.playing.Rating)
+	if m.Tracks[1].Rating != RatingNone {
+		t.Errorf("the row is still %v", m.Tracks[1].Rating)
 	}
 }
 
@@ -418,8 +360,6 @@ func TestTheTransportIsDisabledWithNothingPlaying(t *testing.T) {
 		{controlPrevious, buttonDisabled},
 		{controlNext, buttonDisabled},
 		{controlPlayPause, buttonDefault},
-		{controlThumbUp, buttonDisabled},
-		{controlThumbDown, buttonDisabled},
 	} {
 		b, ok := buttonAt(m, tc.control)
 		if !ok {
@@ -496,8 +436,7 @@ func TestRatingRefreshesLikedMusic(t *testing.T) {
 
 	m.Tracks = fromAPI(lib.tracks["LM"])
 	m.playing = m.Tracks[0]
-	b, _ := buttonAt(m, controlThumbUp)
-	next, cmd := m.Update(click(b.start+1, m.controlsRow()))
+	next, cmd := m.rateTrack(m.playing, RatingUp)
 	m = drain(t, next.(Model), cmd)
 
 	if _, ok := m.cache[likedPlaylistID]; ok {
@@ -521,9 +460,7 @@ func TestRatingWhileOnLikedMusicReloadsIt(t *testing.T) {
 	m.playing = m.Tracks[25]
 
 	requests := len(lib.askedFor)
-	// Rated through the control rather than by clicking it: the liked
-	// playlist does not carry the thumbs, since every row there is liked.
-	next, cmd := m.press(controlThumbUp)
+	next, cmd := m.rateTrack(m.playing, RatingUp)
 	m = drain(t, next.(Model), cmd)
 
 	if len(lib.askedFor) != requests+1 {
@@ -569,7 +506,7 @@ func TestTheWholeButtonIsClickable(t *testing.T) {
 func TestAButtonIsAsWideAsItsHitbox(t *testing.T) {
 	for _, label := range []string{labelPrevious, labelPause, labelRepeatOne} {
 		for _, state := range []buttonState{buttonDefault, buttonActive, buttonDisabled} {
-			lines := strings.Split(renderButton(label, state, nil), "\n")
+			lines := strings.Split(renderButton(label, state), "\n")
 			if len(lines) != controlsRows {
 				t.Errorf("%q %v draws %d rows, want %d",
 					label, state, len(lines), controlsRows)
@@ -634,9 +571,7 @@ func TestUnlikingRemovesTheRowFromLikedMusic(t *testing.T) {
 	before := len(m.Tracks)
 	m.playing = m.Tracks[0]
 
-	// Rated through the control rather than by clicking it: the liked
-	// playlist does not carry the thumbs, since every row there is liked.
-	next, cmd := m.press(controlThumbUp)
+	next, cmd := m.rateTrack(m.playing, RatingUp)
 	m = drain(t, next.(Model), cmd)
 
 	if len(m.Tracks) != before-1 {
@@ -669,90 +604,11 @@ func TestLikingWhileOnLikedMusicRefetches(t *testing.T) {
 	m.playing = m.Tracks[0]
 
 	asked := len(lib.askedFor)
-	// Rated through the control rather than by clicking it: the liked
-	// playlist does not carry the thumbs, since every row there is liked.
-	next, cmd := m.press(controlThumbUp)
+	next, cmd := m.rateTrack(m.playing, RatingUp)
 	m = drain(t, next.(Model), cmd)
 
 	if len(lib.askedFor) != asked+1 {
 		t.Errorf("asked for %v; want one more fetch", lib.askedFor)
-	}
-}
-
-// The thumbs follow the track, not the playlist: pressing one on a track
-// that already carries that rating takes it off, and the label says so.
-func TestTheThumbsFollowTheTrack(t *testing.T) {
-	m, _, _, _ := playingModel(t)
-
-	label := func(m Model, c control) string {
-		b, ok := buttonAt(m, c)
-		if !ok {
-			t.Fatalf("%v is missing", c)
-		}
-		return strings.TrimSpace(b.label)
-	}
-
-	if got := label(m, controlThumbUp); got != labelLike {
-		t.Errorf("unrated says %q, want %q", got, labelLike)
-	}
-	m.playing.Rating = RatingUp
-	if got := label(m, controlThumbUp); got != labelUnlike {
-		t.Errorf("liked says %q, want %q", got, labelUnlike)
-	}
-	if got := label(m, controlThumbDown); got != labelDislike {
-		t.Errorf("liked changed the other one to %q", got)
-	}
-	// Dislike keeps its name in both states: English has no word for taking
-	// one off. The fill is what says it is in force.
-	m.playing.Rating = RatingDown
-	if got := label(m, controlThumbDown); got != labelDislike {
-		t.Errorf("disliked says %q, want %q", got, labelDislike)
-	}
-	if b, _ := buttonAt(m, controlThumbDown); b.state != buttonActive {
-		t.Errorf("a disliked track leaves the button %v", b.state)
-	}
-	if got := label(m, controlThumbUp); got != labelLike {
-		t.Errorf("disliked changed the other one to %q", got)
-	}
-
-	// Both states are drawn at the same width, so the button does not change
-	// size under the pointer when a rating lands.
-	m.playing.Rating = RatingNone
-	unrated, _ := buttonAt(m, controlThumbUp)
-	m.playing.Rating = RatingUp
-	rated, _ := buttonAt(m, controlThumbUp)
-	if a, b := buttonWidth(unrated.label), buttonWidth(rated.label); a != b {
-		t.Errorf("Like is %d wide and Unlike %d", a, b)
-	}
-}
-
-// The liked playlist offers neither, the way its table carries no mark: every
-// row there is liked, so one button would only ever read Unlike and the other
-// would only ever take the row off the page.
-func TestTheLikedPlaylistDropsTheThumbs(t *testing.T) {
-	m, lib, _, _ := playingModel(t)
-	m.showingID = likedPlaylistID
-	m.playing.Rating = RatingUp
-
-	for _, c := range []control{controlThumbUp, controlThumbDown} {
-		if b, ok := buttonAt(m, c); ok {
-			t.Errorf("the liked playlist still draws %q", strings.TrimSpace(b.label))
-		}
-	}
-	// The transport stays, and the row is still the whole width.
-	if _, ok := buttonAt(m, controlPlayPause); !ok {
-		t.Error("the transport went with them")
-	}
-	if got := lipgloss.Width(plain(controlsLine(m))); got != m.width {
-		t.Errorf("the row is %d cells, want %d", got, m.width)
-	}
-
-	// Only the buttons are gone: rating is still a key away, and the row menu
-	// still offers it.
-	next, cmd := m.Update(keyPress("+"))
-	drain(t, next.(Model), cmd)
-	if len(lib.rated) != 1 {
-		t.Errorf("rated %+v, want the + key to still work there", lib.rated)
 	}
 }
 
@@ -763,8 +619,6 @@ func TestEveryButtonNamesItsKey(t *testing.T) {
 		controlPrevious:  "(p)",
 		controlPlayPause: "(space)",
 		controlNext:      "(n)",
-		controlThumbUp:   "(+)",
-		controlThumbDown: "(-)",
 		controlRepeat:    "(r)",
 	}
 	for _, b := range m.controlButtons() {
@@ -794,7 +648,7 @@ func TestDislikingWhatIsPlayingMovesOn(t *testing.T) {
 	}
 	m.playing = m.Tracks[0]
 
-	next, cmd := m.press(controlThumbDown)
+	next, cmd := m.rateTrack(m.playing, RatingDown)
 	m = drain(t, next.(Model), cmd)
 
 	if m.playing.VideoID != m.Tracks[1].VideoID {
@@ -817,7 +671,7 @@ func TestUndislikingStaysPut(t *testing.T) {
 	m.Tracks[0].Rating = RatingDown
 	m.playing = m.Tracks[0]
 
-	next, cmd := m.press(controlThumbDown)
+	next, cmd := m.rateTrack(m.playing, RatingDown)
 	m = drain(t, next.(Model), cmd)
 
 	if m.playing.VideoID != m.Tracks[0].VideoID {
@@ -860,7 +714,7 @@ func TestLikingWhatIsPlayingStaysPut(t *testing.T) {
 	m.setTracks(fromAPI(lib.tracks["LM"]))
 	m.playing = m.Tracks[0]
 
-	next, cmd := m.press(controlThumbUp)
+	next, cmd := m.rateTrack(m.playing, RatingUp)
 	m = drain(t, next.(Model), cmd)
 
 	if m.playing.VideoID != m.Tracks[0].VideoID {
@@ -877,9 +731,9 @@ func TestLikingWhatIsPlayingStaysPut(t *testing.T) {
 func TestTheButtonComponentsThreeStates(t *testing.T) {
 	const label = "Prev (p)"
 
-	def := renderButton(label, buttonDefault, nil)
-	act := renderButton(label, buttonActive, nil)
-	off := renderButton(label, buttonDisabled, nil)
+	def := renderButton(label, buttonDefault)
+	act := renderButton(label, buttonActive)
+	off := renderButton(label, buttonDisabled)
 
 	if def != padded(label) {
 		t.Errorf("the default state draws %q, want just the label", def)
@@ -887,30 +741,6 @@ func TestTheButtonComponentsThreeStates(t *testing.T) {
 	if act != def {
 		t.Errorf("active draws %q where default draws %q; without a hue they are the same",
 			act, def)
-	}
-	// Given one, the button is drawn in it either way round: the hue says what
-	// the button is about, not what state it is in. Active adds the weight,
-	// which is all that is left to say the playing track carries it — dislike
-	// has no second word for its other state.
-	for _, state := range []buttonState{buttonDefault, buttonActive} {
-		hued := renderButton(label, state, liked)
-		if !sgrCodes(hued)[likedFG] {
-			t.Errorf("%v with a hue is not drawn in it: %v", state, sgrCodes(hued))
-		}
-		if plain(hued) != padded(label) {
-			t.Errorf("a hue changed the label to %q", plain(hued))
-		}
-		if got, want := lipgloss.Width(hued), buttonWidth(label); got != want {
-			t.Errorf("a hued button is %d cells, buttonWidth is %d", got, want)
-		}
-		if bold := sgrCodes(hued)["1"]; bold != (state == buttonActive) {
-			t.Errorf("%v is bold=%v", state, bold)
-		}
-	}
-	// And a hue does not rescue a button that cannot be pressed: nothing to
-	// rate is nothing to colour.
-	if got := renderButton(label, buttonDisabled, liked); got != off {
-		t.Errorf("disabled with a hue draws %q, want the faint label %q", got, off)
 	}
 	if off == def {
 		t.Error("disabled draws the same as default")
@@ -938,7 +768,7 @@ func TestAButtonHasNoAirOfItsOwn(t *testing.T) {
 		t.Errorf("buttonPadding is %d, want none", buttonPadding)
 	}
 	for _, label := range []string{labelPrevious, labelClose, labelHelp} {
-		if got := renderButton(label, buttonDefault, nil); got != label {
+		if got := renderButton(label, buttonDefault); got != label {
 			t.Errorf("%q drew %q, want the label alone", label, got)
 		}
 		if got, want := buttonWidth(label), lipgloss.Width(label); got != want {
@@ -972,67 +802,5 @@ func TestThePopoverButtonIsTheSameComponent(t *testing.T) {
 	}
 	if want := buttonWidth(labelClose); width != want {
 		t.Errorf("its hitbox is %d, the component draws %d", width, want)
-	}
-}
-
-// The two ratings carry their colours whether or not the playing track is
-// rated: magenta is which button it is, not which state it is in. The label
-// says the state where English has a word for it, and the weight says it where
-// it does not — there is no undislike.
-func TestTheRatingButtonsCarryTheirColour(t *testing.T) {
-	m, _, _, _ := playingModel(t)
-	m.playing.Rating = RatingNone
-
-	for _, tc := range []struct {
-		which control
-		hue   color.Color
-		code  string
-	}{
-		{controlThumbUp, liked, likedFG},
-		{controlThumbDown, disliked, dislikedFG},
-	} {
-		b, ok := buttonAt(m, tc.which)
-		if !ok {
-			t.Fatalf("%v is not on the row", tc.which)
-		}
-		if b.hue != tc.hue {
-			t.Errorf("%v carries %v, want %v", tc.which, b.hue, tc.hue)
-		}
-		if b.state != buttonDefault {
-			t.Errorf("an unrated track leaves %v in %v", tc.which, b.state)
-		}
-		drawn := renderButton(b.label, b.state, b.hue)
-		if !strings.Contains(controlsLine(m), drawn) {
-			t.Errorf("the row does not draw %v through the component", tc.which)
-		}
-		if !sgrCodes(drawn)[tc.code] {
-			t.Errorf("%v unrated is not SGR %s: %v", tc.which, tc.code, sgrCodes(drawn))
-		}
-		if sgrCodes(drawn)["1"] {
-			t.Errorf("%v is bold with nothing rated", tc.which)
-		}
-	}
-
-	// Carried, it is the same colour with the weight added.
-	m.playing.Rating = RatingUp
-	up, _ := buttonAt(m, controlThumbUp)
-	held := renderButton(up.label, up.state, up.hue)
-	if !sgrCodes(held)[likedFG] || !sgrCodes(held)["1"] {
-		t.Errorf("a liked track does not bolden the like: %v", sgrCodes(held))
-	}
-	if got := strings.TrimSpace(up.label); got != labelUnlike {
-		t.Errorf("it reads %q, want %q", got, labelUnlike)
-	}
-
-	// Nothing to rate is nothing to colour: the button goes faint instead.
-	idle := m
-	idle.playing = Track{}
-	off, _ := buttonAt(idle, controlThumbUp)
-	blank := renderButton(off.label, off.state, off.hue)
-	if sgrCodes(blank)[likedFG] {
-		t.Errorf("a rating with nothing to rate is still coloured: %v", sgrCodes(blank))
-	}
-	if !sgrCodes(blank)[faintSGR] {
-		t.Errorf("a rating with nothing to rate is not faint: %v", sgrCodes(blank))
 	}
 }

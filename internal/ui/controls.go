@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"image/color"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -21,18 +20,16 @@ import (
 // Prev is the dictionary's abbreviation of previous; the rest are already
 // the shortest words for what they do.
 //
-// There is no label for taking a dislike off, because English has no word
-// for it: unlike is one, undislike is not. So the dislike button keeps its
-// name in both states and the fill says which one it is in, the way it
-// always did.
+// Rating is not down here any more. A thumb pair sat on the end of this row
+// and rated whatever was playing, which made it the one control that acted on
+// something other than what you were pointing at — and it could only ever
+// rate that one track. Rating belongs to a row, so it lives on the row's menu
+// now, beside the other things you can do to a track.
 const (
 	labelPrevious  = "Prev (p)"
 	labelPlay      = "Play (space)"
 	labelPause     = "Pause (space)"
 	labelNext      = "Next (n)"
-	labelLike      = "Like (+)"
-	labelUnlike    = "Unlike (+)"
-	labelDislike   = "Dislike (-)"
 	labelRepeatOff = "Repeat off (r)"
 	labelRepeatOn  = "Repeat on (r)"
 	labelRepeatOne = "Repeat one (r)"
@@ -43,7 +40,6 @@ const (
 var (
 	repeatLabels  = []string{labelRepeatOff, labelRepeatOn, labelRepeatOne}
 	playingLabels = []string{labelPlay, labelPause}
-	likeLabels    = []string{labelLike, labelUnlike}
 )
 
 // playPauseLabel says what pressing it will do, which is the convention every
@@ -98,8 +94,6 @@ const (
 	controlPrevious
 	controlPlayPause
 	controlNext
-	controlThumbUp
-	controlThumbDown
 	controlRepeat
 )
 
@@ -108,10 +102,6 @@ type button struct {
 	control control
 	label   string
 	state   buttonState
-	// hue is what active looks like for this one. The ratings have a colour of
-	// their own — the same one the rows take — and everything else is nil,
-	// where active and default read the same.
-	hue color.Color
 	// start and end are half-open columns.
 	start, end int
 }
@@ -128,15 +118,10 @@ func groupWidth(group []button) int {
 	return total
 }
 
-// controlButtons lays the row out: transport against the left edge, the
-// thumbs centred on the row, repeat against the right. Rendering and
-// hit-testing share it, so a click lands on the button it looks like it
-// should.
+// controlButtons lays the row out: one group, against the left edge, repeat on
+// the end of it. Rendering and hit-testing share it, so a click lands on the
+// button it looks like it should.
 func (m Model) controlButtons() []button {
-	width := m.contentWidth()
-	// Columns are counted across the whole row, so a span can be compared
-	// against a click without anyone remembering the border is there.
-	right := contentLeft + width
 	playing := m.playing.VideoID != ""
 
 	// Skipping needs something to skip from, so those two go quiet with
@@ -151,66 +136,17 @@ func (m Model) controlButtons() []button {
 	if m.repeat != RepeatOff {
 		repeat = buttonActive
 	}
-	leftGroup := []button{
+	group := []button{
 		{control: controlPrevious, label: labelPrevious, state: onward},
 		{control: controlPlayPause, label: m.playPauseLabel(), state: buttonDefault},
 		{control: controlNext, label: labelNext, state: onward},
 		{control: controlRepeat, label: m.repeat.label(), state: repeat},
 	}
-	if width < groupWidth(leftGroup) {
+	if m.contentWidth() < groupWidth(group) {
 		return nil
 	}
-	// The thumbs follow the track. Pressing like on a track that already
-	// carries it takes it off, so that label says which of the two it will
-	// do; dislike has no second word to say it with.
-	//
-	// The liked playlist has neither, on the same grounds the table drops the
-	// mark there: every row in it is liked, so one button would only ever read
-	// Unlike and the other would only ever take a row off the page. Rating a
-	// track there is still the keys and the row menu, which is where it
-	// belongs when it is the row being rated rather than the player.
-	var rightGroup []button
-	if m.showsRating() {
-		// up, not liked: liked is the colour, and a rating button in force is
-		// drawn in it.
-		up := m.playing.Rating == RatingUp
-		like := labelLike
-		if up {
-			like = labelUnlike
-		}
-		// A rating with nothing to rate cannot be pressed; one the track
-		// already carries is on.
-		rating := func(on bool) buttonState {
-			switch {
-			case !playing:
-				return buttonDisabled
-			case on:
-				return buttonActive
-			}
-			return buttonDefault
-		}
-		rightGroup = []button{
-			{control: controlThumbUp, label: steady(like, likeLabels),
-				state: rating(up), hue: liked},
-			{control: controlThumbDown, label: labelDislike,
-				state: rating(m.playing.Rating == RatingDown), hue: disliked},
-		}
-	}
-
-	at := lay(leftGroup, contentLeft)
-
-	// The ratings go against the right, and give way to the transport rather
-	// than overlapping it.
-	if len(rightGroup) > 0 {
-		rightStart := right - groupWidth(rightGroup)
-		if rightStart < at+buttonGap {
-			rightGroup = nil
-		} else {
-			lay(rightGroup, rightStart)
-		}
-	}
-
-	return append(leftGroup, rightGroup...)
+	lay(group, contentLeft)
+	return group
 }
 
 // lay assigns columns to a group and returns where the last button ends.
@@ -246,7 +182,7 @@ func (m Model) renderControls() string {
 		at[i] = contentLeft
 	}
 	for _, btn := range buttons {
-		lines := strings.Split(renderButton(btn.label, btn.state, btn.hue), "\n")
+		lines := strings.Split(renderButton(btn.label, btn.state), "\n")
 		for r := range rows {
 			if r >= len(lines) {
 				continue
@@ -282,29 +218,11 @@ func (m Model) press(c control) (tea.Model, tea.Cmd) {
 			return m.skip(true)
 		}
 		return m, m.togglePause()
-	case controlThumbUp:
-		return m.ratePlaying(RatingUp)
-	case controlThumbDown:
-		return m.ratePlaying(RatingDown)
 	case controlRepeat:
 		m.repeat = m.repeat.next()
 		return m, nil
 	}
 	return m, nil
-}
-
-// ratePlaying rates the track that is playing. The thumbs sit beside the
-// transport, so they act on what is playing rather than on what happens to
-// be highlighted — which is what the + and - keys are for.
-func (m Model) ratePlaying(r Rating) (tea.Model, tea.Cmd) {
-	if m.playing.VideoID == "" {
-		return m, nil
-	}
-	previous := m.playing.Rating
-	if previous == r {
-		r = RatingNone
-	}
-	return m.rated(m.playing.VideoID, r, previous)
 }
 
 // skip starts the next or previous track. With nothing playing yet there is

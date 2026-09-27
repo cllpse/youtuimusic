@@ -1274,8 +1274,8 @@ func TestNothingDrawsAnIcon(t *testing.T) {
 
 	// Including the labels themselves, which are read in isolation elsewhere.
 	for _, label := range []string{
-		labelPrevious, labelPlay, labelPause, labelNext, labelLike, labelUnlike,
-		labelDislike, labelRepeatOff, labelRepeatOn, labelRepeatOne,
+		labelPrevious, labelPlay, labelPause, labelNext,
+		labelRepeatOff, labelRepeatOn, labelRepeatOne,
 		labelClose, labelHelp, labelKeys, labelLoadMore, labelTypeToSearch,
 	} {
 		if glyph, found := privateUse(label); found {

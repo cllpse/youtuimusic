@@ -20,6 +20,7 @@ type menuItem int
 
 const (
 	menuLike menuItem = iota
+	menuDislike
 	menuAlbum
 	menuArtist
 )
@@ -39,31 +40,39 @@ type menuRow struct {
 	// enabled is false when the row has nowhere to go: a single with no
 	// album page, or a track whose artist is not linked.
 	enabled bool
-	// hue is a colour of the row's own, for the one row that rates the track.
-	// It says what pressing it does rather than what the track is: magenta to
-	// like, red to take a like away, which is the one row in the app that
-	// removes something. The rows that go somewhere have none.
+	// hue is a colour of the row's own: the two rating rows, in the magenta and
+	// red their rows take in the list. It says which rating the row is about
+	// and not which way it will go — going the other way is still that rating,
+	// and a row that turned red for taking a like off would read as a warning
+	// about a thing you are allowed to do. The label says the direction.
 	//
-	// The transport's like button is magenta either way round, deliberately:
-	// down there the colour says which button it is among six, and the label
-	// says which way it will go.
+	// The rows that go somewhere have no colour.
 	hue color.Color
 }
 
-// dividerAfter is the item the rule follows. Liking is about this track;
+// dividerAfter is the item the rule follows. The ratings are about this track;
 // everything under the rule is about going somewhere else.
-const dividerAfter = 0
+const dividerAfter = 1
 
 func (m Model) menuRows() []menuRow {
 	t := m.menu.track
-	// The row says what pressing it does, so a liked track offers to undo
-	// it rather than offering to do it again.
-	like := menuRow{menuLike, "Like track", true, liked}
+	// Each row says what pressing it does, so a track that already carries a
+	// rating offers to take it off rather than offering to do it again.
+	//
+	// English has a word for one of those and not the other — unlike is one,
+	// undislike is not — so the dislike says it the long way round. Both rows
+	// are the same key they answer to elsewhere: + and -.
+	like := menuRow{menuLike, "Like track", t.VideoID != "", liked}
 	if t.Rating == RatingUp {
-		like = menuRow{menuLike, "Unlike track", true, disliked}
+		like = menuRow{menuLike, "Unlike track", true, liked}
+	}
+	dislike := menuRow{menuDislike, "Dislike track", t.VideoID != "", disliked}
+	if t.Rating == RatingDown {
+		dislike = menuRow{menuDislike, "Remove dislike", true, disliked}
 	}
 	return []menuRow{
 		like,
+		dislike,
 		{menuAlbum, "Go to album…", t.AlbumID != "", nil},
 		{menuArtist, "Go to artist…", t.ArtistID != "", nil},
 	}
@@ -210,6 +219,8 @@ func (m Model) activate(row int) (tea.Model, tea.Cmd) {
 	switch rows[row].item {
 	case menuLike:
 		return m.rateTrack(t, RatingUp)
+	case menuDislike:
+		return m.rateTrack(t, RatingDown)
 	case menuAlbum:
 		return m.goTo(Playlist{ID: t.AlbumID, Title: t.Album, kind: tabAlbum})
 	case menuArtist:

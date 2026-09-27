@@ -1520,7 +1520,7 @@ func (m Model) renderStatusBar() string {
 		if m.sheetOpen {
 			state = buttonActive
 		}
-		tail = fill.Render(renderButton(labelHelp, state, nil) + " ")
+		tail = fill.Render(renderButton(labelHelp, state) + " ")
 		room -= helpButtonWidth + 1
 	}
 	return block + fillRow(m.statusSegments(), fill, room) + tail

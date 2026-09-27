@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"image/color"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -65,24 +64,12 @@ func padded(label string) string {
 
 // renderButton draws one button in a state.
 //
-// hue is the colour the button is drawn in whether or not it is in force, and
-// nil for the buttons that have no colour of their own — which is all of them
-// but the two ratings. It says what the button is about rather than what state
-// it is in: the like is magenta because it is the like, the same magenta a liked
-// row is drawn in, and the label is what says which way round it is.
-//
-// Active adds the weight, which is the only thing left to say "the playing
-// track carries this" — dislike has no second word for its other state, so
-// without it the button could not say it at all.
-func renderButton(label string, state buttonState, hue color.Color) string {
+// The two that had a colour of their own were the ratings, and they are not on
+// this row any more — rating happens on a row's own menu, where the colour is
+// the row's. So a button is the label again, faint when it cannot be pressed.
+func renderButton(label string, state buttonState) string {
 	if state == buttonDisabled {
 		return disabledButton.Render(padded(label))
 	}
-	if hue == nil {
-		return padded(label)
-	}
-	return lipgloss.NewStyle().
-		Foreground(hue).
-		Bold(state == buttonActive).
-		Render(padded(label))
+	return padded(label)
 }
