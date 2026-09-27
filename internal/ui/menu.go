@@ -39,9 +39,14 @@ type menuRow struct {
 	// enabled is false when the row has nowhere to go: a single with no
 	// album page, or a track whose artist is not linked.
 	enabled bool
-	// hue is a colour of the row's own, for the one row that has a subject
-	// with a colour: rating this track, in the magenta a liked row takes. The
-	// rows that go somewhere have none, and are drawn like any other menu.
+	// hue is a colour of the row's own, for the one row that rates the track.
+	// It says what pressing it does rather than what the track is: magenta to
+	// like, red to take a like away, which is the one row in the app that
+	// removes something. The rows that go somewhere have none.
+	//
+	// The transport's like button is magenta either way round, deliberately:
+	// down there the colour says which button it is among six, and the label
+	// says which way it will go.
 	hue color.Color
 }
 
@@ -55,7 +60,7 @@ func (m Model) menuRows() []menuRow {
 	// it rather than offering to do it again.
 	like := menuRow{menuLike, "Like track", true, liked}
 	if t.Rating == RatingUp {
-		like = menuRow{menuLike, "Unlike track", true, liked}
+		like = menuRow{menuLike, "Unlike track", true, disliked}
 	}
 	return []menuRow{
 		like,

@@ -1336,34 +1336,54 @@ func TestTheSearchNoteTellsUntypedFromUnfound(t *testing.T) {
 	}
 }
 
-// The menu's rating row is drawn in the same magenta, both ways round: it is
-// about what you think of this track, which is what that colour means
-// everywhere else in the app.
-func TestTheMenuRatingRowCarriesItsColour(t *testing.T) {
+// The menu's rating row is coloured by what pressing it does: magenta to like,
+// red to take a like away. It is the one row in the app that removes something,
+// and red is what the rest of the interface means by that.
+//
+// The transport's like button is magenta either way round — see
+// TestTheRatingButtonsCarryTheirColour — because down there the colour says
+// which of six buttons it is and the label says which way it will go.
+func TestTheMenuRatingRowSaysWhatPressingItDoes(t *testing.T) {
 	m, _, _, _ := menuModel(t)
 
-	for _, rating := range []Rating{RatingNone, RatingUp} {
+	for _, tc := range []struct {
+		rating Rating
+		label  string
+		hue    string
+		other  string
+	}{
+		{RatingNone, "Like track", likedFG, dislikedFG},
+		{RatingUp, "Unlike track", dislikedFG, likedFG},
+	} {
 		track := m.Tracks[0]
-		track.Rating = rating
+		track.Rating = tc.rating
 		at := m.openMenu(track, 4, 4)
 		at.menu.cursor = 1 // the cursor elsewhere, so the weight is not in play
 
 		lines := strings.Split(at.renderMenu(), "\n")
+		found := false
 		for _, line := range lines {
 			bare := plain(line)
 			switch {
-			case strings.Contains(bare, "Like track") || strings.Contains(bare, "Unlike track"):
-				if !sgrCodes(line)[likedFG] {
-					t.Errorf("the rating row is not magenta: %q", line)
+			case strings.Contains(bare, tc.label):
+				found = true
+				if !sgrCodes(line)[tc.hue] {
+					t.Errorf("%q is not SGR %s: %q", tc.label, tc.hue, line)
+				}
+				if sgrCodes(line)[tc.other] {
+					t.Errorf("%q also carries SGR %s: %q", tc.label, tc.other, line)
 				}
 				if sgrCodes(line)["1"] {
-					t.Errorf("the rating row is bold without the cursor: %q", line)
+					t.Errorf("%q is bold without the cursor: %q", tc.label, line)
 				}
 			case strings.Contains(bare, "Go to"):
-				if sgrCodes(line)[likedFG] {
-					t.Errorf("a row that goes somewhere is magenta: %q", line)
+				if sgrCodes(line)[likedFG] || sgrCodes(line)[dislikedFG] {
+					t.Errorf("a row that goes somewhere is coloured: %q", line)
 				}
 			}
+		}
+		if !found {
+			t.Errorf("no %q row in the menu", tc.label)
 		}
 	}
 

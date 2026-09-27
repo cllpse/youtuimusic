@@ -478,7 +478,7 @@ func TestTheScrollbarMarksThePlayingTrack(t *testing.T) {
 	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
 		playing: "v50"}
 
-	bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow(), table.highlight, false, table.quiet)
+	bar := table.scrollbar()
 	if len(bar) != height {
 		t.Fatalf("the scrollbar is %d cells", len(bar))
 	}
@@ -515,7 +515,7 @@ func TestThePlayingMarkStaysOnTheTrough(t *testing.T) {
 	for _, at := range []int{0, 1, 18, 35, 36} {
 		table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
 			playing: fmt.Sprintf("v%d", at)}
-		bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow(), table.highlight, false, table.quiet)
+		bar := table.scrollbar()
 		// Found by colour: the mark is a block wherever it lands.
 		found := -1
 		for i, cell := range bar {
@@ -541,7 +541,7 @@ func TestNoMarkForATrackThatIsNotInTheList(t *testing.T) {
 		if got := table.playingRow(); got != -1 {
 			t.Errorf("playing %q gave row %d", playing, got)
 		}
-		bar := scrollbarFor(table.rowCount(), table.offset, 10, table.playingRow(), table.highlight, false, table.quiet)
+		bar := table.scrollbar()
 		for i, cell := range bar {
 			if sgrCodes(cell)[liveFG] {
 				t.Errorf("playing %q still marked row %d", playing, i)
@@ -570,7 +570,7 @@ func TestTheMarkAndTheThumbShareACell(t *testing.T) {
 	// top both the thumb and a mark for an early track are on row 0.
 	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
 		playing: "v0"}
-	bar := scrollbarFor(table.rowCount(), table.offset, height, table.playingRow(), table.highlight, false, table.quiet)
+	bar := table.scrollbar()
 
 	cell := bar[0]
 	if !strings.Contains(plain(cell), "█") {
@@ -786,5 +786,141 @@ func TestAnInactiveRowIsOneColourAllTheWayAcross(t *testing.T) {
 	}
 	if !sgrCodes(liveWhole)["1"] {
 		t.Errorf("the playing row lost its weight: %q", liveWhole)
+	}
+}
+
+// trough is a list long enough to need a scrollbar, with four rows to each
+// cell of it: enough for several things to fall in one cell.
+func trough(n int) []Track {
+	out := make([]Track, n)
+	for i := range out {
+		out[i] = Track{VideoID: fmt.Sprintf("v%d", i), Title: "T"}
+	}
+	return out
+}
+
+// The trough marks what you think of the tracks in it, in the colours the rows
+// themselves take, beside the mark for what is playing.
+func TestTheScrollbarMarksRatedTracks(t *testing.T) {
+	const height, total = 10, 40
+	tracks := trough(total)
+	tracks[0].Rating = RatingUp    // cell 0, under the thumb
+	tracks[20].Rating = RatingDown // cell 5, on the bare trough
+	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
+		showRating: true}
+
+	bar := table.scrollbar()
+	if len(bar) != height {
+		t.Fatalf("the scrollbar is %d cells, want %d", len(bar), height)
+	}
+	want := map[int]string{0: likedFG, 5: dislikedFG}
+	for i, cell := range bar {
+		code, marked := want[i]
+		if marked {
+			if !sgrCodes(cell)[code] {
+				t.Errorf("cell %d is not SGR %s: %q", i, code, cell)
+			}
+			// A mark is a block wherever it lands, thumb or trough, so that
+			// it reads the same in both.
+			if got := plain(cell); !strings.Contains(got, "█") {
+				t.Errorf("the mark in cell %d is not a block: %q", i, got)
+			}
+			continue
+		}
+		if sgrCodes(cell)[likedFG] || sgrCodes(cell)[dislikedFG] {
+			t.Errorf("cell %d is marked and holds nothing rated: %q", i, cell)
+		}
+	}
+}
+
+// A cell can only be one colour, so where several things fall in one it says
+// the most notable: a dislike over a like, and what is playing over both.
+func TestAScrollbarCellSaysTheMostNotableThingInIt(t *testing.T) {
+	const height, total = 10, 40
+	base := trackTable{width: 60, height: height + headerRows, showRating: true}
+
+	liked := trough(total)
+	liked[0].Rating = RatingUp
+	liked[1].Rating = RatingUp
+	both := trough(total)
+	both[0].Rating = RatingUp
+	both[1].Rating = RatingDown
+	playing := trough(total)
+	playing[0].Rating = RatingUp
+	playing[1].Rating = RatingDown
+
+	for _, tc := range []struct {
+		name    string
+		table   trackTable
+		want    string
+		notWant []string
+	}{
+		{"likes alone", func() trackTable { at := base; at.tracks = liked; return at }(),
+			likedFG, []string{dislikedFG, liveFG}},
+		{"a dislike among them", func() trackTable { at := base; at.tracks = both; return at }(),
+			dislikedFG, []string{likedFG, liveFG}},
+		{"and the playing track over that", func() trackTable {
+			at := base
+			at.tracks, at.playing = playing, "v2"
+			return at
+		}(), liveFG, []string{likedFG, dislikedFG}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cell := tc.table.scrollbar()[0]
+			if !sgrCodes(cell)[tc.want] {
+				t.Errorf("cell 0 is not SGR %s: %q", tc.want, cell)
+			}
+			for _, code := range tc.notWant {
+				if sgrCodes(cell)[code] {
+					t.Errorf("cell 0 also carries SGR %s: %q", code, cell)
+				}
+			}
+		})
+	}
+}
+
+// The liked playlist marks no ratings, for the same reason its rows carry no
+// colour: a trough of magenta says nothing a plain one does not. What is
+// playing is still marked.
+func TestTheScrollbarDropsRatingMarksWithTheRatings(t *testing.T) {
+	const height, total = 10, 40
+	tracks := trough(total)
+	tracks[0].Rating, tracks[20].Rating = RatingUp, RatingDown
+	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
+		showRating: false, playing: "v36"}
+
+	bar := strings.Join(table.scrollbar(), "")
+	if sgrCodes(bar)[likedFG] || sgrCodes(bar)[dislikedFG] {
+		t.Errorf("a block that shows no ratings marked one: %q", bar)
+	}
+	if !sgrCodes(bar)[liveFG] {
+		t.Errorf("the playing track lost its mark with them: %q", bar)
+	}
+}
+
+// Behind a popover the whole bar goes quiet, marks included: they keep their
+// place and stop being the lit thing.
+func TestAnInactiveScrollbarHasNoMarks(t *testing.T) {
+	const height, total = 10, 40
+	tracks := trough(total)
+	tracks[0].Rating, tracks[20].Rating = RatingUp, RatingDown
+	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
+		showRating: true, playing: "v36", inactive: true,
+		quiet: color.RGBA{0xBF, 0xBF, 0xBF, 0xFF}}
+
+	bar := table.scrollbar()
+	joined := strings.Join(bar, "")
+	for _, code := range []string{likedFG, dislikedFG, liveFG} {
+		if sgrCodes(joined)[code] {
+			t.Errorf("an inactive scrollbar still carries SGR %s: %q", code, joined)
+		}
+	}
+	// The shapes are where they were: three blocks for the marks and the
+	// thumb, whatever colour they are in.
+	if n := strings.Count(plain(joined), "█"); n < 3 {
+		t.Errorf("the marks lost their shape as well: %q", plain(joined))
+	}
+	if !strings.Contains(joined, "38;2;191;191;191m") {
+		t.Errorf("the bar is not in the quiet colour: %q", joined)
 	}
 }

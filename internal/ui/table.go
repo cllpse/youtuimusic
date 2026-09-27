@@ -129,8 +129,7 @@ func (t trackTable) layout(width int) layout {
 // above it without splitting a string apart again.
 func (t trackTable) rows() []string {
 	width := t.width
-	bar := scrollbarFor(t.rowCount(), t.offset, t.rowsHeight(), t.playingRow(),
-		t.highlight, t.inactive, t.quiet)
+	bar := t.scrollbar()
 	if bar != nil {
 		width -= scrollbarWidth
 	}
@@ -281,64 +280,94 @@ func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string
 // not one of its songs.
 var releaseStyle = lipgloss.NewStyle().Bold(true)
 
-// scrollbarFor draws a trough and thumb for a list. The thumb is the same
-// grey as the trough: the glyphs carry the difference, as they do on the
-// progress bar.
-// scrollbarFor draws a trough and thumb for a list, with the playing track
-// marked in it. playingAt is that track's index, or -1 for none.
+// markCell is where a row of the list falls on the trough, which stands for
+// the whole of it. The thumb is placed by the same proportion.
+func markCell(row, total, height int) int {
+	return min(row*height/total, height-1)
+}
+
+// scrollbarMarks is what each cell of the trough has to say about the rows
+// that fall in it, by cell. A cell is one colour, so where several things fall
+// in one it says the most notable of them.
 //
-// The bar is drawn in the row highlight, the same surface the selected row,
-// the status bar and the progress groove use. Shape carries the meaning here
-// — a block where the window is, a line where it is not — so the colour is
-// free to say only "furniture".
-func scrollbarFor(total, offset, height, playingAt int, highlight color.Color,
-	inactive bool, quiet color.Color,
-) []string {
+// A dislike outranks a like because there are fewer of them and they are the
+// ones worth finding. The playing track outranks both — not because it matters
+// more, but because its mark is the one that moves, and a mark you are
+// following cannot go missing every time the track it stands for is liked. On
+// a row the order is the other way round, and can be: a row has a weight as
+// well as a colour, so it says both at once. A cell has only the colour.
+func (t trackTable) scrollbarMarks() map[int]color.Color {
+	total, height := t.rowCount(), t.rowsHeight()
+	marks := map[int]color.Color{}
+	if total <= 0 || height <= 0 {
+		return marks
+	}
+
+	for i, track := range t.tracks {
+		hue, rated := t.ratingHue(track)
+		if !rated {
+			continue
+		}
+		cell := markCell(i, total, height)
+		if marks[cell] == disliked {
+			continue
+		}
+		marks[cell] = hue
+	}
+	if at := t.playingRow(); at >= 0 && at < total {
+		marks[markCell(at, total, height)] = live
+	}
+	return marks
+}
+
+// scrollbar draws a trough and thumb for the list, with what is playing and
+// what you think of it marked in the colours those things take everywhere else.
+//
+// The bar itself is drawn in the row highlight, the same surface the selected
+// row, the status bar and the progress groove use. Shape says where the window
+// is — a block there, a line where it is not — and colour says what is in the
+// list, so a mark and the thumb can share a cell, which they do the whole time
+// the playing track is on screen, without either hiding the other.
+func (t trackTable) scrollbar() []string {
+	total, height := t.rowCount(), t.rowsHeight()
 	if !needsScrollbar(total, height) {
 		return nil
 	}
 	thumb := max(1, height*height/total)
 	start := 0
 	if span, furthest := height-thumb, total-height; furthest > 0 {
-		start = min(offset*span/furthest, span)
+		start = min(t.offset*span/furthest, span)
 	}
 
-	// The trough stands for the whole list, so the mark is placed by the
-	// same proportion the thumb is.
-	mark := -1
-	if playingAt >= 0 && playingAt < total {
-		mark = min(playingAt*height/total, height-1)
-	}
+	furniture := lipgloss.NewStyle().Foreground(highlightOr(t.highlight, t.inactive, t.quiet))
+	marks := t.scrollbarMarks()
 
-	// The mark is the trough's own block, highlighted. Shape says where the
-	// window is and colour says where the playing track is, so the two can
-	// share a cell — which they do the whole time the playing track is on
-	// screen — without either hiding the other.
-	furniture := lipgloss.NewStyle().Foreground(highlight)
-	if inactive {
-		furniture = lipgloss.NewStyle().Foreground(quiet)
-	}
-	// The mark is the player's blue, the same as the row it stands for: the
-	// scrollbar is saying where in the list that row is, not something else
-	// about it.
-	marked := lipgloss.NewStyle().Foreground(live)
-	if inactive {
-		// It stays where it is but stops being the lit thing: the block is
-		// behind something and has nothing to draw the eye to.
-		marked = lipgloss.NewStyle().Foreground(quiet)
-	}
 	out := make([]string, height)
 	for i := range out {
+		style, glyph := furniture, "│"
 		switch {
-		case i == mark:
-			out[i] = " " + marked.Render("█") + " "
+		case marks[i] != nil:
+			glyph = "█"
+			if !t.inactive {
+				style = lipgloss.NewStyle().Foreground(marks[i])
+			}
+			// Inactive it keeps its place and stops being the lit thing: the
+			// block is behind something and has nothing to draw the eye to.
 		case i >= start && i < start+thumb:
-			out[i] = " " + furniture.Render("█") + " "
-		default:
-			out[i] = " " + furniture.Render("│") + " "
+			glyph = "█"
 		}
+		out[i] = " " + style.Render(glyph) + " "
 	}
 	return out
+}
+
+// highlightOr is the bar's own colour, which sinks with the block it belongs
+// to.
+func highlightOr(highlight color.Color, inactive bool, quiet color.Color) color.Color {
+	if inactive {
+		return quiet
+	}
+	return highlight
 }
 
 // keepVisible moves a window the least it can to keep an index on screen,
