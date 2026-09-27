@@ -1625,14 +1625,14 @@ func TestTheFrameBehindAPopoverGoesQuiet(t *testing.T) {
 	}
 }
 
-// The liked playlist is a tab of what you think of a track, so it is drawn in
-// the same magenta the rows and its menu rows take — its top edge, its two walls
-// and its label. Down to its feet and no further: those are where it meets the
-// rule, and they are the rule's business.
+// The liked playlist's tab says whose it is with its label and nothing else. Its
+// outline is every other tab's — the emphasis in front, the dimmed colour behind
+// — because the outline is already saying which tab is in front, and a second
+// thing on the same line reads as an argument.
 //
-// Which tab is in front is said by the shape: the front one has no bottom edge
-// and the others are closed.
-func TestTheLikedTabIsMagenta(t *testing.T) {
+// Which tab is in front is also said by the shape: the front one has no bottom
+// edge and the others are closed.
+func TestOnlyTheLikedTabsLabelIsMagenta(t *testing.T) {
 	m := sample()
 	m.Playlists = []Playlist{
 		{ID: likedPlaylistID, Title: "Liked Music"},
@@ -1650,17 +1650,26 @@ func TestTheLikedTabIsMagenta(t *testing.T) {
 			at := m
 			at.tabCursor = tc.cursor
 			lines := strings.Split(at.renderTabs(), "\n")
-			// Its top edge and the row its label is on.
-			for _, row := range []int{0, 1} {
-				if !sgrCodes(lines[row])[likedFG] {
-					t.Errorf("row %d of the tab is not magenta: %q", row, lines[row])
-				}
+			// The label, and only the label: not the top edge above it, not the
+			// walls beside it on the same row, not the feet below it.
+			if !sgrCodes(lines[1])[likedFG] {
+				t.Errorf("the label is not magenta: %q", lines[1])
 			}
-			// Its feet are not. Found by glyph: they are the first thing on the
-			// rule when this tab is first in the row.
-			for _, run := range styledRuns(lines[2]) {
-				if strings.ContainsAny(run.text, "╯╰┴") && strings.Contains(run.codes, likedFG) {
-					t.Errorf("the feet %q are magenta: %q", run.text, lines[2])
+			if sgrCodes(lines[0])[likedFG] {
+				t.Errorf("the top edge is magenta: %q", lines[0])
+			}
+			// The walls on the label's own row, and the feet on the rule
+			// below it. Not the rule itself: that is the page's, and while
+			// this tab is in front the page is this playlist's.
+			for row, glyphs := range map[int]string{1: "│", 2: "╯╰┴"} {
+				for _, run := range styledRuns(lines[row]) {
+					if !strings.Contains(run.codes, likedFG) {
+						continue
+					}
+					if strings.ContainsAny(run.text, glyphs) {
+						t.Errorf("magenta reaches the outline %q on row %d: %q",
+							run.text, row, lines[row])
+					}
 				}
 			}
 			// The shape still says which one is in front: an open bottom edge.
@@ -1857,5 +1866,88 @@ func TestTheRuleTheTabsSitOnFollowsTheLikedTab(t *testing.T) {
 				t.Errorf("cursor %d row %d is %d cells, want %d", cursor, row, got, m.width)
 			}
 		}
+	}
+}
+
+// The tab whose listing holds the track playing carries a blue block: the same
+// block the scrollbar marks that track with, in the same colour, because it is
+// the same statement about where the track is.
+func TestTheTabHoldingThePlayingTrackIsMarked(t *testing.T) {
+	m := sized(sample(), 120, 20)
+	m.Playlists = []Playlist{
+		{ID: "PL1", Title: "Favorites"},
+		{ID: "PL2", Title: "Mixes"},
+	}
+	m.Tracks = rows(10)
+	m.showingID = "PL1"
+	// The other tab has been visited, so there are rows there to look through —
+	// other rows, so that only one tab can hold a given track.
+	others := []Track{{VideoID: "x1", Title: "One"}, {VideoID: "x2", Title: "Two"}}
+	m.cache["PL2"] = cached{tracks: others}
+
+	labels := func(m Model) string { return strings.Split(m.renderTabs(), "\n")[1] }
+
+	// Nothing playing, no marker anywhere.
+	if strings.Contains(plain(labels(m)), tabMarker) {
+		t.Errorf("a marker with nothing playing: %q", plain(labels(m)))
+	}
+
+	// Playing a row of the visible listing marks that tab, and only that tab.
+	m.playing = m.Tracks[3]
+	if !m.tabHoldsPlaying(0) {
+		t.Fatal("the tab the track is in does not hold it")
+	}
+	if m.tabHoldsPlaying(1) {
+		t.Error("a tab whose listing does not have it says it does")
+	}
+	row := labels(m)
+	if got := strings.Count(plain(row), tabMarker); got != 1 {
+		t.Errorf("%d markers on the row, want one: %q", got, plain(row))
+	}
+	// In front of the label it belongs to, and in the player's blue.
+	if column(plain(row), tabMarker) > column(plain(row), "Favorites") {
+		t.Errorf("the marker is not in front of its label: %q", plain(row))
+	}
+	for _, run := range styledRuns(row) {
+		if strings.Contains(run.text, tabMarker) && !strings.Contains(run.codes, liveFG) {
+			t.Errorf("the marker is drawn %s, want the player's blue: %q", run.codes, row)
+		}
+	}
+
+	// It costs the tab two cells, which the spans know about — or a click would
+	// land on the tab next door.
+	marked := m.tabSpans()
+	m.playing = Track{}
+	bare := m.tabSpans()
+	if marked[0].end-marked[0].start != bare[0].end-bare[0].start+tabMarkerWidth {
+		t.Errorf("a marked tab spans %d, unmarked %d",
+			marked[0].end-marked[0].start, bare[0].end-bare[0].start)
+	}
+	if marked[1].start != bare[1].start+tabMarkerWidth {
+		t.Errorf("the tab after it starts at %d, want %d",
+			marked[1].start, bare[1].start+tabMarkerWidth)
+	}
+
+	// A track playing from somewhere else — an album popover, say — is in no
+	// tab's listing, so no tab claims it.
+	m.playing = Track{VideoID: "elsewhere", Title: "Something"}
+	if strings.Contains(plain(labels(m)), tabMarker) {
+		t.Errorf("a tab claimed a track it does not list: %q", plain(labels(m)))
+	}
+
+	// A track in two loaded listings marks both: they both do hold it.
+	m.playing = m.Tracks[0]
+	m.cache["PL2"] = cached{tracks: append(others, m.Tracks[0])}
+	if got := strings.Count(plain(labels(m)), tabMarker); got != 2 {
+		t.Errorf("%d markers, want one on each tab that lists it: %q", got, plain(labels(m)))
+	}
+
+	// Behind a popover it sinks with the rest of the row.
+	m.detour = detour{active: true, tab: Playlist{Title: "Cherry", kind: tabAlbum}}
+	if sgrCodes(labels(m))[liveFG] {
+		t.Errorf("the marker is still lit behind a popover: %q", labels(m))
+	}
+	if !strings.Contains(plain(labels(m)), tabMarker) {
+		t.Error("the marker lost its place as well as its colour")
 	}
 }

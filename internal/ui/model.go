@@ -1138,36 +1138,55 @@ func (m Model) isPlaying(t Track) bool {
 	return m.playing.VideoID != "" && t.VideoID == m.playing.VideoID
 }
 
-// tabBorder is a rounded box whose bottom edge is open on the tab in front,
-// so it reads as joined to the table below it. Its corners are the light arc
-// the rest of the frame uses, which is the tightest radius a character grid
-// has — the Powerline half circles are a whole cell of curve and read as a
-// pill rather than as a corner.
-func tabBorder(left, middle, right string) lipgloss.Border {
-	b := lipgloss.RoundedBorder()
-	b.BottomLeft, b.Bottom, b.BottomRight = left, middle, right
-	return b
+// tabBox is the three sides of a tab that the tab draws: its top edge and its
+// two walls. The bottom is the rule's — see tabRule.
+//
+// Its corners are the light arc the rest of the frame uses, which is the
+// tightest radius a character grid has: the Powerline half circles are a whole
+// cell of curve and read as a pill rather than as a corner.
+//
+// It carries no colour for its contents. The label is styled before it gets
+// here, because a tab holding two colours cannot be drawn in one style — a
+// nested style ends in a reset, and the reset would drop the outer colour for
+// everything after it.
+var tabBox = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder(), true).
+	BorderBottom(false).
+	Padding(0, 1)
+
+// tabPen is the colour a tab's outline takes: the emphasis for the one in
+// front, the dimmed colour for the rest, the quiet one for all of them behind a
+// popover. Every tab's, whichever playlist it holds — a colour on the outline
+// would be a second thing for it to say, and the shape and the label are
+// already saying which tab is in front and whose it is.
+func (m Model) tabPen(index int) color.Color {
+	switch {
+	case m.covered():
+		return m.quietColor()
+	case index == m.tabCursor:
+		return emphasis
+	}
+	return m.dimmedColor()
 }
 
-var (
-	inactiveTabStyle = lipgloss.NewStyle().
-				Border(tabBorder("┴", "─", "┴"), true).
-				Faint(true).
-				Padding(0, 1)
-	activeTabStyle = inactiveTabStyle.
-			Border(tabBorder("╯", " ", "╰"), true).
-			BorderForeground(emphasis).
-			Foreground(emphasis).
-			Faint(false).
-			Bold(true)
-)
-
-// A tab that is not in front is dim all the way round: its label faint, its
-// border the dimmed colour rather than the full foreground. The border needs
-// saying at render time because the colour is not known until the terminal
-// answers for it.
-func (m Model) inactiveTab() lipgloss.Style {
-	return inactiveTabStyle.BorderForeground(m.dimmedColor())
+// tabLabel is how a tab's own name reads: faint behind, bold and emphasised in
+// front, the quiet colour behind a popover — and the liked playlist's magenta
+// wherever it sits, because that is whose playlist it is rather than where it
+// is.
+func (m Model) tabLabel(index int) lipgloss.Style {
+	style := lipgloss.NewStyle()
+	switch {
+	case m.covered():
+		return style.Foreground(m.quietColor())
+	case index == m.tabCursor:
+		style = style.Bold(true).Foreground(emphasis)
+	default:
+		style = style.Faint(true)
+	}
+	if m.tabAt(index).ID == likedPlaylistID {
+		style = style.Foreground(liked)
+	}
+	return style
 }
 
 // likedTabInFront reports whether the tab in front is the liked playlist. What
@@ -1177,13 +1196,40 @@ func (m Model) likedTabInFront() bool {
 	return m.tabAt(m.tabCursor).ID == likedPlaylistID
 }
 
-// quietTab is a tab with something in front of the whole row: no faint, which
-// is a step off whatever colour it is on, but the quiet colour outright.
-func (m Model) quietTab() lipgloss.Style {
-	return inactiveTabStyle.
-		Faint(false).
-		Foreground(m.quietColor()).
-		BorderForeground(m.quietColor())
+// tabMarker is the blue block a tab carries while the track playing is in its
+// listing: the same block the scrollbar marks that track with, in the same
+// colour, since it is the same statement about where the track is.
+//
+// It costs the tab two cells and is not held for when there is nothing to say —
+// a tab reserving room for a marker it does not have is two cells of nothing on
+// every tab, most of the time.
+const (
+	tabMarker      = blockFull
+	tabMarkerWidth = 2 // the block and the space after it
+)
+
+// tabHoldsPlaying reports whether the track playing is in a tab's listing.
+//
+// Only the listings it has fetched: a tab nobody has opened has no rows to look
+// through and says nothing until it does. That also means more than one tab can
+// say it, which is honest — a track can be in two playlists, and both of them
+// do hold it.
+func (m Model) tabHoldsPlaying(index int) bool {
+	if m.playing.VideoID == "" {
+		return false
+	}
+	id := m.tabAt(index).ID
+	rows := m.cache[id].tracks
+	if id == m.showingID {
+		// The visible listing is not in the cache until it is left.
+		rows = m.Tracks
+	}
+	for _, t := range rows {
+		if t.VideoID == m.playing.VideoID {
+			return true
+		}
+	}
+	return false
 }
 
 const (
@@ -1195,7 +1241,7 @@ const (
 	// progressRows is everything below the list.
 	progressRows = playerRows + statusRows
 	maxTabTitle  = 18
-	tabFurniture = 4 // a border and a space either side
+	tabFurniture = 4 // a wall and a space either side
 )
 
 // covered reports whether anything is drawn in front of the frame. It is what
@@ -1216,37 +1262,6 @@ func (m Model) tabRuleColor() color.Color {
 		return m.quietColor()
 	case m.likedTabInFront():
 		return liked
-	}
-	return m.dimmedColor()
-}
-
-// tabPen is the colour a tab's own outline takes, which is not the rule's: the
-// liked playlist's magenta, the emphasis for the one in front, the dimmed
-// colour for the rest, and the quiet one for all of them behind a popover.
-//
-// Its top edge and its two walls, that is. Not its feet — see tabFootPen.
-func (m Model) tabPen(index int) color.Color {
-	switch {
-	case m.covered():
-		return m.quietColor()
-	case m.tabAt(index).ID == likedPlaylistID:
-		return liked
-	case index == m.tabCursor:
-		return emphasis
-	}
-	return m.dimmedColor()
-}
-
-// tabFootPen is the colour of the two glyphs a tab puts in the rule. They are
-// where the tab meets the line rather than part of the box above it, so the
-// liked playlist's colour stops before them: it runs from the top edge down the
-// walls and hands over at the floor.
-func (m Model) tabFootPen(index int) color.Color {
-	switch {
-	case m.covered():
-		return m.quietColor()
-	case index == m.tabCursor:
-		return emphasis
 	}
 	return m.dimmedColor()
 }
@@ -1375,8 +1390,17 @@ type tabSpan struct {
 	start, end int // half open
 }
 
-func tabWidth(title string) int {
-	return lipgloss.Width(truncate(title, maxTabTitle)) + tabFurniture
+func tabWidth(title string, marked bool) int {
+	width := lipgloss.Width(truncate(title, maxTabTitle)) + tabFurniture
+	if marked {
+		width += tabMarkerWidth
+	}
+	return width
+}
+
+// tabSpanWidth is how wide the tab at an index is, marker included.
+func (m Model) tabSpanWidth(index int) int {
+	return tabWidth(m.tabAt(index).Title, m.tabHoldsPlaying(index))
 }
 
 // tabSpans lays out the tabs that fit, always including the one in front.
@@ -1389,9 +1413,9 @@ func (m Model) tabSpans() []tabSpan {
 	}
 	// Walk back from the selected tab until the row is full, then forward.
 	first := clamp(m.tabCursor, count)
-	used := tabWidth(m.tabAt(first).Title)
+	used := m.tabSpanWidth(first)
 	for i := first - 1; i >= 0; i-- {
-		w := tabWidth(m.tabAt(i).Title)
+		w := m.tabSpanWidth(i)
 		if used+w > m.width {
 			break
 		}
@@ -1400,7 +1424,7 @@ func (m Model) tabSpans() []tabSpan {
 	spans := []tabSpan{}
 	at := 0
 	for i := first; i < count; i++ {
-		w := tabWidth(m.tabAt(i).Title)
+		w := m.tabSpanWidth(i)
 		if at+w > m.width {
 			break
 		}
@@ -1423,27 +1447,16 @@ func (m Model) renderTabs() string {
 	for _, s := range spans {
 		// With a popover in front, no tab is the tab in front and the whole
 		// row sinks towards the page.
-		style := m.inactiveTab()
-		switch {
-		case m.covered():
-			style = m.quietTab()
-		case s.index == m.tabCursor:
-			style = activeTabStyle
+		label := m.tabLabel(s.index).Render(truncate(m.tabAt(s.index).Title, maxTabTitle))
+		if m.tabHoldsPlaying(s.index) {
+			mark := lipgloss.NewStyle().Foreground(live)
+			if m.covered() {
+				mark = lipgloss.NewStyle().Foreground(m.quietColor())
+			}
+			label = mark.Render(tabMarker) + " " + label
 		}
-		// The liked playlist is what you think of a track, a tab of it, so it is
-		// drawn in the same magenta a liked row is — its outline as well as its
-		// label, so the tab reads as one thing rather than as a label with a box
-		// of its own round it.
-		//
-		// The outline of an inactive one comes out a shade stronger than its
-		// label, because lipgloss draws a border as a colour and faint is an
-		// attribute that cannot reach it.
-		if !m.covered() && m.tabAt(s.index).ID == likedPlaylistID {
-			style = style.Foreground(liked)
-		}
-		// The bottom edge is not the tab's to draw. See tabRule.
-		style = style.BorderForeground(m.tabPen(s.index)).BorderBottom(false)
-		rendered = append(rendered, style.Render(truncate(m.tabAt(s.index).Title, maxTabTitle)))
+		rendered = append(rendered,
+			tabBox.BorderForeground(m.tabPen(s.index)).Render(label))
 	}
 
 	// The tabs are two rows now — their top edge and their label — and the row
@@ -1475,7 +1488,7 @@ func (m Model) tabRule(spans []tabSpan) string {
 		if s.start > at {
 			b.WriteString(rule.Render(strings.Repeat("─", s.start-at)))
 		}
-		feet := lipgloss.NewStyle().Foreground(m.tabFootPen(s.index))
+		feet := lipgloss.NewStyle().Foreground(m.tabPen(s.index))
 		inner := max(s.end-s.start-2, 0)
 		if s.index == m.tabCursor && !m.covered() {
 			b.WriteString(feet.Render("╯") + strings.Repeat(" ", inner) + feet.Render("╰"))
