@@ -325,10 +325,10 @@ func TestTheFrameBehindTheSheetGoesQuiet(t *testing.T) {
 
 	liveList := m.renderTracks(m.width, m.bodyHeight())
 	offList := behind.renderTracks(behind.width, behind.bodyHeight())
-	if !sgrCodes(liveList)[emphasisFG] {
+	if !sgrCodes(liveList)[liveFG] {
 		t.Fatal("the live list does not mark what is playing; this proves nothing")
 	}
-	if sgrCodes(offList)[emphasisFG] {
+	if sgrCodes(offList)[liveFG] {
 		t.Error("the list behind still marks what is playing")
 	}
 	if !strings.Contains(offList, quiet) {

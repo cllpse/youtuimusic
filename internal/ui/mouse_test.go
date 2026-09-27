@@ -660,10 +660,11 @@ func TestThePausedBarIsGreyed(t *testing.T) {
 	m.Length, m.Position = 100*time.Second, 50*time.Second
 
 	playing := strings.Split(m.View().Content, "\n")[m.barRow()]
-	// Monochrome, "lit" is the bright end of the foreground. Paused drops
-	// to the ordinary one, which is quieter but still a playhead — the
-	// groove behind it is the row highlight, and neither matches that.
-	lit := []string{emphasisFG}
+	// Lit is the player's blue, the same colour the row and the state block
+	// take. Paused drops to the ordinary foreground, which is quieter but
+	// still a playhead — the groove behind it is the row highlight, and
+	// neither of those matches that.
+	lit := []string{liveFG}
 	if !anyCode(playing, lit) {
 		t.Fatalf("the playing bar is not lit at all; the test proves nothing:\n%q", playing)
 	}

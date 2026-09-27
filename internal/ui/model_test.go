@@ -408,7 +408,7 @@ func TestPausedIsSaidOnce(t *testing.T) {
 	if got := plain(lines[m.statusRow()]); strings.Count(strings.ToLower(got), "paused") != 1 {
 		t.Errorf("said more than once: %q", got)
 	}
-	if anyCode(lines[m.barRow()], []string{emphasisFG, fillBG}) {
+	if anyCode(lines[m.barRow()], []string{liveFG, fillBG}) {
 		t.Error("the bar is still lit")
 	}
 }
@@ -475,6 +475,10 @@ const (
 	alertBG = "41"
 	goodBG  = "42"
 	liveBG  = "44"
+	// liveFG is the same blue as text: what is playing takes it wherever it
+	// is pointed at — the row in the list, its mark in the scrollbar, the
+	// played part of the bar.
+	liveFG = "34"
 )
 
 // highlightSGR is the background a selected row renders as when the
@@ -738,12 +742,12 @@ func TestPlayingAndSelectedAreSeparate(t *testing.T) {
 	if !sgrCodes(alpha)[highlightSGR] {
 		t.Errorf("the selected row is not highlighted: %v", sgrCodes(alpha))
 	}
-	if sgrCodes(alpha)[emphasisFG] {
+	if sgrCodes(alpha)[liveFG] {
 		t.Errorf("the selected row is coloured as if playing: %v", sgrCodes(alpha))
 	}
 
 	// The playing track is coloured and not highlighted.
-	if !sgrCodes(beta)[emphasisFG] {
+	if !sgrCodes(beta)[liveFG] {
 		t.Errorf("the playing row is not coloured: %v", sgrCodes(beta))
 	}
 	if sgrCodes(beta)[highlightSGR] {
@@ -751,14 +755,14 @@ func TestPlayingAndSelectedAreSeparate(t *testing.T) {
 	}
 
 	// A row that is neither is left alone.
-	if sgrCodes(gamma)[highlightSGR] || sgrCodes(gamma)[emphasisFG] {
+	if sgrCodes(gamma)[highlightSGR] || sgrCodes(gamma)[liveFG] {
 		t.Errorf("an ordinary row is styled: %v", sgrCodes(gamma))
 	}
 
 	// And a row that is both says both.
 	m.trackCursor = 1
 	both := strings.Split(m.View().Content, "\n")[tabsHeight+headerRows+1]
-	if !sgrCodes(both)[emphasisFG] || !sgrCodes(both)[highlightSGR] {
+	if !sgrCodes(both)[liveFG] || !sgrCodes(both)[highlightSGR] {
 		t.Errorf("the playing row under the cursor says %v, want both", sgrCodes(both))
 	}
 }
@@ -1105,22 +1109,27 @@ func TestOneSurfaceForEveryQuietPartOfTheFrame(t *testing.T) {
 }
 
 // chromaticCodes are the SGR parameters that name a hue, foreground and
-// background, ordinary and bright. Red is left out: it is the one colour the
-// interface keeps, and only for trouble.
+// background, ordinary and bright. Red is left out and checked on its own: it
+// is for trouble and nothing else. Blue is in the list and allowed by name
+// where it belongs, so that it staying the player's colour is a decision each
+// test site makes rather than a gap in this one.
 var chromaticCodes = []string{
 	"32", "33", "34", "35", "36", "42", "43", "44", "45", "46",
 	"92", "93", "94", "95", "96", "102", "103", "104", "105", "106",
 }
 
-// The interface is monochrome everywhere but the state block. Everything else
-// that has to stand out does it by weight or by being turned inside out, so a
-// hue anywhere else is a regression — and an easy one to make, since reaching
-// for a colour is the obvious way to mark something.
+// The interface is monochrome but for the player. Everything else that has to
+// stand out does it by weight or by being turned inside out, so a hue anywhere
+// else is a regression — and an easy one to make, since reaching for a colour
+// is the obvious way to mark something.
 //
-// The block earns the exception: it is the one thing on screen that says how
-// the app is going rather than what it holds, and a colour is how a glance
-// reads that. What it is coloured is TestTheStateBlockIsColouredByState's.
-func TestNothingIsColouredButTheStateBlock(t *testing.T) {
+// Two things earn a hue. The player's blue goes wherever the track playing is
+// pointed at: the row in the list, its mark in the scrollbar, the played part
+// of the bar, the state block. And the block alone also carries green or red,
+// since it is the one thing on screen that says how the app is going rather
+// than what it holds — which of those it says is
+// TestTheStateBlockIsColouredByState's.
+func TestNothingIsColouredButThePlayer(t *testing.T) {
 	m := sample()
 	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
 	m = next.(Model)
@@ -1154,15 +1163,15 @@ func TestNothingIsColouredButTheStateBlock(t *testing.T) {
 		t.Run(state.name, func(t *testing.T) {
 			at := state.setup(m)
 			for row, line := range strings.Split(at.View().Content, "\n") {
-				// Every row but the one the block is on.
-				if row == at.statusRow() {
-					continue
-				}
 				for code := range sgrCodes(line) {
-					if slices.Contains(chromaticCodes, code) {
+					switch {
+					case code == liveFG || code == liveBG:
+						// The player's own colour, wherever it is pointing.
+					case row == at.statusRow() && code == goodBG:
+						// The state block, on the row the state block is on.
+					case slices.Contains(chromaticCodes, code):
 						t.Errorf("a hue got in on row %d: SGR %s", row, code)
-					}
-					if code == "31" || code == alertBG {
+					case code == "31" || code == alertBG:
 						t.Errorf("red without trouble on row %d: SGR %s", row, code)
 					}
 				}
@@ -1181,7 +1190,8 @@ func TestNothingIsColouredButTheStateBlock(t *testing.T) {
 // The block is coloured by what it says: red for trouble, blue while the
 // player is on a track, green when there is nothing to report. The word and
 // the fill come from one place, so a LOADING that has gone blue is not a
-// state this can reach.
+// state this can reach. Where the hues may appear at all is
+// TestNothingIsColouredButThePlayer's.
 func TestTheStateBlockIsColouredByState(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -1459,13 +1469,13 @@ func TestTheFrameBehindAPopoverGoesQuiet(t *testing.T) {
 	offList := behind.renderTracks(m.width, behind.bodyHeight())
 	hr, hg, hb, _ := m.highlightColor().RGBA()
 	fill := fmt.Sprintf("48;2;%d;%d;%d", hr>>8, hg>>8, hb>>8)
-	if !sgrCodes(liveList)[emphasisFG] {
+	if !sgrCodes(liveList)[liveFG] {
 		t.Fatal("the live list does not mark what is playing; this proves nothing")
 	}
 	if !strings.Contains(liveList, fill) {
 		t.Fatal("the live list does not fill the chosen row; this proves nothing")
 	}
-	if sgrCodes(offList)[emphasisFG] {
+	if sgrCodes(offList)[liveFG] {
 		t.Error("the list behind still marks what is playing")
 	}
 	if strings.Contains(offList, fill) {

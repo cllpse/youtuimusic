@@ -974,9 +974,11 @@ var (
 	// alert is the one exception, and it earns it: an error announcing
 	// itself by colour is the point of colouring it.
 	alert = lipgloss.Red
-	// good and live join it on the state block, which is the only place in
-	// the app that says how things are going rather than what they are: green
-	// when there is nothing to report, blue while the player is on a track.
+	// good and live join it. Green is the state block saying there is nothing
+	// to report; blue is the player, and everything that points at the track
+	// playing takes it — the block, the played part of the bar, the row in the
+	// list and its mark in the scrollbar. One fact, one colour, wherever it is
+	// being said.
 	//
 	// All three are ANSI colours and not hex, for the same reason everything
 	// else here is: they are the terminal's own red, green and blue, so they
@@ -1698,28 +1700,27 @@ func (m Model) renderPlayer() string {
 	)
 }
 
-// litRamp is the played part of the bar: the brightest thing the scheme has,
-// flat.
+// litRamp is the played part of the bar: the player's blue, flat.
 //
-// It used to be a gradient between two steps of the accent. Monochrome there
-// is no gradient to give it — two adjacent greys is not one — and worse, the
-// step that would have been the low end is the colour the paused bar uses,
-// so a bar under half way would have been indistinguishable from a paused
-// one. Weight says playing here, and it says it the same the whole way
-// along.
+// It used to be a gradient between two steps of the accent, then the brightest
+// thing the scheme had. There is no gradient to give it — two adjacent greys
+// is not one — and worse, the step that would have been the low end is the
+// colour the paused bar uses, so a bar under half way was indistinguishable
+// from a paused one. It says playing the same the whole way along, and now it
+// says it in the same colour the row and the state block do.
 //
 // It is a named palette entry rather than a hex value, which is what keeps
 // the bar inside the terminal's own scheme: the terminal resolves it, so it
-// is whatever the theme says it is. The component's own blend could not be
+// is whatever the theme says blue is. The component's own blend could not be
 // used even when this was a gradient — it interpolates in RGB through
 // lipgloss.Blend1D and emits true colour, off-scheme by construction.
-func litRamp(_, _ float64) color.Color { return emphasis }
+func litRamp(_, _ float64) color.Color { return live }
 
-// mutedRamp takes the played part down a step without taking it away:
-// paused, the bar stops being the brightest thing on the screen but still
-// says where the playhead is. It has to differ from the groove as well as
-// from the lit state — matching the groove hid the position, which is the one
-// thing the bar is for.
+// mutedRamp takes the colour out of the played part without taking the part
+// away: paused, the bar stops saying the track is running but still says where
+// the playhead is. It has to differ from the groove as well as from the lit
+// state — matching the groove hid the position, which is the one thing the bar
+// is for.
 func mutedRamp(_, _ float64) color.Color { return played }
 
 // emptyCell is what the bar has not reached yet: a solid block, so the track

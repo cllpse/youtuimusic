@@ -189,7 +189,12 @@ func (t trackTable) moreRow(width int) string {
 // whether it is the one under the cursor. Colour says the first and a filled
 // background says the second, so a row can say both at once — which it has
 // to, since the cursor is usually on the track that is playing.
-var rowPlaying = lipgloss.NewStyle().Bold(true).Foreground(emphasis)
+//
+// The colour is the player's blue, the same one the state block and the played
+// part of the bar take: the thing they are all pointing at is one thing. The
+// weight stays with it, so the row is still marked where a terminal renders
+// blue close to its own foreground.
+var rowPlaying = lipgloss.NewStyle().Bold(true).Foreground(live)
 
 // rowSelected fills a row with the highlight. No foreground is set with it:
 // the highlight is a tint of the terminal's own background, so the
@@ -302,10 +307,13 @@ func scrollbarFor(total, offset, height, playingAt int, highlight color.Color,
 	if inactive {
 		furniture = lipgloss.NewStyle().Foreground(quiet)
 	}
-	// The mark stays where it is but stops being the lit thing: the block is
-	// behind something and has nothing to draw the eye to.
-	marked := active
+	// The mark is the player's blue, the same as the row it stands for: the
+	// scrollbar is saying where in the list that row is, not something else
+	// about it.
+	marked := lipgloss.NewStyle().Foreground(live)
 	if inactive {
+		// It stays where it is but stops being the lit thing: the block is
+		// behind something and has nothing to draw the eye to.
 		marked = lipgloss.NewStyle().Foreground(quiet)
 	}
 	out := make([]string, height)

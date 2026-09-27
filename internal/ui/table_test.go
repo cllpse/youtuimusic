@@ -487,7 +487,7 @@ func TestTheScrollbarMarksThePlayingTrack(t *testing.T) {
 	// The mark is a block like the thumb, so it is the colour that finds it.
 	at := -1
 	for i, cell := range bar {
-		if sgrCodes(cell)[emphasisFG] {
+		if sgrCodes(cell)[liveFG] {
 			if at >= 0 {
 				t.Errorf("the mark is on rows %d and %d", at, i)
 			}
@@ -520,7 +520,7 @@ func TestThePlayingMarkStaysOnTheTrough(t *testing.T) {
 		// Found by colour: the mark is a block wherever it lands.
 		found := -1
 		for i, cell := range bar {
-			if sgrCodes(cell)[emphasisFG] {
+			if sgrCodes(cell)[liveFG] {
 				found = i
 			}
 		}
@@ -544,7 +544,7 @@ func TestNoMarkForATrackThatIsNotInTheList(t *testing.T) {
 		}
 		bar := scrollbarFor(table.rowCount(), table.offset, 10, table.playingRow(), table.highlight, false, table.quiet)
 		for i, cell := range bar {
-			if sgrCodes(cell)[emphasisFG] {
+			if sgrCodes(cell)[liveFG] {
 				t.Errorf("playing %q still marked row %d", playing, i)
 			}
 		}
@@ -577,7 +577,7 @@ func TestTheMarkAndTheThumbShareACell(t *testing.T) {
 	if !strings.Contains(plain(cell), "█") {
 		t.Errorf("the thumb lost its shape: %q", plain(cell))
 	}
-	if codes := sgrCodes(cell); !codes[emphasisFG] {
+	if codes := sgrCodes(cell); !codes[liveFG] {
 		t.Errorf("the shared cell does not say the track is there: %v", codes)
 	}
 	// Below the thumb the trough is its ordinary self.
@@ -755,7 +755,7 @@ func TestAnInactiveRowIsOneColourAllTheWayAcross(t *testing.T) {
 
 	// And nothing in the block is selected or playing any more.
 	whole := strings.Join(off.rows(), "\n")
-	if sgrCodes(whole)[emphasisFG] {
+	if sgrCodes(whole)[liveFG] {
 		t.Errorf("an inactive block still marks what is playing: %q", whole)
 	}
 	if sgrCodes(whole)[highlightSGR] {
@@ -763,7 +763,7 @@ func TestAnInactiveRowIsOneColourAllTheWayAcross(t *testing.T) {
 	}
 	// The live one does both, so the comparison means something.
 	liveWhole := strings.Join(live.rows(), "\n")
-	if !sgrCodes(liveWhole)[emphasisFG] || !sgrCodes(liveWhole)[highlightSGR] {
+	if !sgrCodes(liveWhole)[liveFG] || !sgrCodes(liveWhole)[highlightSGR] {
 		t.Fatalf("the live block marks neither: %q", liveWhole)
 	}
 }
