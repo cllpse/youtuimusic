@@ -1631,11 +1631,24 @@ func fillRow(segments []statusSegment, fill lipgloss.Style, width int) string {
 // costs no height.
 // separator divides the list from the player. A line is enough to say where
 // one ends and the other begins, and it costs the row a box cost four sides
-// of. It takes the dimmed colour and not the quiet one: the player stays live
-// with a popover in front of it, so the line above it does too.
+// of.
 func (m Model) separator() string {
-	return lipgloss.NewStyle().Foreground(m.dimmedColor()).
+	return lipgloss.NewStyle().Foreground(m.separatorColor()).
 		Render(strings.Repeat("─", max(m.width, 0)))
+}
+
+// separatorColor is the dimmed colour, or the liked playlist's magenta while
+// that is the tab in front: the line closes off a page of its rows, and it says
+// which page that is the way the tab does.
+//
+// Dimmed and not quiet, and magenta whatever is in front of the list: the
+// player stays live with a popover over it, so the line above the player does
+// too.
+func (m Model) separatorColor() color.Color {
+	if m.tabAt(m.tabCursor).ID == likedPlaylistID {
+		return liked
+	}
+	return m.dimmedColor()
 }
 
 // contentLeft is the column the bar and the buttons are laid out from, and

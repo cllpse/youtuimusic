@@ -1684,3 +1684,59 @@ func TestTheLikedTabIsMagenta(t *testing.T) {
 		}
 	}
 }
+
+// The line above the player takes the liked playlist's magenta while that is
+// the tab in front: it closes off a page of that playlist's rows, so it says
+// which page the way the tab does.
+func TestTheSeparatorFollowsTheLikedTab(t *testing.T) {
+	m := sample()
+	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
+	m = answered.(Model)
+	m.Playlists = []Playlist{
+		{ID: likedPlaylistID, Title: "Liked Music"},
+		{ID: "PL1", Title: "Favorites"},
+	}
+	r, g, b, _ := m.dimmedColor().RGBA()
+	dimmed := fmt.Sprintf("38;2;%d;%d;%d", r>>8, g>>8, b>>8)
+
+	row := func(m Model) string {
+		return strings.Split(m.View().Content, "\n")[m.playerTop()]
+	}
+
+	m.tabCursor = 0
+	front := row(m)
+	if !sgrCodes(front)[likedFG] {
+		t.Errorf("the separator is not magenta on the liked playlist: %q", front)
+	}
+	if strings.Contains(front, dimmed) {
+		t.Errorf("it is still the dimmed colour as well: %q", front)
+	}
+
+	m.tabCursor = 1
+	elsewhere := row(m)
+	if sgrCodes(elsewhere)[likedFG] {
+		t.Errorf("the separator is magenta on another playlist: %q", elsewhere)
+	}
+	if !strings.Contains(elsewhere, dimmed) {
+		t.Errorf("the separator is not the dimmed colour %s: %q", dimmed, elsewhere)
+	}
+
+	// Either way it is a line the width of the window, and it is the line
+	// directly above the buttons.
+	for _, line := range []string{front, elsewhere} {
+		if got := lipgloss.Width(plain(line)); got != m.width {
+			t.Errorf("the separator is %d cells, want %d", got, m.width)
+		}
+		if got := strings.TrimRight(plain(line), "─"); got != "" {
+			t.Errorf("the separator is not all rule: %q", plain(line))
+		}
+	}
+
+	// And a popover over the list does not touch it: the player stays live
+	// under one, so the line above the player does too.
+	m.tabCursor = 0
+	m.detour = detour{active: true, tab: Playlist{Title: "Cherry", kind: tabAlbum}}
+	if !sgrCodes(row(m))[likedFG] {
+		t.Errorf("the separator sank behind a popover: %q", row(m))
+	}
+}
