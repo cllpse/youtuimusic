@@ -974,16 +974,21 @@ var (
 	// alert is the one exception, and it earns it: an error announcing
 	// itself by colour is the point of colouring it.
 	alert = lipgloss.Red
-	// good and live join it. Green is the state block saying there is nothing
-	// to report; blue is the player, and everything that points at the track
-	// playing takes it — the block, the played part of the bar, the row in the
-	// list and its mark in the scrollbar. One fact, one colour, wherever it is
-	// being said.
+	// good, busy and live join it on the state block. Green is nothing to
+	// report, yellow is waiting on the network, and blue is the player: it
+	// also goes everywhere else the track playing is pointed at — the played
+	// part of the bar, the row in the list, its mark in the scrollbar. One
+	// fact, one colour, wherever it is being said.
 	//
-	// All three are ANSI colours and not hex, for the same reason everything
-	// else here is: they are the terminal's own red, green and blue, so they
-	// come out of whatever scheme is loaded rather than fighting it.
+	// Yellow earns its own step because a wait is neither of the other two: it
+	// is not trouble, and saying it is fine while the screen has not filled in
+	// yet is the state that reads as a hang.
+	//
+	// All four are ANSI colours and not hex, for the same reason everything
+	// else here is: they are the terminal's own red, green, yellow and blue,
+	// so they come out of whatever scheme is loaded rather than fighting it.
 	good = lipgloss.Green
+	busy = lipgloss.Yellow
 	live = lipgloss.Blue
 
 	// background and foreground are the terminal's own two ends, whichever
@@ -1526,8 +1531,9 @@ func (m Model) statusState() (string, color.Color) {
 	case m.Err != nil:
 		return "ERROR", alert
 	case m.loading || m.loadingMore:
-		// A wait is not a problem. Green is "nothing is wrong", not "done".
-		return "LOADING", good
+		// A wait is not trouble and it is not nothing either: something is
+		// outstanding, and yellow is how long a wait gets noticed.
+		return "LOADING", busy
 	case m.playing.VideoID != "" && m.Paused:
 		return "PAUSED", live
 	case m.playing.VideoID != "":

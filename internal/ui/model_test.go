@@ -474,6 +474,7 @@ const (
 const (
 	alertBG = "41"
 	goodBG  = "42"
+	busyBG  = "43"
 	liveBG  = "44"
 	// liveFG is the same blue as text: what is playing takes it wherever it
 	// is pointed at — the row in the list, its mark in the scrollbar, the
@@ -1125,9 +1126,9 @@ var chromaticCodes = []string{
 //
 // Two things earn a hue. The player's blue goes wherever the track playing is
 // pointed at: the row in the list, its mark in the scrollbar, the played part
-// of the bar, the state block. And the block alone also carries green or red,
-// since it is the one thing on screen that says how the app is going rather
-// than what it holds — which of those it says is
+// of the bar, the state block. And the block alone also carries green, yellow
+// or red, since it is the one thing on screen that says how the app is going
+// rather than what it holds — which of those it says is
 // TestTheStateBlockIsColouredByState's.
 func TestNothingIsColouredButThePlayer(t *testing.T) {
 	m := sample()
@@ -1167,7 +1168,7 @@ func TestNothingIsColouredButThePlayer(t *testing.T) {
 					switch {
 					case code == liveFG || code == liveBG:
 						// The player's own colour, wherever it is pointing.
-					case row == at.statusRow() && code == goodBG:
+					case row == at.statusRow() && (code == goodBG || code == busyBG):
 						// The state block, on the row the state block is on.
 					case slices.Contains(chromaticCodes, code):
 						t.Errorf("a hue got in on row %d: SGR %s", row, code)
@@ -1187,10 +1188,10 @@ func TestNothingIsColouredButThePlayer(t *testing.T) {
 	}
 }
 
-// The block is coloured by what it says: red for trouble, blue while the
-// player is on a track, green when there is nothing to report. The word and
-// the fill come from one place, so a LOADING that has gone blue is not a
-// state this can reach. Where the hues may appear at all is
+// The block is coloured by what it says: red for trouble, yellow for a wait,
+// blue while the player is on a track, green when there is nothing to report.
+// The word and the fill come from one place, so a LOADING that has gone blue is
+// not a state this can reach. Where the hues may appear at all is
 // TestNothingIsColouredButThePlayer's.
 func TestTheStateBlockIsColouredByState(t *testing.T) {
 	for _, tc := range []struct {
@@ -1207,11 +1208,11 @@ func TestTheStateBlockIsColouredByState(t *testing.T) {
 			m.playing = Track{VideoID: "a", Title: "Poly"}
 			m.Paused = true
 		}, "PAUSED", liveBG},
-		{"loading", func(m *Model) { m.loading = true }, "LOADING", goodBG},
+		{"loading", func(m *Model) { m.loading = true }, "LOADING", busyBG},
 		{"a wait while a track plays", func(m *Model) {
 			m.playing = Track{VideoID: "a", Title: "Poly"}
 			m.loadingMore = true
-		}, "LOADING", goodBG},
+		}, "LOADING", busyBG},
 		{"trouble", func(m *Model) {
 			m.Err = errors.New("no")
 		}, "ERROR", alertBG},
@@ -1228,7 +1229,7 @@ func TestTheStateBlockIsColouredByState(t *testing.T) {
 			}
 			// One hue on the row, not two: the other two states' colours are
 			// not on it anywhere.
-			for _, other := range []string{alertBG, goodBG, liveBG} {
+			for _, other := range []string{alertBG, goodBG, busyBG, liveBG} {
 				if other != tc.hue && sgrCodes(row)[other] {
 					t.Errorf("%s also carries SGR %s", tc.word, other)
 				}
