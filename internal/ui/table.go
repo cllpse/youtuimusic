@@ -402,26 +402,33 @@ func (t trackTable) troughCell(top, bottom color.Color, inThumb bool, furniture 
 		// the lower is what it is drawn on.
 		return lipgloss.NewStyle().Foreground(top).Background(bottom).Render(blockUpper)
 	case top != nil:
-		return mark(blockUpper, top, t.barPen())
+		return mark(blockUpper, top, inThumb, t.barPen())
 	case bottom != nil:
-		return mark(blockLower, bottom, t.barPen())
+		return mark(blockLower, bottom, inThumb, t.barPen())
 	case inThumb:
 		return furniture.Render(blockFull)
 	}
 	return furniture.Render(troughLine)
 }
 
-// mark is the one thing in a cell, in the half it falls in, with the bar's own
-// colour behind the other half.
+// mark is the one thing in a cell, in the half it falls in.
 //
-// The same half wherever it lands. It took the whole cell on the bare trough for
-// a while, so that the line would not have a hole in it, and the size of a mark
-// then depended on whether the window happened to be over it — which is a thing
-// about the scrollbar, not about the track. The background says the rest: inside
-// the window it is the thumb, outside it is the line, and they are the same
-// colour either way.
-func mark(glyph string, hue, bar color.Color) string {
-	return lipgloss.NewStyle().Foreground(hue).Background(bar).Render(glyph)
+// Inside the window the other half is the thumb, drawn as this one's background
+// so that neither hides the other. Outside it there is nothing to draw under the
+// mark and nothing to hide, so the mark takes the whole cell: half of it would
+// be half a mark over a hole in the trough, and the line would look broken
+// rather than marked.
+//
+// So a mark is not always the same size, and the other way round was tried: half
+// a cell everywhere, with the bar's colour painted behind the rest of it. That
+// reads worse — the grey half behind each mark turns a thin line into a run of
+// blocks wherever anything is marked, which is louder than the marks are. A mark
+// that fills its cell on the bare trough is the quieter of the two.
+func mark(glyph string, hue color.Color, inThumb bool, thumb color.Color) string {
+	if !inThumb {
+		return lipgloss.NewStyle().Foreground(hue).Render(blockFull)
+	}
+	return lipgloss.NewStyle().Foreground(hue).Background(thumb).Render(glyph)
 }
 
 // barPen is the scrollbar's own colour, which is the line under the list's: the
