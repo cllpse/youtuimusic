@@ -1170,21 +1170,32 @@ func (m Model) tabPen(index int) color.Color {
 }
 
 // tabLabel is how a tab's own name reads: faint behind, bold and emphasised in
-// front, the quiet colour behind a popover.
+// front, the quiet colour behind a popover — and the liked playlist's magenta
+// wherever it sits, because that is whose playlist it is rather than where it is.
 //
-// Nothing in the row says whose playlist it is. The liked playlist had its label
-// in magenta for a while, and the row has a lot to say already — which tab is in
-// front, which of them is loading, and now which holds the track playing. What
-// a playlist is is the page's business, not the tab's.
+// The label and nothing else of the tab. Its outline and the rule under the row
+// have their own job, which is saying which tab is in front and what is covered;
+// a second colour on those glyphs read as an argument rather than as a fact.
 func (m Model) tabLabel(index int) lipgloss.Style {
 	style := lipgloss.NewStyle()
 	switch {
 	case m.covered():
 		return style.Foreground(m.quietColor())
 	case index == m.tabCursor:
-		return style.Bold(true).Foreground(emphasis)
+		style = style.Bold(true).Foreground(emphasis)
+	default:
+		style = style.Faint(true)
 	}
-	return style.Faint(true)
+	if m.tabAt(index).ID == likedPlaylistID {
+		style = style.Foreground(liked)
+	}
+	return style
+}
+
+// likedTabInFront reports whether the tab in front is the liked playlist, which
+// is what colours its label and the line at the bottom of its page.
+func (m Model) likedTabInFront() bool {
+	return m.tabAt(m.tabCursor).ID == likedPlaylistID
 }
 
 // tabMarker is the blue block a tab carries while the track playing is in its
@@ -1702,11 +1713,23 @@ func fillRow(segments []statusSegment, fill lipgloss.Style, width int) string {
 // costs no height.
 // separator divides the list from the player. A line is enough to say where
 // one ends and the other begins, and it costs the row a box cost four sides
-// of. It takes the dimmed colour and not the quiet one: the player stays live
-// with a popover in front of it, so the line above it does too.
+// of.
 func (m Model) separator() string {
-	return lipgloss.NewStyle().Foreground(m.dimmedColor()).
+	return lipgloss.NewStyle().Foreground(m.separatorColor()).
 		Render(strings.Repeat("─", max(m.width, 0)))
+}
+
+// separatorColor is the dimmed colour, or the liked playlist's magenta while
+// that is the tab in front. It closes off the page above it, so with the label
+// at the top of that page saying whose it is, this says it at the bottom.
+//
+// Dimmed and not quiet, and magenta whatever is in front of the list: the player
+// stays live with a popover over it, so the line above the player does too.
+func (m Model) separatorColor() color.Color {
+	if m.likedTabInFront() {
+		return liked
+	}
+	return m.dimmedColor()
 }
 
 // contentLeft is the column the bar and the buttons are laid out from, and
