@@ -1100,9 +1100,12 @@ func colorTriples(s string) []string {
 	return out
 }
 
-// The bar's groove, the wide half of the status bar, the selected row and
-// the scrollbar are one surface. Whatever the highlight turns out to be, all
-// four take it — they were separate colours once, and it looked like it.
+// The bar's groove, the wide half of the status bar and the selected row are
+// one surface. Whatever the highlight turns out to be, all three take it — they
+// were separate colours once, and it looked like it.
+//
+// The scrollbar was the fourth of them until it went with the lines instead:
+// see TestTheScrollbarIsDrawnLikeTheLineBelowThePage.
 func TestOneSurfaceForEveryQuietPartOfTheFrame(t *testing.T) {
 	m := sample()
 	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
@@ -1127,9 +1130,6 @@ func TestOneSurfaceForEveryQuietPartOfTheFrame(t *testing.T) {
 		{"the bar's groove", m.barRow()},
 		{"the status bar", m.statusRow()},
 		{"the selected row", tabsHeight + headerRows + 1},
-		// A row that is neither selected nor playing: the only thing on it
-		// that can carry the colour is the scrollbar.
-		{"the scrollbar", tabsHeight + headerRows + 4},
 	} {
 		if got := colorTriples(lines[tc.row]); !slices.Contains(got, want) {
 			t.Errorf("%s does not use the highlight %s: %v", tc.what, want, got)
@@ -1872,5 +1872,63 @@ func TestTheTabHoldingThePlayingTrackIsMarked(t *testing.T) {
 	}
 	if !strings.Contains(plain(labels(m)), tabMarker) {
 		t.Error("the marker lost its place as well as its colour")
+	}
+}
+
+// The bar down the side of the page is drawn in the same colour as the line that
+// closes the page off at the bottom: the dimmed colour, the liked playlist's
+// magenta on its page, and the quiet one with something in front of it. They are
+// two edges of the same page.
+func TestTheScrollbarIsDrawnLikeTheLineBelowThePage(t *testing.T) {
+	m := sized(sample(), 120, 20)
+	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
+	m = answered.(Model)
+	m.Playlists = []Playlist{
+		{ID: likedPlaylistID, Title: "Liked Music"},
+		{ID: "PL1", Title: "Favorites"},
+	}
+	m.Tracks = rows(100) // long enough to need a bar at all
+	m.trackCursor = 1
+
+	triple := func(c color.Color) string {
+		r, g, b, _ := c.RGBA()
+		return fmt.Sprintf("%d;%d;%d", r>>8, g>>8, b>>8)
+	}
+	// A row that is neither selected nor playing: the only thing on it that can
+	// carry a colour is the bar.
+	const bare = tabsHeight + headerRows + 4
+
+	for _, tc := range []struct {
+		name  string
+		setup func(Model) Model
+		want  string
+	}{
+		{"another playlist", func(m Model) Model {
+			m.tabCursor, m.showingID = 1, "PL1"
+			return m
+		}, triple(m.dimmedColor())},
+		{"the liked playlist", func(m Model) Model {
+			m.tabCursor, m.showingID = 0, likedPlaylistID
+			return m
+		}, "35"},
+		{"behind a popover", func(m Model) Model {
+			m.tabCursor, m.showingID = 0, likedPlaylistID
+			m.detour = detour{active: true, tab: Playlist{Title: "Cherry", kind: tabAlbum}}
+			return m
+		}, triple(m.quietColor())},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at := tc.setup(m)
+			if !at.hasScrollbar() {
+				t.Fatal("no scrollbar to compare")
+			}
+			lines := strings.Split(at.View().Content, "\n")
+			row, sep := lines[bare], lines[at.playerTop()]
+			for what, line := range map[string]string{"the bar": row, "the line below": sep} {
+				if !strings.Contains(line, tc.want) {
+					t.Errorf("%s is not %s: %q", what, tc.want, line)
+				}
+			}
+		})
 	}
 }

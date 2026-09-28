@@ -215,6 +215,7 @@ func (m Model) renderModal() string {
 	lines = append(lines, trackTable{
 		sort:        m.sort,
 		highlight:   m.highlightColor(),
+		dimmed:      m.dimmedColor(),
 		now:         m.clock(),
 		tracks:      m.detour.tracks,
 		cursor:      m.detour.cursor,

@@ -1514,6 +1514,7 @@ func (m Model) table(width, height int) trackTable {
 	return trackTable{
 		sort:        m.sort,
 		highlight:   m.highlightColor(),
+		dimmed:      m.dimmedColor(),
 		inactive:    m.covered(),
 		quiet:       m.quietColor(),
 		now:         m.clock(),

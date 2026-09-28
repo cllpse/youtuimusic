@@ -984,7 +984,8 @@ func TestTwoMarksShareACellOneAbleTheOther(t *testing.T) {
 // is liked, so the bar is all it has left to say it with.
 func TestTheScrollbarIsMagentaOnTheLikedPlaylist(t *testing.T) {
 	onLiked := trackTable{tracks: trough(40), width: 60, height: 10 + headerRows,
-		likedList: true, highlight: surface, quiet: color.RGBA{0xBF, 0xBF, 0xBF, 0xFF}}
+		likedList: true, highlight: surface, dimmed: muted,
+		quiet: color.RGBA{0xBF, 0xBF, 0xBF, 0xFF}}
 	elsewhere := onLiked
 	elsewhere.likedList = false
 
@@ -1007,8 +1008,8 @@ func TestTheScrollbarIsMagentaOnTheLikedPlaylist(t *testing.T) {
 			t.Errorf("a bar off the liked playlist is magenta: %q", cell)
 		}
 	}
-	// The bar draws its colour as a foreground, and this fixture's highlight is
-	// the scheme's dim entry, so that is colour 8 — what every derived colour
+	// The bar draws its colour as a foreground, and this fixture's dimmed colour
+	// is the scheme's dim entry, so that is colour 8 — what every derived colour
 	// falls back to when the terminal will not say what its page is.
 	if !sgrCodes(strings.Join(elsewhere.scrollbar(), ""))["90"] {
 		t.Error("the comparison is wrong: the other bar has no colour either")

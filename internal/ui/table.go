@@ -41,6 +41,10 @@ type trackTable struct {
 	// highlight is the selected row's fill, derived from the terminal's own
 	// background so that it follows the theme.
 	highlight color.Color
+	// dimmed is the scrollbar's, which is the colour every line that has to be
+	// quiet without being invisible takes — the same one the rule under the tabs
+	// and the line under the list are drawn in.
+	dimmed color.Color
 	// inactive draws the whole block in one quiet colour: something is in
 	// front of it and none of what it usually says — this row is selected,
 	// this one is playing — is being said to anyone.
@@ -350,11 +354,12 @@ func (t trackTable) scrollbarMarks() map[int]color.Color {
 // scrollbar draws a trough and thumb for the list, with what is playing and
 // what you think of it marked in the colours those things take everywhere else.
 //
-// The bar itself is drawn in the row highlight, the same surface the selected
-// row, the status bar and the progress groove use. Shape says where the window
-// is — a block there, a line where it is not — and colour says what is in the
-// list, so a mark and the thumb can share a cell, which they do the whole time
-// the playing track is on screen, without either hiding the other.
+// The bar itself is drawn in whatever the line under the list is drawn in — see
+// barPen — so the two edges of the page and the bar down its side agree. Shape
+// says where the window is, a block there and a line where it is not, and colour
+// says what is in the list, so a mark and the thumb can share a cell, which they
+// do the whole time the playing track is on screen, without either hiding the
+// other.
 func (t trackTable) scrollbar() []string {
 	total, height := t.rowCount(), t.rowsHeight()
 	if !needsScrollbar(total, height) {
@@ -414,9 +419,10 @@ func halfMark(glyph string, hue color.Color, inThumb bool, highlight color.Color
 	return style.Render(glyph)
 }
 
-// barPen is the scrollbar's own colour: the row highlight, which is the surface
-// every quiet part of the frame shares, or the liked playlist's magenta on a
-// page of that playlist. It sinks with the block it belongs to.
+// barPen is the scrollbar's own colour, which is the line under the list's: the
+// dimmed colour, the liked playlist's magenta on a page of that playlist, and the
+// quiet one with something in front of the page. The bar runs down the side of
+// the same page those lines close off, so it says the same thing they do.
 //
 // Shape still says which part of it is the window — a block there, a line where
 // it is not — so the colour is free to say whose list this is.
@@ -427,7 +433,7 @@ func (t trackTable) barPen() color.Color {
 	case t.likedList:
 		return liked
 	}
-	return t.highlight
+	return t.dimmed
 }
 
 // keepVisible moves a window the least it can to keep an index on screen,
