@@ -76,7 +76,7 @@ func (m Model) record() {
 	// and its id names nothing the next time. Leaving the last playlist written
 	// where it was opens on that instead, which is the last page of yours the
 	// reader was on.
-	if tab.kind == tabRadio {
+	if tab.kind == tabMix {
 		return
 	}
 	// Best effort: failing to write this must not stop the app closing.

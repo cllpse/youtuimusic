@@ -12,9 +12,9 @@ import (
 	"github.com/cllpse/youtuimusic/internal/ytm"
 )
 
-// radioModel is a wired model on a playlist, with a track under the cursor to
+// mixModel is a wired model on a playlist, with a track under the cursor to
 // build a mix from.
-func radioModel(t *testing.T) (Model, *fakeLibrary, *fakeAudio) {
+func mixModel(t *testing.T) (Model, *fakeLibrary, *fakeAudio) {
 	t.Helper()
 	lib, st, au := library(), &fakeStreams{}, newFakeAudio()
 	m := wired(t, lib, st, au)
@@ -29,17 +29,17 @@ func radioModel(t *testing.T) (Model, *fakeLibrary, *fakeAudio) {
 
 // A mix opens as a tab of its own, in front of the library's: it is where the
 // music is, and it is not one of yours to come back to.
-func TestStartingARadioOpensATabInFront(t *testing.T) {
-	m, lib, _ := radioModel(t)
+func TestStartingAMixOpensATabInFront(t *testing.T) {
+	m, lib, _ := mixModel(t)
 	seed := m.Tracks[0]
 
-	next, cmd := m.press(controlRadio)
+	next, cmd := m.press(controlMix)
 	m = drain(t, next.(Model), cmd)
 
 	if m.tabCount() != 3 {
 		t.Fatalf("%d tabs, want the library's two and a mix", m.tabCount())
 	}
-	if got := m.tabAt(0); got.ID != ytm.RadioID(seed.VideoID) || got.kind != tabRadio {
+	if got := m.tabAt(0); got.ID != ytm.RadioID(seed.VideoID) || got.kind != tabMix {
 		t.Fatalf("the first tab is %+v", got)
 	}
 	if m.tabAt(1).ID != likedPlaylistID || m.tabAt(2).ID != "PL1" {
@@ -52,7 +52,7 @@ func TestStartingARadioOpensATabInFront(t *testing.T) {
 	// Built from the seed, by the one call that builds one.
 	var asked string
 	for _, call := range lib.askedFor {
-		if strings.HasPrefix(call, "radio:") {
+		if strings.HasPrefix(call, "radio:") { // the API's word for it
 			asked = call
 		}
 	}
@@ -71,9 +71,9 @@ func TestStartingARadioOpensATabInFront(t *testing.T) {
 // It plays the track it was built from, which is what starting a mix means —
 // unless that track is already playing, where starting it again would be a
 // worse answer than doing nothing.
-func TestARadioPlaysItsSeedUnlessItIsAlreadyPlaying(t *testing.T) {
-	m, _, au := radioModel(t)
-	next, cmd := m.press(controlRadio)
+func TestAMixPlaysItsSeedUnlessItIsAlreadyPlaying(t *testing.T) {
+	m, _, au := mixModel(t)
+	next, cmd := m.press(controlMix)
 	m = drain(t, next.(Model), cmd)
 	if len(au.loaded) != 1 {
 		t.Fatalf("loaded %v, want the seed", au.loaded)
@@ -82,7 +82,7 @@ func TestARadioPlaysItsSeedUnlessItIsAlreadyPlaying(t *testing.T) {
 		t.Errorf("playing %q, want the seed", m.playing.VideoID)
 	}
 
-	again, cmd := m.press(controlRadio)
+	again, cmd := m.press(controlMix)
 	m = drain(t, again.(Model), cmd)
 	if len(au.loaded) != 1 {
 		t.Errorf("loaded %v; the seed was already playing", au.loaded)
@@ -92,44 +92,44 @@ func TestARadioPlaysItsSeedUnlessItIsAlreadyPlaying(t *testing.T) {
 // A mix is built from what is playing, or from what is under the cursor when
 // nothing is — the rule the play button follows. Without either there is
 // nothing to build from, and the button says so.
-func TestTheRadioButtonNeedsATrack(t *testing.T) {
-	m, _, _ := radioModel(t)
-	if b, _ := buttonAt(m, controlRadio); b.state != buttonDefault {
-		t.Errorf("a row under the cursor leaves radio %v", b.state)
+func TestTheMixButtonNeedsATrack(t *testing.T) {
+	m, _, _ := mixModel(t)
+	if b, _ := buttonAt(m, controlMix); b.state != buttonDefault {
+		t.Errorf("a row under the cursor leaves the mix button %v", b.state)
 	}
-	if seed, ok := m.radioSeed(); !ok || seed.VideoID != m.Tracks[0].VideoID {
+	if seed, ok := m.mixSeed(); !ok || seed.VideoID != m.Tracks[0].VideoID {
 		t.Errorf("the seed is %+v, want the highlighted row", seed)
 	}
 
 	m.playing = m.Tracks[1]
-	if seed, _ := m.radioSeed(); seed.VideoID != m.Tracks[1].VideoID {
+	if seed, _ := m.mixSeed(); seed.VideoID != m.Tracks[1].VideoID {
 		t.Errorf("the seed is %+v, want what is playing", seed)
 	}
 
 	empty := m
 	empty.Tracks, empty.playing = nil, Track{}
-	if b, _ := buttonAt(empty, controlRadio); b.state != buttonDisabled {
-		t.Errorf("radio is %v with nothing to build from", b.state)
+	if b, _ := buttonAt(empty, controlMix); b.state != buttonDisabled {
+		t.Errorf("the mix button is %v with nothing to build from", b.state)
 	}
-	if next, _ := empty.press(controlRadio); next.(Model).radio.ID != "" {
+	if next, _ := empty.press(controlMix); next.(Model).mix.ID != "" {
 		t.Error("it started a mix from nothing")
 	}
 }
 
 // Starting another replaces the first: two tabs with the same name and no way
 // to tell them apart is not a feature.
-func TestAnotherRadioReplacesTheFirst(t *testing.T) {
-	m, _, _ := radioModel(t)
-	next, cmd := m.press(controlRadio)
+func TestAnotherMixReplacesTheFirst(t *testing.T) {
+	m, _, _ := mixModel(t)
+	next, cmd := m.press(controlMix)
 	m = drain(t, next.(Model), cmd)
-	first := m.radio.ID
+	first := m.mix.ID
 
 	m.trackCursor = 1
 	m.playing = Track{}
-	next, cmd = m.press(controlRadio)
+	next, cmd = m.press(controlMix)
 	m = drain(t, next.(Model), cmd)
 
-	if m.radio.ID == first {
+	if m.mix.ID == first {
 		t.Error("the second mix did not replace the first")
 	}
 	if m.tabCount() != 3 {
@@ -142,26 +142,26 @@ func TestAnotherRadioReplacesTheFirst(t *testing.T) {
 
 // A mix is cyan at both ends of its page and down the side of it, the way the
 // liked playlist is magenta: its label, the line under the list, the scrollbar.
-func TestARadioIsCyanAtBothEndsOfItsPage(t *testing.T) {
-	m, _, _ := radioModel(t)
+func TestAMixIsCyanAtBothEndsOfItsPage(t *testing.T) {
+	m, _, _ := mixModel(t)
 	m = sized(m, 120, 20)
 	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
 	m = answered.(Model)
 
-	next, cmd := m.press(controlRadio)
+	next, cmd := m.press(controlMix)
 	m = drain(t, next.(Model), cmd)
 	m.Tracks = rows(100) // long enough for a scrollbar
 
 	lines := strings.Split(m.View().Content, "\n")
-	if got := lines[1]; !sgrCodes(got)[stationFG] {
+	if got := lines[1]; !sgrCodes(got)[mixFG] {
 		t.Errorf("the tab's label is not cyan: %q", got)
 	}
-	if got := lines[m.playerTop()]; !sgrCodes(got)[stationFG] {
+	if got := lines[m.playerTop()]; !sgrCodes(got)[mixFG] {
 		t.Errorf("the line under the list is not cyan: %q", got)
 	}
 	// A row with nothing selected or playing on it: the only colour it can
 	// carry is the bar.
-	if got := lines[tabsHeight+headerRows+4]; !sgrCodes(got)[stationFG] {
+	if got := lines[tabsHeight+headerRows+4]; !sgrCodes(got)[mixFG] {
 		t.Errorf("the scrollbar is not cyan: %q", got)
 	}
 	// The tab row says which tab is in front the way it always does, in the
@@ -172,20 +172,20 @@ func TestARadioIsCyanAtBothEndsOfItsPage(t *testing.T) {
 	// And the button that started it wears the same colour.
 	row := lines[m.controlsRow()]
 	for _, run := range styledRuns(row) {
-		if strings.Contains(run.text, strings.TrimSpace(labelRadio)) &&
-			!strings.Contains(run.codes, stationFG) {
-			t.Errorf("the radio button is drawn %s: %q", run.codes, row)
+		if strings.Contains(run.text, strings.TrimSpace(labelMix)) &&
+			!strings.Contains(run.codes, mixFG) {
+			t.Errorf("the mix button is drawn %s: %q", run.codes, row)
 		}
 	}
 }
 
 // What is remembered is a page to come back to, and a mix is not one: it is
 // gone when the app closes and its id names nothing the next time.
-func TestARadioIsNotRemembered(t *testing.T) {
+func TestAMixIsNotRemembered(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	m, _, _ := radioModel(t)
+	m, _, _ := mixModel(t)
 	m.tabCursor = 1 // a library playlist
 	m.playing = m.Tracks[0]
 	m.record()
@@ -194,7 +194,7 @@ func TestARadioIsNotRemembered(t *testing.T) {
 		t.Fatalf("recorded %+v, want the playlist in front", before)
 	}
 
-	next, cmd := m.press(controlRadio)
+	next, cmd := m.press(controlMix)
 	m = drain(t, next.(Model), cmd)
 	m.record()
 
@@ -230,5 +230,39 @@ func TestANarrowRowKeepsTheTransport(t *testing.T) {
 		if len(seen) > 0 && len(seen) < 3 {
 			t.Errorf("width %d: %v, want at least the transport", width, seen)
 		}
+	}
+}
+
+// A mix is endless, so it pages like any other listing: the server hands back a
+// token with every page and the list offers the next one at the bottom.
+func TestAMixOffersItsNextPage(t *testing.T) {
+	m, lib, _ := mixModel(t)
+	lib.next = ytm.Continuation{Endpoint: "next", Token: "more-of-the-mix"}
+	lib.morePage = fromUI([]Track{{VideoID: "z", Title: "further in"}})
+
+	next, cmd := m.press(controlMix)
+	m = drain(t, next.(Model), cmd)
+
+	if !m.more.More() {
+		t.Fatal("the mix does not know there is more of it")
+	}
+	if m.more.Endpoint != "next" {
+		t.Errorf("it would ask %q, want the endpoint a queue continues at", m.more.Endpoint)
+	}
+	if m.rowCount() != len(m.Tracks)+1 {
+		t.Fatalf("row count = %d, want one more than the tracks", m.rowCount())
+	}
+	if last := plain(m.table(m.width, m.bodyHeight()).rows()[len(m.Tracks)]); !strings.Contains(last, labelLoadMore) {
+		t.Errorf("the last row is %q, want the offer", last)
+	}
+
+	// Walking onto that row takes it.
+	before := len(m.Tracks)
+	for range before {
+		at, cmd := m.Update(keyPress("j"))
+		m = drain(t, at.(Model), cmd)
+	}
+	if len(m.Tracks) != before+1 || m.Tracks[before].Title != "further in" {
+		t.Fatalf("tracks = %+v", m.Tracks)
 	}
 }

@@ -488,8 +488,8 @@ const (
 	// fill is allowed.
 	likedBG    = "45"
 	dislikedBG = "41"
-	// stationFG is a mix, which is a page somebody else chose for you.
-	stationFG = "36"
+	// mixFG is a mix, which is a page somebody else chose for you.
+	mixFG = "36"
 	// liveFG is the same blue as text: what is playing takes it wherever it
 	// is pointed at — the row in the list, its mark in the scrollbar, the
 	// played part of the bar.
@@ -1208,7 +1208,7 @@ func TestNothingIsColouredButThePlayerAndTheRatings(t *testing.T) {
 					case code == likedFG || code == dislikedFG,
 						code == likedBG || code == dislikedBG:
 						// What you think of a row: on the row, in the trough.
-					case code == stationFG:
+					case code == mixFG:
 						// A mix: the button that starts one, and its page.
 					case row == at.statusRow() && (code == goodBG || code == busyBG):
 						// The state block, on the row the state block is on.

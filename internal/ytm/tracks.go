@@ -75,6 +75,9 @@ func RadioSeed(playlistID string) string {
 	return strings.TrimPrefix(playlistID, RadioPrefix)
 }
 
+// queueEndpoint answers with a queue rather than with a listing.
+const queueEndpoint = "next"
+
 // Radio returns the mix the server builds around a track: the track itself
 // first, and then what it would play after it.
 //
@@ -88,21 +91,22 @@ func RadioSeed(playlistID string) string {
 // wAEB8gECKAE%3D, now comes back with the queue missing — measured against a
 // live account: 17kB and no panel with it, 2.4MB and sixty-five tracks
 // without. Nothing in the answer says why, so this sends what works.
+//
+// The page it hands back carries a continuation like any other, and a mix is
+// endless: the server says so in the panel and it holds up — fifty more tracks
+// after the first fifty-odd, no repeats among them, and another token with
+// them.
 func (c *Client) Radio(ctx context.Context, videoID string) (Page, error) {
 	if videoID == "" {
-		return Page{}, fmt.Errorf("ytm: radio: no track to start from")
+		return Page{}, fmt.Errorf("ytm: mix: no track to start from")
 	}
-	raw, err := c.post(ctx, "next", map[string]any{
+	return c.page(ctx, queueEndpoint, map[string]any{
 		"videoId":                       videoID,
 		"playlistId":                    RadioID(videoID),
 		"enablePersistentPlaylistPanel": true,
 		"isAudioOnly":                   true,
 		"tunerSettingValue":             "AUTOMIX_SETTING_NORMAL",
 	})
-	if err != nil {
-		return Page{}, err
-	}
-	return Page{Tracks: queueTracks(raw)}, nil
 }
 
 // queueTracks reads the rows of a watch queue.
@@ -190,13 +194,20 @@ func (c *Client) More(ctx context.Context, from Continuation) (Page, error) {
 }
 
 // page reads one page of a listing.
+//
+// The endpoint says what shape to expect: next answers with a queue and
+// everything else with a listing, and the two are made of different renderers.
+// It is also what a continuation carries, so the page after a mix is read the
+// same way the first one was.
 func (c *Client) page(ctx context.Context, endpoint string, body map[string]any) (Page, error) {
 	raw, err := c.post(ctx, endpoint, body)
 	if err != nil {
 		return Page{}, err
 	}
-	tracks, err := c.parseTracks(raw)
-	if err != nil {
+	var tracks []Track
+	if endpoint == queueEndpoint {
+		tracks = queueTracks(raw)
+	} else if tracks, err = c.parseTracks(raw); err != nil {
 		return Page{}, err
 	}
 	return Page{
@@ -220,6 +231,15 @@ func continuationToken(raw json.RawMessage) string {
 		}
 	}
 	for _, node := range findAll(tree, "nextContinuationData") {
+		if data, ok := node.(map[string]any); ok {
+			if token, _ := data["continuation"].(string); token != "" {
+				return token
+			}
+		}
+	}
+	// A queue has a third one of its own. A mix is endless, so this is the
+	// token that keeps it going: the page after it comes back with another.
+	for _, node := range findAll(tree, "nextRadioContinuationData") {
 		if data, ok := node.(map[string]any); ok {
 			if token, _ := data["continuation"].(string); token != "" {
 				return token

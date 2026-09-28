@@ -82,12 +82,12 @@ func (f *fakeLibrary) Radio(_ context.Context, videoID string) (ytm.Page, error)
 		return ytm.Page{}, f.err
 	}
 	if staged, ok := f.tracks[ytm.RadioID(videoID)]; ok {
-		return ytm.Page{Tracks: staged}, nil
+		return ytm.Page{Tracks: staged, Next: f.next}, nil
 	}
 	return ytm.Page{Tracks: []ytm.Track{
 		{VideoID: videoID, Title: "Seed", Artist: "A"},
 		{VideoID: videoID + "-mix", Title: "Mixed", Artist: "B"},
-	}}, nil
+	}, Next: f.next}, nil
 }
 
 // More hands back whatever was staged for the next page, once.

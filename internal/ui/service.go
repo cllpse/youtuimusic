@@ -164,7 +164,7 @@ func (m Model) fetchTracks(p Playlist) tea.Cmd {
 			page, err = lib.AlbumTracks(ctx, p.ID)
 		case tabArtist:
 			page, err = lib.ArtistPage(ctx, p.ID)
-		case tabRadio:
+		case tabMix:
 			page, err = lib.Radio(ctx, ytm.RadioSeed(p.ID))
 		default:
 			page, err = lib.PlaylistTracks(ctx, p.ID)

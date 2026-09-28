@@ -21,7 +21,7 @@ type menuItem int
 const (
 	menuAlbum menuItem = iota
 	menuArtist
-	menuRadio
+	menuMix
 	menuLike
 	menuDislike
 )
@@ -78,7 +78,7 @@ func (m Model) menuRows() []menuRow {
 		{menuArtist, "Go to artist", t.ArtistID != "", nil},
 		// In the colour of the page it opens, the way the button that does the
 		// same thing is. A release has no track to build a mix around.
-		{menuRadio, "Start radio", t.VideoID != "", stationHue},
+		{menuMix, "Start mix", t.VideoID != "", mixHue},
 		like,
 		dislike,
 	}
@@ -232,8 +232,8 @@ func (m Model) activate(row int) (tea.Model, tea.Cmd) {
 	m.menu = trackMenu{}
 
 	switch rows[row].item {
-	case menuRadio:
-		return m.radioFrom(t)
+	case menuMix:
+		return m.mixFrom(t)
 	case menuLike:
 		return m.rateTrack(t, RatingUp)
 	case menuDislike:

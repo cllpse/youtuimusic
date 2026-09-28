@@ -57,7 +57,7 @@ const (
 	tabSearch
 	tabAlbum
 	tabArtist
-	tabRadio
+	tabMix
 )
 
 // Playlist is one tab.
@@ -114,10 +114,14 @@ type Model struct {
 
 	menu   trackMenu
 	detour detour
-	// radio is the mix started from a track, which is a tab for as long as the
-	// app is open and never longer: it is not one of the library's playlists,
+	// mix is the one started from a track, which is a tab for as long as the app
+	// is open and never longer: it is not one of the library's playlists,
 	// nothing brings it back, and starting another replaces it.
-	radio Playlist
+	//
+	// YouTube Music calls it a mix and so does everything the reader sees. The
+	// API calls it a radio, and so does the ytm package — RDAMVM is the prefix
+	// on its id — so the two words meet at that boundary and nowhere else.
+	mix Playlist
 	// sheetOpen is the keys sheet, which is in front of everything when it is
 	// up and is not part of the stack behind it: it is what the app does, not
 	// somewhere you went.
@@ -373,21 +377,21 @@ func (m Model) afterDetourMove() (tea.Model, tea.Cmd, bool) {
 
 // tabCount is the playlists. Nothing else lives in the row: a search, an
 // album and an artist are all popovers.
-// The tab row is the library's playlists, with a radio in front of them while
+// The tab row is the library's playlists, with a mix in front of them while
 // there is one. In front because that is where the music is: a mix is started
 // and listened to, not a place you keep coming back to, and it is gone when the
 // app closes.
 func (m Model) tabCount() int {
-	if m.radio.ID != "" {
+	if m.mix.ID != "" {
 		return len(m.Playlists) + 1
 	}
 	return len(m.Playlists)
 }
 
 func (m Model) tabAt(i int) Playlist {
-	if m.radio.ID != "" {
+	if m.mix.ID != "" {
 		if i == 0 {
-			return m.radio
+			return m.mix
 		}
 		i--
 	}
@@ -410,7 +414,7 @@ func accentOf(id string) color.Color {
 	case id == likedPlaylistID:
 		return liked
 	case id != "" && strings.HasPrefix(id, ytm.RadioPrefix):
-		return stationHue
+		return mixHue
 	}
 	return nil
 }
@@ -864,8 +868,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.press(controlPrevious)
 	case matches(msg, k.Repeat):
 		return m.press(controlRepeat)
-	case matches(msg, k.Radio):
-		return m.press(controlRadio)
+	case matches(msg, k.Mix):
+		return m.press(controlMix)
 
 	case matches(msg, k.PrevTab):
 		return m.selectTab(m.tabCursor - 1)
@@ -1033,7 +1037,7 @@ var (
 	// station is a mix the server built, which is a page of somebody else's
 	// choosing rather than one of yours — the one other kind of page that is
 	// worth telling apart at a glance.
-	stationHue = lipgloss.Cyan
+	mixHue = lipgloss.Cyan
 
 	// liked and disliked are what you think of a track, which the list said
 	// with a pair of thumbs until a hue could say it without spending a cell

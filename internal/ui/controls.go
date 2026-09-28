@@ -36,10 +36,10 @@ const (
 	labelRepeatOff = "Repeat off (r)"
 	labelRepeatOn  = "Repeat on (r)"
 	labelRepeatOne = "Repeat one (r)"
-	labelRadio     = "Radio (R)"
-	// labelRadioTab names the tab it opens. Short, because the tab row is the
+	labelMix       = "Mix (M)"
+	// labelMixTab names the tab it opens. Short, because the tab row is the
 	// one place in the app that is always short of room.
-	labelRadioTab = "Radio"
+	labelMixTab = "Mix"
 )
 
 // A button whose label changes with the state is drawn at the width of its
@@ -102,7 +102,7 @@ const (
 	controlPlayPause
 	controlNext
 	controlRepeat
-	controlRadio
+	controlMix
 )
 
 // button is one control as laid out on the row.
@@ -130,8 +130,8 @@ func groupWidth(group []button) int {
 }
 
 // groupGap is the space between one kind of control and another: the transport
-// moves about the list, repeat says what happens when a track ends, radio makes
-// a page that is not this one. Three errands, three groups. Twice the gap
+// moves about the list, repeat says what happens when a track ends, a mix is a
+// page that is not this one. Three errands, three groups. Twice the gap
 // between two buttons, so that it reads as a gap of its own rather than as one
 // that happens to be wider.
 const groupGap = buttonGap * 2
@@ -171,17 +171,17 @@ func (m Model) controlButtons() []button {
 		{control: controlPlayPause, label: m.playPauseLabel(), state: buttonDefault},
 		{control: controlNext, label: labelNext, state: onward},
 	}
-	// Radio makes a page rather than changing this one, which is why it is the
+	// A mix is a page rather than a change to this one, which is why it is the
 	// far end of the row, a group of its own, and in that page's colour. It
 	// needs a track to build from, and is quiet without one.
-	station := buttonDefault
-	if _, ok := m.radioSeed(); !ok {
-		station = buttonDisabled
+	mix := buttonDefault
+	if _, ok := m.mixSeed(); !ok {
+		mix = buttonDisabled
 	}
 	groups := [][]button{
 		transport,
 		{{control: controlRepeat, label: m.repeat.label(), state: repeat}},
-		{{control: controlRadio, label: labelRadio, state: station, hue: stationHue}},
+		{{control: controlMix, label: labelMix, state: mix, hue: mixHue}},
 	}
 
 	// A row too narrow for all of it gives up a group at a time from the right:
@@ -280,17 +280,17 @@ func (m Model) press(c control) (tea.Model, tea.Cmd) {
 	case controlRepeat:
 		m.repeat = m.repeat.next()
 		return m, nil
-	case controlRadio:
-		return m.startRadio()
+	case controlMix:
+		return m.startMix()
 	}
 	return m, nil
 }
 
-// radioSeed is the track a mix would be built from: the one playing, or the one
+// mixSeed is the track a mix would be built from: the one playing, or the one
 // under the cursor when nothing is. The same rule the play button follows, for
 // the same reason — with nothing playing, what you are pointing at is what you
 // mean.
-func (m Model) radioSeed() (Track, bool) {
+func (m Model) mixSeed() (Track, bool) {
 	if m.playing.VideoID != "" {
 		return m.playing, true
 	}
@@ -300,29 +300,29 @@ func (m Model) radioSeed() (Track, bool) {
 	return Track{}, false
 }
 
-// startRadio opens a mix built from the track the transport would act on.
-func (m Model) startRadio() (tea.Model, tea.Cmd) {
-	seed, ok := m.radioSeed()
+// startMix opens a mix built from the track the transport would act on.
+func (m Model) startMix() (tea.Model, tea.Cmd) {
+	seed, ok := m.mixSeed()
 	if !ok {
 		return m, nil
 	}
-	return m.radioFrom(seed)
+	return m.mixFrom(seed)
 }
 
-// radioFrom opens a mix built from a track: a tab of its own in front of the
+// mixFrom opens a mix built from a track: a tab of its own in front of the
 // library's, and the seed playing if it is not already.
 //
 // The old mix goes, cache and all. Two of them would be two tabs with the same
 // name and no way to tell which was which, and the one you started last is the
 // one you meant.
-func (m Model) radioFrom(seed Track) (tea.Model, tea.Cmd) {
+func (m Model) mixFrom(seed Track) (tea.Model, tea.Cmd) {
 	if seed.VideoID == "" {
 		return m, nil
 	}
-	if m.radio.ID != "" {
-		delete(m.cache, m.radio.ID)
+	if m.mix.ID != "" {
+		delete(m.cache, m.mix.ID)
 	}
-	m.radio = Playlist{ID: ytm.RadioID(seed.VideoID), Title: labelRadioTab, kind: tabRadio}
+	m.mix = Playlist{ID: ytm.RadioID(seed.VideoID), Title: labelMixTab, kind: tabMix}
 	m.detour, m.history, m.menu = detour{}, nil, trackMenu{}
 
 	m.tabCursor = 0

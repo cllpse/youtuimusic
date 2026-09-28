@@ -38,7 +38,7 @@ type keyMap struct {
 	NextTab  key.Binding
 
 	// Everything else.
-	Radio       key.Binding
+	Mix         key.Binding
 	Open        key.Binding
 	Search      key.Binding
 	Sort        key.Binding
@@ -97,9 +97,9 @@ var appKeys = keyMap{
 		key.WithKeys("right", "l", "tab"),
 		key.WithHelp("right/l", "next playlist")),
 
-	Radio: key.NewBinding(
-		key.WithKeys("R"),
-		key.WithHelp("R", "start a mix from this track")),
+	Mix: key.NewBinding(
+		key.WithKeys("M"),
+		key.WithHelp("M", "start a mix from this track")),
 	Open: key.NewBinding(
 		key.WithKeys("enter"),
 		key.WithHelp("enter", "play, or open a release")),
@@ -130,7 +130,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.PlayPause, k.Next, k.Previous, k.Repeat, k.Like, k.Dislike},
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom, k.PrevTab, k.NextTab},
-		{k.Open, k.Search, k.Radio, k.Sort, k.SortReverse, k.Close, k.Help, k.Quit},
+		{k.Open, k.Search, k.Mix, k.Sort, k.SortReverse, k.Close, k.Help, k.Quit},
 	}
 }
 

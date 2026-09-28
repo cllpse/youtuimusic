@@ -66,8 +66,8 @@ func padded(label string) string {
 // renderButton draws one button in a state.
 //
 // hue is a colour the button has of its own, and nil for the ones that have
-// none — which is all of them but the radio, whose cyan is the colour of the
-// page it makes. It is not a state: the button wears it pressed or not, and
+// none — which is all of them but the mix, whose cyan is the colour of the page
+// it makes. It is not a state: the button wears it pressed or not, and
 // faint still wins where there is nothing to press.
 func renderButton(label string, state buttonState, hue color.Color) string {
 	if state == buttonDisabled {

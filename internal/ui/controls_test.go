@@ -90,7 +90,7 @@ func TestTheTransportSitsAgainstTheLeft(t *testing.T) {
 
 	// Radio is the last of them: it makes a page rather than working this one,
 	// so it sits at the far end of the row.
-	last, _ := buttonAt(m, controlRadio)
+	last, _ := buttonAt(m, controlMix)
 	for _, b := range m.controlButtons() {
 		if b.start > last.start {
 			t.Errorf("%v sits past radio, at %d", b.control, b.start)
@@ -631,7 +631,7 @@ func TestEveryButtonNamesItsKey(t *testing.T) {
 		controlPlayPause: "(space)",
 		controlNext:      "(n)",
 		controlRepeat:    "(r)",
-		controlRadio:     "(R)",
+		controlMix:       "(M)",
 	}
 	for _, b := range m.controlButtons() {
 		key, ok := want[b.control]

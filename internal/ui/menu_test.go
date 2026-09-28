@@ -367,7 +367,7 @@ func TestRowsThatLeadNowhereAreDisabled(t *testing.T) {
 
 	for _, row := range m.menuRows() {
 		switch row.item {
-		case menuLike, menuDislike, menuRadio:
+		case menuLike, menuDislike, menuMix:
 			// Anything that needs only the track itself: rating it, and
 			// building a mix around it.
 			if !row.enabled {
@@ -1505,7 +1505,7 @@ func TestTheMenuPutsTheRatingsLast(t *testing.T) {
 	m, _, _, _ := menuModel(t)
 	at := m.openMenu(m.Tracks[0], 4, 4)
 
-	want := []menuItem{menuAlbum, menuArtist, menuRadio, menuLike, menuDislike}
+	want := []menuItem{menuAlbum, menuArtist, menuMix, menuLike, menuDislike}
 	rows := at.menuRows()
 	if len(rows) != len(want) {
 		t.Fatalf("the menu has %d rows, want %d", len(rows), len(want))
@@ -1527,14 +1527,14 @@ func TestTheMenuPutsTheRatingsLast(t *testing.T) {
 		}
 		return -1
 	}
-	album, radio := where("Go to album"), where("Start radio")
+	album, mix := where("Go to album"), where("Start mix")
 	rule, like := where("───"), where("Like track")
-	if album < 0 || radio < 0 || rule < 0 || like < 0 {
-		t.Fatalf("album %d, radio %d, rule %d, like %d", album, radio, rule, like)
+	if album < 0 || mix < 0 || rule < 0 || like < 0 {
+		t.Fatalf("album %d, mix %d, rule %d, like %d", album, mix, rule, like)
 	}
-	if !(album < radio && radio < rule && rule < like) {
+	if !(album < mix && mix < rule && rule < like) {
 		t.Errorf("the rows read %d %d %d %d, want places then the rule then ratings",
-			album, radio, rule, like)
+			album, mix, rule, like)
 	}
 }
 
@@ -1550,7 +1550,7 @@ func TestTheMenuOpensOnARowThatCanBeChosen(t *testing.T) {
 		want  menuItem
 	}{
 		{"a track that links somewhere", m.Tracks[0], menuAlbum},
-		{"one that links nowhere", m.Tracks[1], menuRadio},
+		{"one that links nowhere", m.Tracks[1], menuMix},
 		{"a release, which cannot be rated", Track{Title: "Cherry", AlbumID: "MPRE"}, menuAlbum},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1577,7 +1577,7 @@ func TestTheMenuOpensOnARowThatCanBeChosen(t *testing.T) {
 	if at.menu.open {
 		t.Error("enter on a fresh menu did nothing at all")
 	}
-	if at.radio.ID == "" {
+	if at.mix.ID == "" {
 		t.Error("the first row it opened on did not run")
 	}
 }
@@ -1625,14 +1625,14 @@ func TestNoMenuRowIsBold(t *testing.T) {
 
 // Starting a mix from the menu builds it around the row that was right-clicked,
 // not around whatever is playing — which is what every other row there does.
-func TestRadioFromTheMenuUsesTheClickedRow(t *testing.T) {
+func TestAMixFromTheMenuUsesTheClickedRow(t *testing.T) {
 	m, lib, _, _ := menuModel(t)
 	m.playing = m.Tracks[1]
 	m.trackCursor = 1
 
 	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
 	m = drain(t, next.(Model), cmd)
-	x, y := rowAt(m, menuRadio)
+	x, y := rowAt(m, menuMix)
 	next, cmd = m.Update(click(x, y))
 	m = drain(t, next.(Model), cmd)
 
@@ -1640,12 +1640,12 @@ func TestRadioFromTheMenuUsesTheClickedRow(t *testing.T) {
 		t.Error("the menu stayed open")
 	}
 	seed := m.Tracks[0]
-	if want := ytm.RadioID(seed.VideoID); m.radio.ID != want {
-		t.Errorf("the mix is %q, want one built from the clicked row %q", m.radio.ID, want)
+	if want := ytm.RadioID(seed.VideoID); m.mix.ID != want {
+		t.Errorf("the mix is %q, want one built from the clicked row %q", m.mix.ID, want)
 	}
 	var asked string
 	for _, call := range lib.askedFor {
-		if strings.HasPrefix(call, "radio:") {
+		if strings.HasPrefix(call, "radio:") { // the API's word for it
 			asked = call
 		}
 	}
@@ -1654,7 +1654,7 @@ func TestRadioFromTheMenuUsesTheClickedRow(t *testing.T) {
 	}
 	// And the row wears the colour of the page it opens.
 	at := m.openMenu(seed, 4, 4)
-	if !sgrCodes(menuLine(at, "Start radio"))[stationFG] {
-		t.Errorf("the row is not cyan: %q", menuLine(at, "Start radio"))
+	if !sgrCodes(menuLine(at, "Start mix"))[mixFG] {
+		t.Errorf("the row is not cyan: %q", menuLine(at, "Start mix"))
 	}
 }
