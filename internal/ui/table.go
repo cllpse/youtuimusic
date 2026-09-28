@@ -278,7 +278,7 @@ func (t trackTable) ratingHue(track Track) (color.Color, bool) {
 // under whichever theme is in force.
 func (t trackTable) dislikedPen() color.Color {
 	if t.mono {
-		return muted
+		return alert
 	}
 	return disliked
 }

@@ -109,10 +109,10 @@ var (
 
 // palette is every accent the interface is allowed, in one value. The colour
 // theme spends a hue on each; the monochrome one has no hue to spend, so every
-// accent becomes the bright end of the terminal's own foreground — or the dim
-// one where two marks have to stay apart — which is what the interface looked
-// like before any of the hues arrived. Red is kept for trouble in both: an
-// error announcing itself by colour is the point of colouring it.
+// accent becomes the bright end of the terminal's own foreground, which is what
+// the interface looked like before any of the hues arrived. Red is kept in
+// both, for trouble and for a dislike: neither can be said by weight alone, and
+// an error announcing itself by colour is the point of colouring it.
 type palette struct {
 	liked    color.Color
 	disliked color.Color
@@ -133,12 +133,15 @@ var (
 		busy:     busy,
 		alert:    alert,
 	}
-	// The disliked mark is the one grey the scheme can spare for it; the
-	// bright end would make it indistinguishable from a like, which is worse
-	// than a mark that is merely quiet.
+	// A like and a dislike cannot both take the bright end, and the dim grey
+	// that might tell them apart is only ever a background — as a foreground it
+	// is unreadable on a light page and reads as a disabled row on a dark one.
+	// So the dislike keeps the red it has in the colour theme: it is the one
+	// mark on a row you would not want more of, and red is kept for trouble in
+	// both themes rather than spending the bright end twice.
 	monoPalette = palette{
 		liked:    emphasis,
-		disliked: muted,
+		disliked: alert,
 		mix:      emphasis,
 		live:     emphasis,
 		good:     emphasis,

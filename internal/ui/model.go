@@ -47,7 +47,7 @@ func (r Rating) hue(mono bool) (color.Color, bool) {
 		return liked, true
 	case RatingDown:
 		if mono {
-			return muted, true
+			return alert, true
 		}
 		return disliked, true
 	default:

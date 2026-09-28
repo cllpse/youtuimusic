@@ -1989,8 +1989,9 @@ func TestThePlayingMarksFollowThePlayState(t *testing.T) {
 // The theme key drops every hue the colour theme spends and keeps everything
 // else: a rated row, a playing row and the state block are still told apart by
 // weight and by being turned inside out, which is what they were before the
-// colours arrived. Red stays, because trouble is the one thing an error has to
-// say by colour.
+// colours arrived. Red stays, for trouble and for a dislike — the two marks
+// that cannot be said by weight, and the reason the dim grey is not used for
+// one of them: as a foreground it reads as a row that cannot be chosen.
 func TestTheMonochromeKeyDropsTheHues(t *testing.T) {
 	m := sample()
 	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
@@ -2017,6 +2018,16 @@ func TestTheMonochromeKeyDropsTheHues(t *testing.T) {
 	bar := strings.Split(mono.View().Content, "\n")[mono.barRow()]
 	if sgrCodes(bar)[liveFG] {
 		t.Errorf("the bar kept the player's blue: %q", bar)
+	}
+	// The dislike keeps its red: the dim grey that might tell it from a like
+	// is only ever a background, and as a foreground it reads as a row that
+	// cannot be chosen.
+	dislike := menuLine(mono.openMenu(mono.Tracks[0], 4, 4), "Dislike track")
+	if !sgrCodes(dislike)[dislikedFG] {
+		t.Errorf("the dislike row lost its red in monochrome: %q", dislike)
+	}
+	if sgrCodes(dislike)["90"] {
+		t.Errorf("the dislike row is drawn in the dim grey: %q", dislike)
 	}
 	// Pressing it again brings the colours back.
 	if back := press(mono, "m"); back.mono {
