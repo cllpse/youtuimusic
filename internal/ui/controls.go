@@ -36,7 +36,7 @@ const (
 	labelRepeatOff = "Repeat off (r)"
 	labelRepeatOn  = "Repeat on (r)"
 	labelRepeatOne = "Repeat one (r)"
-	labelMix       = "Mix (M)"
+	labelMix       = "Start mix (M)"
 	// labelMixTab names the tab it opens. Short, because the tab row is the
 	// one place in the app that is always short of room.
 	labelMixTab = "Mix"
