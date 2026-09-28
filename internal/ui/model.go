@@ -401,6 +401,17 @@ func (m Model) tabAt(i int) Playlist {
 	return Playlist{}
 }
 
+// playerHue is the colour of everything that points at the track playing: the
+// player's blue while it is playing, and the paused bar's own colour while it is
+// not. The bar has said the difference that way all along; the marks say it the
+// same way.
+func (m Model) playerHue() color.Color {
+	if m.Paused {
+		return played
+	}
+	return live
+}
+
 // accentOf is the colour a page claims for itself: the liked playlist's
 // magenta, a mix's cyan, and nothing for an ordinary playlist. Its label says
 // it at the top of the page, the line under the list says it at the bottom, and
@@ -1242,8 +1253,9 @@ func (m Model) tabLabel(index int) lipgloss.Style {
 }
 
 // tabMarker is what a tab carries while the track playing is in its listing, in
-// the blue the scrollbar marks that track with: it is the same statement about
-// where the track is, in the same colour.
+// the colour the scrollbar marks that track with: it is the same statement about
+// where the track is, in the same colour, and it says whether the player is
+// running the same way — see playerHue.
 //
 // U+25A0 BLACK SQUARE rather than the full block the scrollbar uses. A terminal
 // cell is about twice as tall as it is wide, so a full block in the middle of a
@@ -1503,7 +1515,7 @@ func (m Model) renderTabs() string {
 		// row sinks towards the page.
 		label := m.tabLabel(s.index).Render(truncate(m.tabAt(s.index).Title, maxTabTitle))
 		if m.tabHoldsPlaying(s.index) {
-			mark := lipgloss.NewStyle().Foreground(live)
+			mark := lipgloss.NewStyle().Foreground(m.playerHue())
 			if m.covered() {
 				mark = lipgloss.NewStyle().Foreground(m.quietColor())
 			}
@@ -1582,6 +1594,7 @@ func (m Model) table(width, height int) trackTable {
 		showRating:  m.showsRating(),
 		accent:      accentOf(m.showingID),
 		playing:     m.playing.VideoID,
+		paused:      m.Paused,
 		more:        m.more.More(),
 		loadingMore: m.loadingMore,
 		loader:      m.loader(),

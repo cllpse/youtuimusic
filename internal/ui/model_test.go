@@ -1936,3 +1936,52 @@ func TestTheScrollbarIsDrawnLikeTheLineBelowThePage(t *testing.T) {
 		})
 	}
 }
+
+// Everything that points at the track playing says whether the player is
+// running, in the colour the bar has always said it in: the player's blue while
+// it plays, and the paused bar's own colour while it holds. The row in the list,
+// its mark in the scrollbar, the block on its tab.
+func TestThePlayingMarksFollowThePlayState(t *testing.T) {
+	m := sized(sample(), 120, 20)
+	answered, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
+	m = answered.(Model)
+	m.Playlists = []Playlist{{ID: "PL1", Title: "Favorites"}}
+	m.Tracks = rows(20) // longer than the window, so there is a scrollbar
+	m.showingID = "PL1"
+	m.playing, m.Length, m.Position = m.Tracks[3], time.Minute, 20*time.Second
+	m.trackCursor = 0 // off the playing row, so its fill is not in the way
+
+	parts := func(m Model) map[string]string {
+		lines := strings.Split(m.View().Content, "\n")
+		return map[string]string{
+			"the playing row": lines[tabsHeight+headerRows+3],
+			"its mark":        strings.Join(m.table(m.width, m.bodyHeight()).scrollbar(), ""),
+			"the tab's block": strings.Split(m.renderTabs(), "\n")[1],
+			"the bar":         lines[m.barRow()],
+		}
+	}
+
+	for what, line := range parts(m) {
+		if !sgrCodes(line)[liveFG] {
+			t.Errorf("playing: %s is not blue: %q", what, line)
+		}
+	}
+
+	m.Paused = true
+	for what, line := range parts(m) {
+		if sgrCodes(line)[liveFG] {
+			t.Errorf("paused: %s is still blue: %q", what, line)
+		}
+		if !sgrCodes(line)[foregroundFG] {
+			t.Errorf("paused: %s is not the paused colour: %q", what, line)
+		}
+	}
+
+	// The marks are still there either way: the colour says the state and the
+	// mark says where the track is.
+	for _, what := range []string{"its mark", "the tab's block"} {
+		if got := plain(parts(m)[what]); !strings.ContainsAny(got, blockFull+blockUpper+blockLower+tabMarker) {
+			t.Errorf("%s lost its shape while paused: %q", what, got)
+		}
+	}
+}

@@ -226,6 +226,7 @@ func (m Model) renderModal() string {
 		accent:      accentOf(m.detour.tab.ID),
 		titleOnly:   m.detour.tab.kind == tabAlbum,
 		playing:     m.playing.VideoID,
+		paused:      m.Paused,
 		more:        m.detour.more.More(),
 		loadingMore: m.loadingMore,
 		loader:      m.loader(),

@@ -35,8 +35,11 @@ type trackTable struct {
 	// titleOnly drops every column but the first. An album is one artist's
 	// record, so naming them down the page says the same thing each time.
 	titleOnly bool
-	// playing is the video id to colour, and is empty when nothing is.
+	// playing is the video id to colour, and is empty when nothing is. paused
+	// is what the player is doing with it, which decides the colour: see
+	// playerPen.
 	playing string
+	paused  bool
 	// highlight is the selected row's fill, derived from the terminal's own
 	// background so that it follows the theme.
 	highlight color.Color
@@ -192,6 +195,20 @@ func (t trackTable) moreRow(width int) string {
 	return dim.Render(centred)
 }
 
+// playerPen is the colour of everything that points at the track playing: the
+// player's blue while it is playing, and the paused bar's own colour while it is
+// not.
+//
+// The bar has said the difference that way since before any of these marks
+// existed — lit while it runs, a step down while it holds — so the marks say it
+// the same way rather than inventing a second language for the same fact.
+func (t trackTable) playerPen() color.Color {
+	if t.paused {
+		return played
+	}
+	return live
+}
+
 // rowSelected fills a row with the highlight. No foreground is set with it:
 // the highlight is a tint of the terminal's own background, so the
 // terminal's own text colour still reads on it whatever the theme is.
@@ -210,10 +227,10 @@ func rowSelected(highlight color.Color) lipgloss.Style {
 // all three at once, which it has to: the cursor is usually on the track
 // playing, and that track is as likely to be rated as any other.
 //
-// Where there is no rating the hue says the player instead, in its own blue.
-// A rating displaces that because the player has three other places to say
-// where it is — the state block, the bar, the mark in the scrollbar — and a
-// rating has only this one.
+// Where there is no rating the hue says the player instead, in whichever colour
+// the player is wearing — see playerPen. A rating displaces that because the
+// player has three other places to say where it is — the state block, the bar,
+// the mark in the scrollbar — and a rating has only this one.
 func (t trackTable) rowStyle(track Track, selected bool) (lipgloss.Style, bool) {
 	if t.inactive {
 		// Nothing is rated, selected or playing as far as this block is
@@ -227,7 +244,7 @@ func (t trackTable) rowStyle(track Track, selected bool) (lipgloss.Style, bool) 
 	case rated:
 		style, styled = style.Foreground(hue), true
 	case playing:
-		style, styled = style.Foreground(live), true
+		style, styled = style.Foreground(t.playerPen()), true
 	}
 	if playing {
 		style, styled = style.Bold(true), true
@@ -344,7 +361,7 @@ func (t trackTable) scrollbarMarks() map[int]color.Color {
 		marks[at] = hue
 	}
 	if at := t.playingRow(); at >= 0 && at < total {
-		marks[markAt(at, total, halves)] = live
+		marks[markAt(at, total, halves)] = t.playerPen()
 	}
 	return marks
 }
