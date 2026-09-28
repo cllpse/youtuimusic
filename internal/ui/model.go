@@ -240,13 +240,17 @@ func (m Model) barFill() progress.ColorFunc {
 	return litRamp
 }
 
-// toggleMono switches between the accent hues and the terminal's own greys,
-// rebuilding the one component that holds its colour rather than looking it up
-// per frame.
+// toggleMono switches between the accent hues and the terminal's own greys.
 func (m Model) toggleMono() (tea.Model, tea.Cmd) {
-	m.mono = !m.mono
+	return m.setMono(!m.mono), nil
+}
+
+// setMono applies the monochrome theme or takes it away, rebuilding the one
+// component that holds its colour rather than looking it up per frame.
+func (m Model) setMono(on bool) Model {
+	m.mono = on
 	m.bar = newBar(m.barFill())
-	return m, nil
+	return m
 }
 
 // Init starts the first fetch and opens the stream of player events.

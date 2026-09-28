@@ -81,3 +81,33 @@ func TestSaveLeavesNoTemporaryFile(t *testing.T) {
 		t.Errorf("the directory holds %d files, want just the state", len(entries))
 	}
 }
+
+// The theme is remembered beside the playlist, so a reader who dropped the
+// colours does not choose that again every launch.
+func TestMonoRoundTrips(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := Save(State{Playlist: "LM", Mono: true}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got := Load()
+	if !got.Mono || got.Playlist != "LM" {
+		t.Errorf("got %+v, want the playlist and monochrome on", got)
+	}
+}
+
+// The default colour theme is the absence of the field rather than a false
+// written out, so an old state file keeps opening in colour.
+func TestThemeIsLeftOutWhenItIsTheDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := Save(State{Playlist: "LM"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	path, _ := Path()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "mono") {
+		t.Errorf("the file carries the default theme: %s", raw)
+	}
+}

@@ -183,3 +183,42 @@ func TestTheRecordedTrackIsResumable(t *testing.T) {
 		t.Errorf("resumed %q, want %q", second.playing.VideoID, want)
 	}
 }
+
+// The theme is a display choice, so it comes back with the rest: a reader who
+// dropped the colours does not choose that again every launch.
+func TestTheThemeComesBackWithEverythingElse(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	m := press(sample(), "m")
+	if !m.mono {
+		t.Fatal("the theme key did not switch to monochrome")
+	}
+	m.record()
+
+	st := state.Load()
+	if !st.Mono {
+		t.Fatalf("the theme was not written: %+v", st)
+	}
+
+	restored := New(Services{}).Restore(st)
+	if !restored.mono {
+		t.Error("the restored model is not monochrome")
+	}
+	// The bar holds its colour rather than looking it up per frame, so it has
+	// to have been rebuilt with the greys, not merely flagged.
+	if got := restored.barFill()(0, 0); got != emphasis {
+		t.Errorf("the restored bar is %v, want the bright foreground %v", got, emphasis)
+	}
+}
+
+// And a model that opens in the colour theme gets the lit bar, so a restore
+// that says nothing about the theme does not silently take the blue away.
+func TestTheDefaultRestoreKeepsTheColourBar(t *testing.T) {
+	m := New(Services{}).Restore(state.State{})
+	if m.mono {
+		t.Error("a restore of nothing turned monochrome on")
+	}
+	if got := m.barFill()(0, 0); got != live {
+		t.Errorf("the bar is %v, want the player's colour %v", got, live)
+	}
+}
