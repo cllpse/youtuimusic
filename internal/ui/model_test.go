@@ -1758,15 +1758,37 @@ func TestTheLikedPlaylistSaysSoAtBothEndsOfItsPage(t *testing.T) {
 		t.Errorf("the line below another playlist is magenta: %q", below(m))
 	}
 
-	// It keeps its colour under a popover, because the player under it keeps
-	// working; the tab bar does not, and sinks whole.
+	// Both ends sink together with a popover in front of the page: it is the
+	// page's two edges, and the page has nothing to say while something is over
+	// it. The quiet colour, which is what the tab row takes.
 	m.tabCursor = 0
 	m.detour = detour{active: true, tab: Playlist{Title: "Cherry", kind: tabAlbum}}
-	if !sgrCodes(below(m))[likedFG] {
-		t.Errorf("the line below the page sank with the popover: %q", below(m))
+	qr, qg, qb, _ := m.quietColor().RGBA()
+	quiet := fmt.Sprintf("38;2;%d;%d;%d", qr>>8, qg>>8, qb>>8)
+	if sgrCodes(below(m))[likedFG] {
+		t.Errorf("the line below the page is still magenta: %q", below(m))
+	}
+	if !strings.Contains(below(m), quiet) {
+		t.Errorf("the line below the page is not the quiet colour %s: %q", quiet, below(m))
 	}
 	if sgrCodes(rows3(m)[1])[likedFG] {
 		t.Errorf("the label is still magenta behind a popover: %q", rows3(m)[1])
+	}
+	if !strings.Contains(rows3(m)[2], quiet) {
+		t.Errorf("the tab rule is not the quiet colour either: %q", rows3(m)[2])
+	}
+
+	// The player itself is untouched: it still works with a popover open, so it
+	// still looks like it.
+	live := strings.Split(m.View().Content, "\n")
+	m.detour = detour{}
+	shut := strings.Split(m.View().Content, "\n")
+	trim := func(s string) string { return strings.TrimRight(plain(s), " ") }
+	for _, row := range []int{m.controlsRow(), m.barRow()} {
+		if trim(live[row]) != trim(shut[row]) {
+			t.Errorf("row %d changed with a popover open:\n%q\n%q",
+				row, trim(live[row]), trim(shut[row]))
+		}
 	}
 }
 

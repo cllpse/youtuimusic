@@ -1723,10 +1723,15 @@ func (m Model) separator() string {
 // that is the tab in front. It closes off the page above it, so with the label
 // at the top of that page saying whose it is, this says it at the bottom.
 //
-// Dimmed and not quiet, and magenta whatever is in front of the list: the player
-// stays live with a popover over it, so the line above the player does too.
+// And it sinks to the quiet colour with a popover in front of the list, the way
+// the tab row above it does. The line reads as the bottom edge of the page
+// rather than as the top of the player: with something over that page, the page
+// has nothing to say and neither has either of its edges.
 func (m Model) separatorColor() color.Color {
-	if m.likedTabInFront() {
+	switch {
+	case m.covered():
+		return m.quietColor()
+	case m.likedTabInFront():
 		return liked
 	}
 	return m.dimmedColor()
