@@ -481,6 +481,49 @@ func clampOffset(offset, height, total int) int {
 	return max(min(offset, total-height), 0)
 }
 
+// listPos is a window over a list: where the cursor is, where the window
+// starts, how long the list is, and whether it has another page.
+//
+// The main table and the popover over it are both one of these at different
+// sizes. The arithmetic that keeps a cursor on screen used to be written twice
+// — once for each — which is exactly how one of them ends up fixed and the
+// other not.
+type listPos struct {
+	cursor  int
+	offset  int
+	total   int
+	hasMore bool
+}
+
+// rowCount is the rows the cursor can land on: the list plus the offer of
+// another page when there is one.
+func (l listPos) rowCount() int {
+	if l.hasMore {
+		return l.total + 1
+	}
+	return l.total
+}
+
+// atMore reports whether the cursor is sitting on the offer of another page.
+func (l listPos) atMore() bool { return l.hasMore && l.cursor == l.total }
+
+// moving returns the cursor and window after a move of delta rows, keeping the
+// cursor on screen.
+func (l listPos) moving(delta, height int) (cursor, offset int) {
+	cursor = clamp(l.cursor+delta, l.rowCount())
+	return cursor, keepVisible(cursor, l.offset, height, l.rowCount())
+}
+
+// scrolled returns the window after scrolling without moving the cursor.
+func (l listPos) scrolled(delta, height int) int {
+	return clampOffset(l.offset+delta, height, l.rowCount())
+}
+
+// showingMore reports whether the offer of another page is on screen.
+func (l listPos) showingMore(height int) bool {
+	return l.hasMore && l.offset+height > l.total
+}
+
 // sortColumn names what a table is ordered by.
 type sortColumn int
 
@@ -495,13 +538,6 @@ const (
 type sortSpec struct {
 	by   sortColumn
 	desc bool
-}
-
-func (s sortSpec) arrow() string {
-	if s.desc {
-		return "↓"
-	}
-	return "↑"
 }
 
 // next moves to the following column, wrapping back through unsorted so

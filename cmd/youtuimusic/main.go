@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -41,7 +43,11 @@ func run() error {
 		return err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// A signal stops the program the way ctrl+c does, so the session is saved
+	// on the way out and mpv is not left behind.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// mpv is started once and lives for the session; the first track pays no
@@ -52,12 +58,21 @@ func run() error {
 	}
 	defer func() { _ = audio.Close() }()
 
+	streams := stream.New()
+	streams.CachePath = stream.DefaultCachePath()
+	streams.Load()
+
 	model := ui.New(ui.Services{
 		Library: ytm.NewClient(session),
-		Streams: stream.New(),
+		Streams: streams,
 		Audio:   audio,
 	}).Restore(state.Load())
 
-	_, err = tea.NewProgram(model).Run()
+	final, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
+	// The key handler records on the way out; a signal does not go through it,
+	// so record once more here. The write is idempotent.
+	if m, ok := final.(ui.Model); ok {
+		m.Record()
+	}
 	return err
 }

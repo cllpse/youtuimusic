@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -84,6 +85,17 @@ func (m Model) modalKind() string {
 	return "Album"
 }
 
+// newSearchInput builds the search box. It is bubbles' text input rather than
+// a hand-rolled one: cursor movement, deletion, paste and width are all things
+// it already gets right, and every one of them was a bug waiting in a switch
+// statement that appended a character.
+func newSearchInput() textinput.Model {
+	in := textinput.New()
+	in.Placeholder = labelTypeToSearch
+	in.Prompt = ""
+	return in
+}
+
 // openSearch opens the popover on an empty query, with the input focused.
 func (m Model) openSearch() (tea.Model, tea.Cmd) {
 	// A search is a fresh start rather than another step, so there is
@@ -94,7 +106,12 @@ func (m Model) openSearch() (tea.Model, tea.Cmd) {
 		tab:    Playlist{Title: "Search", kind: tabSearch},
 		typing: true,
 		cursor: noRow,
+		input:  newSearchInput(),
 	}
+	// The blink command is deliberately dropped: the cursor is drawn, it just
+	// does not animate. A timer per keystroke is not worth it, and a steady
+	// cursor is what most terminals give an unfocused prompt anyway.
+	m.detour.input.Focus()
 	return m, nil
 }
 
@@ -126,7 +143,8 @@ func (m Model) modalHeader(inner int) string {
 	}
 	query := m.detour.query
 	if m.detour.typing {
-		query += "█"
+		// The input draws its own cursor and handles the query's width.
+		query = m.detour.input.View()
 	} else if query == "" {
 		query = dim.Render(labelTypeToSearch)
 	}
@@ -138,7 +156,8 @@ func (m Model) modalHeader(inner int) string {
 // typeInto runs the search box. Everything reaches it while it has focus,
 // because everything is text — including the space bar, which would
 // otherwise pause what is playing mid-word.
-func (m Model) typeInto(key string) (tea.Model, tea.Cmd, bool) {
+func (m Model) typeInto(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	key := msg.String()
 	switch key {
 	case "ctrl+c":
 		return m, tea.Quit, true
@@ -158,22 +177,17 @@ func (m Model) typeInto(key string) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		m.detour.typing = false
+		m.detour.input.Blur()
 		m.detour.cursor, m.detour.offset = 0, 0
 		return m.afterDetourMove()
-	case "backspace":
-		if q := m.detour.query; q != "" {
-			m.detour.query = q[:len(q)-1]
-		}
-		return m, nil, true
-	case "space":
-		m.detour.query += " "
-		return m, nil, true
-	default:
-		if len(key) == 1 {
-			m.detour.query += key
-		}
-		return m, nil, true
 	}
+
+	var cmd tea.Cmd
+	m.detour.input, cmd = m.detour.input.Update(msg)
+	// The query stays the single source of truth the rest of the model reads;
+	// the input owns the editing, this keeps the two in step.
+	m.detour.query = m.detour.input.Value()
+	return m, cmd, true
 }
 
 func (m Model) renderModal() string {
@@ -290,15 +304,13 @@ func (m Model) modalHit(x, y int) (int, bool) {
 // viewingDetourMoreRow reports whether the popover is showing its offer of
 // another page.
 func (m Model) viewingDetourMoreRow() bool {
-	return m.detour.more.More() &&
-		m.detour.offset+m.modalRowsHeight() > len(m.detour.tracks)
+	return m.detourList().showingMore(m.modalRowsHeight())
 }
 
 // scrollDetour moves the popover's window without moving its selection, the
 // way the wheel behaves on the list underneath.
 func (m *Model) scrollDetour(delta int) {
-	m.detour.offset = clampOffset(m.detour.offset+delta,
-		m.modalRowsHeight(), m.detourRowCount())
+	m.detour.offset = m.detourList().scrolled(delta, m.modalRowsHeight())
 }
 
 // handleModalKey runs the popover. It reports whether it took the key: the
@@ -306,7 +318,7 @@ func (m *Model) scrollDetour(delta int) {
 // should not depend on what is on top.
 func (m Model) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	if m.detour.typing {
-		return m.typeInto(msg.String())
+		return m.typeInto(msg)
 	}
 	k := appKeys
 	switch {
@@ -314,6 +326,7 @@ func (m Model) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 		if m.detour.tab.kind == tabSearch {
 			m.detour.typing = true
 			m.detour.cursor, m.detour.offset = noRow, 0
+			m.detour.input.Focus()
 			return m, nil, true
 		}
 		// A search from inside a popover is still a fresh start, not
@@ -330,6 +343,7 @@ func (m Model) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 			// results again.
 			m.detour.typing = true
 			m.detour.cursor, m.detour.offset = noRow, 0
+			m.detour.input.Focus()
 			return m, nil, true
 		}
 		m.moveDetour(-1)
@@ -409,6 +423,7 @@ func (m Model) clickModal(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	// Clicking into the results is choosing one, so the keys stop going to
 	// the search input if that is where they were.
 	m.detour.typing = false
+	m.detour.input.Blur()
 	if row == len(m.detour.tracks) {
 		// The row that offers the next page is not a track.
 		m.detour.cursor = row

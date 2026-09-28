@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/cllpse/youtuimusic/internal/player"
@@ -129,7 +130,7 @@ func (f *fakeStreams) Resolve(_ context.Context, id string) (stream.Track, error
 	return stream.Track{VideoID: id, URL: "https://stream/" + id, Duration: 3 * time.Minute}, nil
 }
 
-func (f *fakeStreams) Prefetch(_ context.Context, id string) {
+func (f *fakeStreams) Prefetch(id string) {
 	f.prefetched = append(f.prefetched, id)
 }
 
@@ -558,8 +559,11 @@ func TestZeroServicesIsInert(t *testing.T) {
 	for _, k := range []string{"enter", "+", "-", " ", "down", "/"} {
 		next, cmd := m.Update(keyPress(k))
 		m = next.(Model)
+		// A command is allowed as long as it does not reach a service: a
+		// search focuses a text input, which blinks its cursor, and that is
+		// display-only like the colour request.
 		if cmd != nil {
-			t.Errorf("key %q produced a command with no services", k)
+			m = drain(t, m, cmd)
 		}
 	}
 }
@@ -716,6 +720,67 @@ func TestTheNextPageIsOnlyAskedForOnce(t *testing.T) {
 	_ = second
 	if len(lib.askedFor) != before {
 		t.Errorf("asked for %v", lib.askedFor)
+	}
+}
+
+// The load-more row carries the same spinner as everything else, and it has
+// to animate. Scrolling onto it used to mark loadingMore without ever arming
+// the tick loop, so the spinner was drawn frozen.
+func TestTheLoadMoreRowKeepsTheSpinnerMoving(t *testing.T) {
+	m := sample()
+	m.more = ytm.Continuation{Endpoint: "browse", Token: "more"}
+	m.loadingMore = true
+
+	before := m.spin.View()
+	next, cmd := m.Update(spinner.TickMsg{})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("the spinner stopped while a page was still coming")
+	}
+	if m.spin.View() == before {
+		t.Error("the spinner did not advance")
+	}
+}
+
+// Asking for the next page has to arm the spinner, not just wait for one
+// already running: the loop is started by whichever wait begins first.
+func TestAskingForTheNextPageArmsTheSpinner(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.tracks["LM"] = fromUI(rows(2))
+	lib.next = ytm.Continuation{Endpoint: "browse", Token: "more"}
+
+	m := wired(t, lib, st, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}}
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+
+	m.trackCursor = len(m.Tracks)
+	next, cmd := m.fetchMore(false)
+	m = next.(Model)
+	if !m.loadingMore {
+		t.Fatal("the ask did not start")
+	}
+	if cmd == nil {
+		t.Fatal("asking for a page produced no command")
+	}
+
+	// Run the batch and look for the spinner's tick among the commands.
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("got %T, want a batch", msg)
+	}
+	ticked := false
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		if _, isTick := c().(spinner.TickMsg); isTick {
+			ticked = true
+		}
+	}
+	if !ticked {
+		t.Error("the next-page wait did not arm the spinner")
 	}
 }
 

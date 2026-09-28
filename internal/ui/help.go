@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"sync"
 
 	"charm.land/bubbles/v2/help"
 	tea "charm.land/bubbletea/v2"
@@ -48,11 +49,25 @@ var helpButtonWidth = buttonWidth(labelHelp)
 // sheetLines is the help view's own rendering of the bindings, as lines. A
 // width of zero means uncapped, which is how the sheet asks what the columns
 // would like to be before deciding what they get.
+//
+// The result is memoised by width: the bindings never change at runtime, and
+// the sheet's layout asks for the same one or two widths several times when it
+// draws. Rendering help is the most expensive thing a frame with the sheet up
+// does, and it was being done three or four times.
 func sheetLines(width int) []string {
+	if lines, ok := sheetCache.Load(width); ok {
+		return lines.([]string)
+	}
 	v := helpView
 	v.SetWidth(width)
-	return strings.Split(v.View(appKeys), "\n")
+	lines := strings.Split(v.View(appKeys), "\n")
+	sheetCache.Store(width, lines)
+	return lines
 }
+
+// sheetCache holds one rendered help layout per width. The bindings are fixed
+// for the process, so a width is a complete key.
+var sheetCache sync.Map
 
 // sheetInner is how wide the inside of the box is: what the columns ask for,
 // never less than the title row needs, and never more than the screen holds.

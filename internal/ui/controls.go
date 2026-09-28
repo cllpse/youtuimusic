@@ -363,18 +363,35 @@ func (m Model) open(t Track) (tea.Model, tea.Cmd) {
 }
 
 // start plays a track, showing it at once because resolving takes a moment.
+// The listing it came from is remembered so that advancing does not depend on
+// which tab happens to be in front when the track runs out.
 func (m Model) start(t Track) (tea.Model, tea.Cmd) {
 	m.playing, m.Position, m.Length = t, 0, t.Duration
+	m.playingFrom = m.currentTab().ID
 	return m, m.play(t)
 }
 
-// indexOfPlaying finds the playing track in the list on screen, which it is
-// not in once another tab is opened.
+// playingTracks is the listing the playing track belongs to: the visible one
+// when that is where it is, otherwise whatever is cached for the tab it was
+// started from. Without the fallback, switching tabs stops playback at the end
+// of the current track.
+func (m Model) playingTracks() []Track {
+	if m.playingFrom == m.showingID {
+		return m.Tracks
+	}
+	if entry, ok := m.cache[m.playingFrom]; ok {
+		return entry.tracks
+	}
+	return m.Tracks
+}
+
+// indexOfPlaying finds the playing track in the listing it belongs to.
 func (m Model) indexOfPlaying() (int, bool) {
 	if m.playing.VideoID == "" {
 		return 0, false
 	}
-	for i, t := range m.Tracks {
+	rows := m.playingTracks()
+	for i, t := range rows {
 		if t.VideoID == m.playing.VideoID {
 			return i, true
 		}
@@ -389,14 +406,15 @@ func (m Model) following() (Track, bool) {
 	if !ok {
 		return Track{}, false
 	}
+	rows := m.playingTracks()
 	switch m.repeat {
 	case RepeatOne:
-		return m.Tracks[i], true
+		return rows[i], true
 	case RepeatAll:
-		return m.Tracks[(i+1)%len(m.Tracks)], true
+		return rows[(i+1)%len(rows)], true
 	default:
-		if i+1 < len(m.Tracks) {
-			return m.Tracks[i+1], true
+		if i+1 < len(rows) {
+			return rows[i+1], true
 		}
 		return Track{}, false
 	}
@@ -409,11 +427,12 @@ func (m Model) preceding() (Track, bool) {
 	if !ok {
 		return Track{}, false
 	}
+	rows := m.playingTracks()
 	if i > 0 {
-		return m.Tracks[i-1], true
+		return rows[i-1], true
 	}
 	if m.repeat == RepeatAll {
-		return m.Tracks[len(m.Tracks)-1], true
+		return rows[len(rows)-1], true
 	}
 	return Track{}, false
 }

@@ -640,7 +640,11 @@ func TestAQueueLeavesOutTheVideoCounterparts(t *testing.T) {
 	raw := []byte(`{"contents":{"playlistPanelRenderer":{"contents":[` +
 		plain + `,` + wrapped + `]}}}`)
 
-	got := queueTracks(raw)
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := queueTracks(tree)
 	if len(got) != 2 {
 		t.Fatalf("got %d tracks, want one per row: %+v", len(got), got)
 	}

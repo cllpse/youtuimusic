@@ -28,7 +28,7 @@ func (lavfiStreams) Resolve(_ context.Context, id string) (stream.Track, error) 
 		Duration: time.Second,
 	}, nil
 }
-func (lavfiStreams) Prefetch(context.Context, string) {}
+func (lavfiStreams) Prefetch(string) {}
 
 // run drives the model until the condition holds, and fails if it never
 // does.

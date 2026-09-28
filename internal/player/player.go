@@ -39,6 +39,16 @@ type Event struct {
 // hears anything.
 const EndFile = "end-file"
 
+// The properties this package observes. They are exported because the UI
+// matches on them by name: with the names in one place, a typo is a compile
+// error rather than an event that silently never matches.
+const (
+	PropTimePos  = "time-pos"
+	PropDuration = "duration"
+	PropPause    = "pause"
+	PropVolume   = "volume"
+)
+
 // Player is a running mpv process and the connection to it. It is safe for
 // concurrent use.
 type Player struct {
@@ -50,7 +60,17 @@ type Player struct {
 	nextID  int64
 	pending map[int64]chan response
 
-	events chan Event
+	// events is the single stream the consumer reads. readLoop feeds incoming
+	// (control changes) and positions (playback position) to pump, which is the
+	// only writer of events and the only thing that closes it.
+	//
+	// The split exists because the two kinds of event need opposite treatment:
+	// a dropped end-file or pause desyncs the app, while a dropped time-pos is
+	// nothing — the latest one is already the truth. So control changes are
+	// never dropped and positions are coalesced to the newest.
+	events    chan Event
+	incoming  chan Event
+	positions chan float64
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -63,7 +83,7 @@ type response struct {
 }
 
 // observed properties are pushed to Events() as they change.
-var observed = []string{"time-pos", "duration", "pause", "eof-reached", "volume"}
+var observed = []string{PropTimePos, PropDuration, PropPause, PropVolume}
 
 // New starts an mpv process and connects to its IPC socket.
 func New(ctx context.Context) (*Player, error) {
@@ -94,13 +114,16 @@ func New(ctx context.Context) (*Player, error) {
 	}
 
 	p := &Player{
-		cmd:     cmd,
-		conn:    conn,
-		socket:  socket,
-		pending: make(map[int64]chan response),
-		events:  make(chan Event, 64),
-		closed:  make(chan struct{}),
+		cmd:       cmd,
+		conn:      conn,
+		socket:    socket,
+		pending:   make(map[int64]chan response),
+		events:    make(chan Event, 64),
+		incoming:  make(chan Event, 256),
+		positions: make(chan float64, 1),
+		closed:    make(chan struct{}),
 	}
+	go p.pump()
 	go p.readLoop()
 
 	for i, name := range observed {
@@ -133,9 +156,9 @@ func dialSocket(ctx context.Context, socket string) (net.Conn, error) {
 }
 
 // readLoop demultiplexes the single socket: replies go to whoever is waiting on
-// that request id, property changes go to the events channel.
+// that request id, property changes to pump. It never writes to events itself,
+// so pump is the only writer and the only closer of that channel.
 func (p *Player) readLoop() {
-	defer close(p.events)
 	scanner := bufio.NewScanner(p.conn)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
@@ -183,11 +206,71 @@ func (p *Player) readLoop() {
 	}
 }
 
-// publish hands an event to the consumer, dropping it rather than letting a
-// slow one block mpv's reader.
-func (p *Player) publish(ev Event) {
+// pump turns the two internal streams into the one Events() stream. Control
+// changes are passed straight through; playback positions are collapsed to
+// whichever is newest while the consumer is busy. It is the only writer of
+// events, and closes it on shutdown so a reader sees the stream end.
+func (p *Player) pump() {
+	defer close(p.events)
+	for {
+		select {
+		case <-p.closed:
+			return
+		case ev := <-p.incoming:
+			if !p.emit(ev) {
+				return
+			}
+		case f := <-p.positions:
+			if !p.emit(Event{Name: PropTimePos, Data: f}) {
+				return
+			}
+		}
+	}
+}
+
+// emit writes one event, reporting false once the player is shutting down.
+func (p *Player) emit(ev Event) bool {
 	select {
 	case p.events <- ev:
+		return true
+	case <-p.closed:
+		return false
+	}
+}
+
+// publish routes an event from the socket. A position goes to the latest-wins
+// slot; everything else goes to the control stream, where it is never dropped.
+// Blocking on the control stream is deliberate and safe: the consumer always
+// drains it, and a pause or end-file matters more than a stalled event bus.
+func (p *Player) publish(ev Event) {
+	if ev.Name == PropTimePos {
+		p.queuePosition(ev.Data)
+		return
+	}
+	select {
+	case p.incoming <- ev:
+	case <-p.closed:
+	}
+}
+
+// queuePosition keeps only the newest position. The slot holds one value; when
+// it is full the stale one is dropped so the fresh one can take its place.
+func (p *Player) queuePosition(data any) {
+	f, ok := data.(float64)
+	if !ok {
+		return
+	}
+	select {
+	case p.positions <- f:
+		return
+	default:
+	}
+	select {
+	case <-p.positions:
+	default:
+	}
+	select {
+	case p.positions <- f:
 	default:
 	}
 }
@@ -262,13 +345,13 @@ func (p *Player) TogglePause() error {
 
 // SetPaused pauses or resumes playback.
 func (p *Player) SetPaused(paused bool) error {
-	_, err := p.command("set_property", "pause", paused)
+	_, err := p.command("set_property", PropPause, paused)
 	return err
 }
 
 // Paused reports whether playback is paused.
 func (p *Player) Paused() (bool, error) {
-	raw, err := p.command("get_property", "pause")
+	raw, err := p.command("get_property", PropPause)
 	if err != nil {
 		return false, err
 	}
@@ -284,10 +367,10 @@ func (p *Player) Seek(seconds float64) error {
 
 // Position returns the playback position in seconds. Callers should normally
 // prefer the time-pos events instead of polling this.
-func (p *Player) Position() (float64, error) { return p.floatProperty("time-pos") }
+func (p *Player) Position() (float64, error) { return p.floatProperty(PropTimePos) }
 
 // Duration returns the length of the current track in seconds.
-func (p *Player) Duration() (float64, error) { return p.floatProperty("duration") }
+func (p *Player) Duration() (float64, error) { return p.floatProperty(PropDuration) }
 
 // ErrUnavailable is mpv's way of saying a property has no value yet — with
 // nothing loaded, time-pos and duration are unavailable rather than zero.
@@ -311,13 +394,13 @@ func (p *Player) floatProperty(name string) (float64, error) {
 
 // SetVolume sets the volume as a percentage (0-100).
 func (p *Player) SetVolume(percent int) error {
-	_, err := p.command("set_property", "volume", percent)
+	_, err := p.command("set_property", PropVolume, percent)
 	return err
 }
 
 // Volume returns the current volume percentage.
 func (p *Player) Volume() (int, error) {
-	v, err := p.floatProperty("volume")
+	v, err := p.floatProperty(PropVolume)
 	return int(v), err
 }
 

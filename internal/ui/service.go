@@ -35,7 +35,8 @@ type Library interface {
 // Streams turns a video id into a playable URL.
 type Streams interface {
 	Resolve(ctx context.Context, videoID string) (stream.Track, error)
-	Prefetch(ctx context.Context, videoID string)
+	// Prefetch warms the cache for a track without blocking or reporting.
+	Prefetch(videoID string)
 }
 
 // Audio is the running player.
@@ -72,6 +73,9 @@ type (
 	moreMsg struct {
 		page     ytm.Page
 		inDetour bool
+		// autoplay is set when the page was fetched to keep a track that ran
+		// out going. The arrival then advances instead of just appending.
+		autoplay bool
 		err      error
 	}
 	ratedMsg struct {
@@ -193,7 +197,7 @@ func (m Model) runSearch(query string) tea.Cmd {
 }
 
 // loadMore fetches the page after the one a list is showing.
-func (m Model) loadMore(from ytm.Continuation, inDetour bool) tea.Cmd {
+func (m Model) loadMore(from ytm.Continuation, inDetour, autoplay bool) tea.Cmd {
 	lib := m.services.Library
 	if lib == nil || !from.More() {
 		return nil
@@ -202,7 +206,7 @@ func (m Model) loadMore(from ytm.Continuation, inDetour bool) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		page, err := lib.More(ctx, from)
-		return moreMsg{page: page, inDetour: inDetour, err: err}
+		return moreMsg{page: page, inDetour: inDetour, autoplay: autoplay, err: err}
 	}
 }
 
@@ -251,17 +255,16 @@ func (m Model) play(t Track) tea.Cmd {
 // prefetch warms the cache for a row the cursor is sitting on. A cold
 // resolve is ~2.3s and a cached one ~600ns, so this is where the
 // responsiveness of pressing play actually comes from.
+//
+// The resolve keeps working after this command returns, so the Resolver owns
+// the context's lifetime; there is nothing here to leak.
 func (m Model) prefetch(videoID string) tea.Cmd {
 	streams := m.services.Streams
 	if streams == nil || videoID == "" {
 		return nil
 	}
 	return func() tea.Msg {
-		// Prefetch returns immediately and keeps working, so the context has
-		// to outlive this command; a timer releases it instead of a defer.
-		ctx, cancel := context.WithCancel(context.Background())
-		time.AfterFunc(resolveTimeout, cancel)
-		streams.Prefetch(ctx, videoID)
+		streams.Prefetch(videoID)
 		return nil
 	}
 }

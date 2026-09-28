@@ -43,6 +43,7 @@ type keyMap struct {
 	Search      key.Binding
 	Sort        key.Binding
 	SortReverse key.Binding
+	Refresh     key.Binding
 	Close       key.Binding
 	Help        key.Binding
 	Quit        key.Binding
@@ -112,6 +113,9 @@ var appKeys = keyMap{
 	SortReverse: key.NewBinding(
 		key.WithKeys("S"),
 		key.WithHelp("S", "reverse the sort")),
+	Refresh: key.NewBinding(
+		key.WithKeys("R"),
+		key.WithHelp("R", "refetch this list")),
 	Close: key.NewBinding(
 		key.WithKeys("esc"),
 		key.WithHelp("esc", "close what is in front")),
@@ -130,7 +134,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.PlayPause, k.Next, k.Previous, k.Repeat, k.Like, k.Dislike},
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom, k.PrevTab, k.NextTab},
-		{k.Open, k.Search, k.Mix, k.Sort, k.SortReverse, k.Close, k.Help, k.Quit},
+		{k.Open, k.Search, k.Mix, k.Sort, k.SortReverse, k.Refresh, k.Close, k.Help, k.Quit},
 	}
 }
 

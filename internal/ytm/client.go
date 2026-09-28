@@ -92,7 +92,10 @@ func (c *Client) clientVersion() string {
 	return "1." + c.Now().Format("20060102") + ".01.00"
 }
 
-func (c *Client) post(ctx context.Context, endpoint string, body map[string]any) (json.RawMessage, error) {
+// post sends a request and returns the parsed response tree. It unmarshals
+// exactly once: every reader of an InnerTube response searches the same tree,
+// and unmarshalling per reader is what made a mix page cost four passes.
+func (c *Client) post(ctx context.Context, endpoint string, body map[string]any) (map[string]any, error) {
 	authz, err := c.authorization()
 	if err != nil {
 		return nil, err
@@ -152,38 +155,51 @@ func (c *Client) post(ctx context.Context, endpoint string, body map[string]any)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("ytm: %s: HTTP %d", endpoint, resp.StatusCode)
 	}
-	if !loggedIn(raw) {
-		return raw, ErrSignedOut
+
+	var tree map[string]any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		return nil, fmt.Errorf("ytm: %s: parse: %w", endpoint, err)
 	}
-	return raw, nil
+	if !loggedIn(tree) {
+		return tree, ErrSignedOut
+	}
+	return tree, nil
 }
 
-// loggedIn reads the server's own view of the session out of the response.
-// Trusting this rather than the presence of cookies is deliberate: cookies can
-// be present, unexpired and still rejected, which is exactly how a dead
-// session hides as "you have no playlists".
-func loggedIn(raw []byte) bool {
-	var envelope struct {
-		ResponseContext struct {
-			ServiceTrackingParams []struct {
-				Params []struct {
-					Key   string `json:"key"`
-					Value string `json:"value"`
-				} `json:"params"`
-			} `json:"serviceTrackingParams"`
-		} `json:"responseContext"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return false
-	}
-	for _, svc := range envelope.ResponseContext.ServiceTrackingParams {
-		for _, p := range svc.Params {
-			if p.Key == "logged_in" {
-				return p.Value == "1"
+// loggedIn reads the server's own view of the session out of the response
+// tree. Trusting this rather than the presence of cookies is deliberate:
+// cookies can be present, unexpired and still rejected, which is exactly how a
+// dead session hides as "you have no playlists".
+//
+// It walks for the one parameter rather than unmarshalling an envelope: the
+// tree is already in hand, and a second parse of a multi-megabyte page is what
+// this function used to cost.
+func loggedIn(tree any) bool {
+	value, ok := findParam(tree, "logged_in")
+	return ok && value == "1"
+}
+
+// findParam finds the value of a serviceTrackingParams entry by key.
+func findParam(node any, key string) (string, bool) {
+	switch v := node.(type) {
+	case map[string]any:
+		if k, _ := v["key"].(string); k == key {
+			value, _ := v["value"].(string)
+			return value, true
+		}
+		for _, child := range v {
+			if value, ok := findParam(child, key); ok {
+				return value, true
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if value, ok := findParam(child, key); ok {
+				return value, true
 			}
 		}
 	}
-	return false
+	return "", false
 }
 
 // Playlist is an entry in the library sidebar.
@@ -195,13 +211,9 @@ type Playlist struct {
 
 // LibraryPlaylists returns the playlists in the signed-in user's library.
 func (c *Client) LibraryPlaylists(ctx context.Context) ([]Playlist, error) {
-	raw, err := c.post(ctx, "browse", map[string]any{"browseId": "FEmusic_liked_playlists"})
+	tree, err := c.post(ctx, "browse", map[string]any{"browseId": "FEmusic_liked_playlists"})
 	if err != nil {
 		return nil, err
-	}
-	var tree any
-	if err := json.Unmarshal(raw, &tree); err != nil {
-		return nil, fmt.Errorf("ytm: browse: %w", err)
 	}
 
 	var out []Playlist
@@ -272,4 +284,28 @@ func findAll(node any, key string) []any {
 	}
 	walk(node)
 	return out
+}
+
+// findFirst is findAll for the many callers that stop at the first hit. It
+// does not build the slice findAll would, which matters when the hit is found
+// near the top of a multi-megabyte page.
+func findFirst(node any, key string) (any, bool) {
+	switch v := node.(type) {
+	case map[string]any:
+		if hit, ok := v[key]; ok {
+			return hit, true
+		}
+		for _, child := range v {
+			if hit, ok := findFirst(child, key); ok {
+				return hit, true
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if hit, ok := findFirst(child, key); ok {
+				return hit, true
+			}
+		}
+	}
+	return nil, false
 }

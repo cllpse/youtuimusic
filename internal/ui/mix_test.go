@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/cllpse/youtuimusic/internal/player"
 	"github.com/cllpse/youtuimusic/internal/state"
 	"github.com/cllpse/youtuimusic/internal/ytm"
 )
@@ -264,5 +265,92 @@ func TestAMixOffersItsNextPage(t *testing.T) {
 	}
 	if len(m.Tracks) != before+1 || m.Tracks[before].Title != "further in" {
 		t.Fatalf("tracks = %+v", m.Tracks)
+	}
+}
+
+// A mix is endless, so a track running out at the end of what has been fetched
+// must ask for more of it rather than stop the radio. This is the whole point
+// of a mix: it goes on.
+func TestAMixGoesOnWhenThePageRunsOut(t *testing.T) {
+	m, lib, _ := mixModel(t)
+	lib.next = ytm.Continuation{Endpoint: "next", Token: "on-and-on"}
+	lib.morePage = fromUI([]Track{{VideoID: "after", Title: "After"}})
+
+	next, cmd := m.press(controlMix)
+	m = drain(t, next.(Model), cmd)
+
+	// Play the last track already fetched and let it run out.
+	last := m.Tracks[len(m.Tracks)-1]
+	started, play := m.start(last)
+	m = drain(t, started.(Model), play)
+
+	ended, cmd := m.Update(eventMsg(player.Event{Name: player.EndFile, Data: "eof"}))
+	m = drain(t, ended.(Model), cmd)
+
+	if m.playing.VideoID != "after" {
+		t.Fatalf("playing %q, want the next page's track", m.playing.VideoID)
+	}
+}
+
+// Switching tabs is not stopping the music. A track that runs out while the
+// reader is looking somewhere else still advances, from the listing it was
+// started from rather than from whatever is on screen.
+func TestSwitchingTabsDoesNotStopTheMix(t *testing.T) {
+	m, lib, _ := mixModel(t)
+	lib.tracks["PL1"] = []ytm.Track{{VideoID: "p1", Title: "One"}}
+
+	next, cmd := m.press(controlMix)
+	m = drain(t, next.(Model), cmd)
+	seed := m.playing.VideoID
+	if seed == "" {
+		t.Fatal("the mix did not start playing")
+	}
+
+	switched, cmd := m.selectTab(2)
+	m = drain(t, switched, cmd)
+	if m.showingID == m.mix.ID {
+		t.Fatal("still showing the mix")
+	}
+
+	ended, cmd := m.Update(eventMsg(player.Event{Name: player.EndFile, Data: "eof"}))
+	m = drain(t, ended.(Model), cmd)
+
+	if m.playing.VideoID == seed {
+		t.Errorf("playback did not advance from %q", seed)
+	}
+	if m.playing.VideoID != seed+"-mix" {
+		t.Errorf("playing %q, want the track after the seed", m.playing.VideoID)
+	}
+}
+
+// A mix is the server's order and it is endless, so there is no order of the
+// reader's to complete and nothing to page through looking for one.
+func TestAMixIsNotSorted(t *testing.T) {
+	m, _, _ := mixModel(t)
+	next, cmd := m.press(controlMix)
+	m = drain(t, next.(Model), cmd)
+
+	if sorted := press(m, "s"); sorted.sort.by != sortNone {
+		t.Errorf("a mix was sorted by %v", sorted.sort.by)
+	}
+	if reversed := press(m, "S"); reversed.sort.by != sortNone {
+		t.Errorf("a mix was reverse-sorted by %v", reversed.sort.by)
+	}
+}
+
+// A listing held in memory can go stale while the app is open. R throws it
+// away and asks again, keeping the reader's place.
+func TestRefreshRefetchesTheList(t *testing.T) {
+	m, lib, _ := mixModel(t)
+	before := len(lib.askedFor)
+
+	next, cmd := m.Update(keyPress("R"))
+	m = drain(t, next.(Model), cmd)
+
+	if len(lib.askedFor) <= before {
+		t.Fatalf("nothing was refetched: %v", lib.askedFor)
+	}
+	if last := lib.askedFor[len(lib.askedFor)-1]; last != likedPlaylistID {
+		t.Errorf("refetched %q, want the tab in front %q", last, likedPlaylistID)
 	}
 }

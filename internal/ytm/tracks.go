@@ -2,7 +2,6 @@ package ytm
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -120,11 +119,7 @@ func (c *Client) Radio(ctx context.Context, videoID string) (Page, error) {
 // No rating comes back on these rows. The panel carries a like button rather
 // than a like status, so a mix opens with nothing marked and marks what you
 // rate while you are in it.
-func queueTracks(raw json.RawMessage) []Track {
-	var tree any
-	if err := json.Unmarshal(raw, &tree); err != nil {
-		return nil
-	}
+func queueTracks(tree any) []Track {
 	skip := counterparts(tree)
 	var out []Track
 	for _, node := range findAll(tree, "playlistPanelVideoRenderer") {
@@ -230,48 +225,38 @@ func (c *Client) More(ctx context.Context, from Continuation) (Page, error) {
 // It is also what a continuation carries, so the page after a mix is read the
 // same way the first one was.
 func (c *Client) page(ctx context.Context, endpoint string, body map[string]any) (Page, error) {
-	raw, err := c.post(ctx, endpoint, body)
+	tree, err := c.post(ctx, endpoint, body)
 	if err != nil {
 		return Page{}, err
 	}
 	var tracks []Track
 	if endpoint == queueEndpoint {
-		tracks = queueTracks(raw)
-	} else if tracks, err = c.parseTracks(raw); err != nil {
-		return Page{}, err
+		tracks = queueTracks(tree)
+	} else {
+		tracks = c.parseTracks(tree)
 	}
 	return Page{
 		Tracks: tracks,
-		Next:   Continuation{Endpoint: endpoint, Token: continuationToken(raw)},
+		Next:   Continuation{Endpoint: endpoint, Token: continuationToken(tree)},
 	}, nil
 }
 
 // continuationToken finds the token for the next page. The newer shape came
 // in without the older one going away, so both are looked for.
-func continuationToken(raw json.RawMessage) string {
-	var tree any
-	if err := json.Unmarshal(raw, &tree); err != nil {
-		return ""
-	}
-	for _, node := range findAll(tree, "continuationCommand") {
-		if command, ok := node.(map[string]any); ok {
-			if token, _ := command["token"].(string); token != "" {
-				return token
-			}
+func continuationToken(tree any) string {
+	for _, key := range []string{"continuationCommand", "nextContinuationData", "nextRadioContinuationData"} {
+		node, ok := findFirst(tree, key)
+		if !ok {
+			continue
 		}
-	}
-	for _, node := range findAll(tree, "nextContinuationData") {
-		if data, ok := node.(map[string]any); ok {
-			if token, _ := data["continuation"].(string); token != "" {
-				return token
-			}
+		data, ok := node.(map[string]any)
+		if !ok {
+			continue
 		}
-	}
-	// A queue has a third one of its own. A mix is endless, so this is the
-	// token that keeps it going: the page after it comes back with another.
-	for _, node := range findAll(tree, "nextRadioContinuationData") {
-		if data, ok := node.(map[string]any); ok {
-			if token, _ := data["continuation"].(string); token != "" {
+		// The two old shapes spell the field differently; the command carries
+		// the token itself.
+		for _, field := range []string{"token", "continuation"} {
+			if token, _ := data[field].(string); token != "" {
 				return token
 			}
 		}
@@ -297,28 +282,20 @@ func (c *Client) ArtistPage(ctx context.Context, browseID string) (Page, error) 
 	if browseID == "" {
 		return Page{}, fmt.Errorf("ytm: browse: no id")
 	}
-	raw, err := c.post(ctx, "browse", map[string]any{"browseId": browseID})
-	if err != nil {
-		return Page{}, err
-	}
-	songs, err := c.parseTracks(raw)
+	tree, err := c.post(ctx, "browse", map[string]any{"browseId": browseID})
 	if err != nil {
 		return Page{}, err
 	}
 	return Page{
-		Tracks: append(songs, parseReleases(raw)...),
-		Next:   Continuation{Endpoint: "browse", Token: continuationToken(raw)},
+		Tracks: append(c.parseTracks(tree), parseReleases(tree)...),
+		Next:   Continuation{Endpoint: "browse", Token: continuationToken(tree)},
 	}, nil
 }
 
 // parseReleases pulls the album tiles off a page. They are a different
 // renderer from a track row — a tile rather than a line — which is why the
 // track parser walks straight past them.
-func parseReleases(raw json.RawMessage) []Track {
-	var tree any
-	if err := json.Unmarshal(raw, &tree); err != nil {
-		return nil
-	}
+func parseReleases(tree any) []Track {
 	var out []Track
 	seen := make(map[string]bool)
 	for _, node := range findAll(tree, "musicTwoRowItemRenderer") {
@@ -365,13 +342,8 @@ func (c *Client) Rate(ctx context.Context, videoID string, r Rating) error {
 	return err
 }
 
-// parseTracks pulls every track row out of a browse or search response.
-func (c *Client) parseTracks(raw json.RawMessage) ([]Track, error) {
-	var tree any
-	if err := json.Unmarshal(raw, &tree); err != nil {
-		return nil, fmt.Errorf("ytm: parse: %w", err)
-	}
-
+// parseTracks pulls every track row out of a browse or search response tree.
+func (c *Client) parseTracks(tree any) []Track {
 	var out []Track
 	for _, node := range findAll(tree, "musicResponsiveListItemRenderer") {
 		item, ok := node.(map[string]any)
@@ -404,7 +376,7 @@ func (c *Client) parseTracks(raw json.RawMessage) ([]Track, error) {
 		}
 		out = append(out, t)
 	}
-	return out, nil
+	return out
 }
 
 // artistAndAlbum reads a row's artist and album.

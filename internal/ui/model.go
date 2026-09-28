@@ -14,10 +14,10 @@ import (
 
 	"charm.land/bubbles/v2/progress"
 	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/cllpse/youtuimusic/internal/player"
 	"github.com/cllpse/youtuimusic/internal/state"
 	"github.com/cllpse/youtuimusic/internal/ytm"
 )
@@ -133,8 +133,11 @@ type Model struct {
 	// playing is the track mpv is on, held whole rather than by id so the
 	// controls can still show and rate it after another tab is opened.
 	playing Track
-	repeat  Repeat
-	loading bool
+	// playingFrom is the listing that track was started from, so advancing
+	// does not depend on which tab is in front when it runs out.
+	playingFrom string
+	repeat      Repeat
+	loading     bool
 
 	// highlight is the selected row's fill and dimmed the colour of a line
 	// that has to be quiet, both derived from the terminal's own background.
@@ -240,14 +243,31 @@ func batch(cmds ...tea.Cmd) tea.Cmd {
 	return tea.Batch(live...)
 }
 
+// busy is whether anything on screen is waiting on the network. The spinner
+// runs while it is true: a full load and a next page are both waits, and the
+// load-more row carries the same spinner as the centred one.
+func (m Model) busy() bool { return m.loading || m.loadingMore }
+
 // startLoading turns the spinner on and starts its tick loop. The loop runs
 // only while something is loading, so an idle screen is not redrawn eight
 // times a second forever.
 func (m *Model) startLoading() tea.Cmd {
-	if m.loading {
-		return nil // already ticking
-	}
+	already := m.busy()
 	m.loading = true
+	if already {
+		return nil // the loop is already running
+	}
+	return m.spin.Tick
+}
+
+// startLoadingMore is startLoading for the next-page row, which is the same
+// wait under a different flag.
+func (m *Model) startLoadingMore() tea.Cmd {
+	already := m.busy()
+	m.loadingMore = true
+	if already {
+		return nil
+	}
 	return m.spin.Tick
 }
 
@@ -276,6 +296,9 @@ type detour struct {
 	// list is chosen — cursor is noRow and the results are just results.
 	query  string
 	typing bool
+	// input owns the query's editing; query mirrors its value for the rest
+	// of the model to read.
+	input textinput.Model
 	// searched is the query the results below belong to, which is not the
 	// query being typed. Empty until one has been run, which is how the
 	// popover tells "nothing typed yet" from "nothing found".
@@ -351,24 +374,28 @@ func (m Model) selectedDetourTrack() (Track, bool) {
 }
 
 // detourRowCount is the popover's tracks plus its offer of another page.
-func (m Model) detourRowCount() int {
-	if m.detour.more.More() {
-		return len(m.detour.tracks) + 1
+func (m Model) detourRowCount() int { return m.detourList().rowCount() }
+
+// detourList is the popover's window in the form the shared list arithmetic
+// takes.
+func (m Model) detourList() listPos {
+	return listPos{
+		cursor:  m.detour.cursor,
+		offset:  m.detour.offset,
+		total:   len(m.detour.tracks),
+		hasMore: m.detour.more.More(),
 	}
-	return len(m.detour.tracks)
 }
 
 // moveDetour moves the popover's cursor and scrolls to keep it in view.
 func (m *Model) moveDetour(delta int) {
-	m.detour.cursor = clamp(m.detour.cursor+delta, m.detourRowCount())
-	m.detour.offset = keepVisible(m.detour.cursor, m.detour.offset,
-		m.modalRowsHeight(), m.detourRowCount())
+	m.detour.cursor, m.detour.offset = m.detourList().moving(delta, m.modalRowsHeight())
 }
 
 // afterDetourMove takes up the offer of another page when the cursor
 // reaches it, the same way the list underneath does.
 func (m Model) afterDetourMove() (tea.Model, tea.Cmd, bool) {
-	if m.detour.more.More() && m.detour.cursor == len(m.detour.tracks) {
+	if m.detourList().atMore() {
 		next, cmd := m.fetchMore(true)
 		return next, cmd, true
 	}
@@ -474,20 +501,6 @@ func (m Model) showTab() (Model, tea.Cmd) {
 
 // tabLoadDelay lets a run across the tabs settle before anything is asked
 // of the server. Holding a key would otherwise be one request per tab.
-const tabLoadDelay = 150 * time.Millisecond
-
-type tabLoadMsg struct{ generation int }
-
-func (m *Model) scheduleTabLoad() tea.Cmd {
-	if m.services.Library == nil {
-		return nil
-	}
-	m.tabGen++
-	generation := m.tabGen
-	return tea.Tick(tabLoadDelay, func(time.Time) tea.Msg {
-		return tabLoadMsg{generation: generation}
-	})
-}
 
 // -------------------------------------------------------------- cursor ---
 
@@ -503,23 +516,25 @@ func (m Model) SelectedTrack() (Track, bool) {
 func (m Model) TrackCursor() int { return m.trackCursor }
 
 // rowCount is the tracks plus the row that offers the next page.
-func (m Model) rowCount() int {
-	if m.more.More() {
-		return len(m.Tracks) + 1
+func (m Model) rowCount() int { return m.list().rowCount() }
+
+// list is the main table's window in the form the shared list arithmetic
+// takes.
+func (m Model) list() listPos {
+	return listPos{
+		cursor:  m.trackCursor,
+		offset:  m.trackOffset,
+		total:   len(m.Tracks),
+		hasMore: m.more.More(),
 	}
-	return len(m.Tracks)
 }
 
 // atMoreRow reports whether the cursor is sitting on the offer of another
 // page.
-func (m Model) atMoreRow() bool {
-	return m.more.More() && m.trackCursor == len(m.Tracks)
-}
+func (m Model) atMoreRow() bool { return m.list().atMore() }
 
 // viewingMoreRow reports whether the offer of another page is on screen.
-func (m Model) viewingMoreRow() bool {
-	return m.more.More() && m.trackOffset+m.listHeight() > len(m.Tracks)
-}
+func (m Model) viewingMoreRow() bool { return m.list().showingMore(m.listHeight()) }
 
 // afterCursorMove warms the row the cursor landed on — or, when that row is
 // the offer of another page, takes it up. Reaching the end of a list is the
@@ -543,20 +558,43 @@ func (m Model) fetchMore(inDetour bool) (tea.Model, tea.Cmd) {
 	if !from.More() {
 		return m, nil
 	}
-	m.loadingMore = true
-	return m, m.loadMore(from, inDetour)
+	return m, batch(m.startLoadingMore(), m.loadMore(from, inDetour, false))
+}
+
+// fetchMoreToPlay asks for the next page because a track ran out at the end of
+// the one already fetched. A mix is endless, so without this the radio stops at
+// whatever page happened to be loaded when the track ended.
+func (m Model) fetchMoreToPlay() (tea.Model, tea.Cmd) {
+	if m.loadingMore || !m.more.More() {
+		return m, nil
+	}
+	return m, batch(m.startLoadingMore(), m.loadMore(m.more, false, true))
+}
+
+// refreshTab refetches the listing in front, ignoring what is cached. A
+// listing kept in memory is a listing that can go stale: a playlist edited on
+// the web never shows up here otherwise, and the cache has no expiry because a
+// process is short-lived.
+func (m Model) refreshTab() (tea.Model, tea.Cmd) {
+	tab := m.currentTab()
+	if m.services.Library == nil || tab.ID == "" || tab.kind == tabSearch {
+		return m, nil
+	}
+	delete(m.cache, tab.ID)
+	// showingID is left alone so the reader keeps their place in the list
+	// when the refetch lands.
+	return m, batch(m.startLoading(), m.fetchTracks(tab))
 }
 
 // moveCursor moves the track cursor and scrolls to keep it in view.
 func (m *Model) moveCursor(delta int) {
-	m.trackCursor = clamp(m.trackCursor+delta, m.rowCount())
-	m.scroll()
+	m.trackCursor, m.trackOffset = m.list().moving(delta, m.listHeight())
 }
 
 // scrollBy moves the window and leaves the selection where it is, so the
 // list can be looked through without losing the cursor's place.
 func (m *Model) scrollBy(delta int) {
-	m.trackOffset = clampOffset(m.trackOffset+delta, m.listHeight(), m.rowCount())
+	m.trackOffset = m.list().scrolled(delta, m.listHeight())
 }
 
 // scroll moves the window only far enough to keep the cursor on screen.
@@ -573,536 +611,9 @@ func clamp(v, length int) int {
 
 // -------------------------------------------------------------- update ---
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.BackgroundColorMsg:
-		// A tint of the page rather than an entry from the scheme. The
-		// sixteen colours have exactly one grey for a highlight, and a
-		// light theme has to spend it on being a shade of the background:
-		// #BDBDBD on a #FFFFFF page is a band, not a highlight. Nudging the
-		// terminal's own background toward its foreground gives a lighter
-		// mark than the scheme can name, and one that follows the theme.
-		// A terminal that does not know its own background can answer with
-		// nothing, and a tint of nothing is nothing: the row would be
-		// styled and invisible. Keep the fallback instead.
-		if msg.Color == nil {
-			return m, nil
-		}
-		if _, _, _, alpha := msg.RGBA(); alpha == 0 {
-			return m, nil
-		}
-		if msg.IsDark() {
-			m.highlight = lipgloss.Lighten(msg, highlightTint)
-			m.dimmed = lipgloss.Lighten(msg, dimmedTint)
-			m.quiet = lipgloss.Lighten(msg, quietTint)
-		} else {
-			m.highlight = lipgloss.Darken(msg, highlightTint)
-			m.dimmed = lipgloss.Darken(msg, dimmedTint)
-			m.quiet = lipgloss.Darken(msg, quietTint)
-		}
-		return m, nil
 
-	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		// The bar's width is not settled here: it depends on how wide the
-		// times beside it read, which changes without the terminal doing
-		// anything. renderBar sets it on the copy it draws.
-		m.scroll()
-		// The page may be a different colour than it was; ask again.
-		return m, tea.RequestBackgroundColor
 
-	case tea.FocusMsg:
-		// Coming back to the terminal is the closest thing to notice that the
-		// theme changed while we were not looking.
-		return m, tea.RequestBackgroundColor
 
-	case tea.KeyPressMsg:
-		if m.sheetOpen {
-			if next, cmd, handled := m.handleSheetKey(msg); handled {
-				return next, cmd
-			}
-		}
-		if m.menu.open {
-			return m.handleMenuKey(msg)
-		}
-		if m.detour.active {
-			if next, cmd, handled := m.handleModalKey(msg); handled {
-				return next, cmd
-			}
-		}
-		return m.handleKey(msg)
-
-	case tea.MouseMsg:
-		return m.handleMouse(msg)
-
-	case spinner.TickMsg:
-		// The loop stops as soon as nothing is loading.
-		if !m.loading {
-			return m, nil
-		}
-		spin, cmd := m.spin.Update(msg)
-		m.spin = spin
-		return m, cmd
-
-	case prefetchTickMsg:
-		if msg.generation != m.prefetchGen {
-			return m, nil // a later move armed its own
-		}
-		if t, ok := m.SelectedTrack(); ok {
-			return m, m.prefetch(t.VideoID)
-		}
-		return m, nil
-
-	case tabLoadMsg:
-		if msg.generation != m.tabGen {
-			return m, nil
-		}
-		tab := m.currentTab()
-		// Search results arrive with the search; there is nothing to fetch.
-		if tab.ID == "" || tab.kind == tabSearch {
-			return m, nil
-		}
-		return m, m.fetchTracks(tab)
-
-	case playlistsMsg:
-		m.Playlists = m.Playlists[:0]
-		for _, p := range msg {
-			m.Playlists = append(m.Playlists, Playlist{ID: p.ID, Title: p.Title})
-		}
-		m.tabCursor, m.Err = 0, nil
-		m.restoreTab()
-		if m.tabCount() == 0 {
-			m.loading = false
-			return m, nil
-		}
-		return m.showTab()
-
-	case moreMsg:
-		m.loadingMore = false
-		if msg.err != nil {
-			m.Err = msg.err
-			return m, nil
-		}
-		if msg.inDetour {
-			m.detour.arrival = append(m.detour.arrival, fromAPI(msg.page.Tracks)...)
-			m.detour.more = msg.page.Next
-			// The popover shows its arrival order, so the new page is
-			// what it shows. applySort does not reach it any more.
-			m.detour.tracks = m.detour.arrival
-			m.cache[m.detour.tab.ID] = cached{m.detour.arrival, m.detour.more}
-		} else {
-			m.arrival = append(m.arrival, fromAPI(msg.page.Tracks)...)
-			m.more = msg.page.Next
-			if m.showingID != "" {
-				m.cache[m.showingID] = cached{m.arrival, m.more}
-			}
-		}
-		m.applySort()
-		// A sort over half a list is not the order, so it keeps going.
-		return m, m.continueSort()
-
-	case tracksMsg:
-		// A menu is anchored to a row of the list being replaced.
-		m.menu = trackMenu{}
-		tracks := fromAPI(msg.page.Tracks)
-		// The server can still describe a just-rated track the old way, so
-		// what this app did wins over what the list says.
-		if m.lastRated.videoID != "" {
-			for i := range tracks {
-				if tracks[i].VideoID == m.lastRated.videoID {
-					tracks[i].Rating = m.lastRated.rating
-				}
-			}
-		}
-		m.cache[msg.id] = cached{tracks, msg.page.Next}
-		if m.detour.active && m.detour.tab.ID == msg.id {
-			m.detour.arrival, m.detour.more = tracks, msg.page.Next
-			m.detour.tracks = tracks
-			m.detour.cursor, m.detour.offset = 0, 0
-			m.loading, m.Err = false, nil
-			if len(m.detour.tracks) > 0 {
-				return m, batch(m.prefetch(m.detour.tracks[0].VideoID), m.continueSort())
-			}
-			return m, m.continueSort()
-		}
-		if m.currentTab().ID != msg.id {
-			return m, nil // the view moved on while this was in flight
-		}
-		// A refetch of the list already on screen keeps the reader's place
-		// in it; arriving at a new tab starts at the top.
-		refresh := m.showingID == msg.id
-		m.arrival, m.loading, m.Err = tracks, false, nil
-		m.Tracks = sorted(tracks, m.sort)
-		m.showingID, m.more = msg.id, msg.page.Next
-		if refresh {
-			m.trackCursor = clamp(m.trackCursor, len(m.Tracks))
-			m.scroll()
-			return m, m.continueSort()
-		}
-		m.trackCursor, m.trackOffset = 0, 0
-		m.restorePlaying(msg.id)
-		if len(m.Tracks) > 0 {
-			return m, batch(m.prefetch(m.Tracks[0].VideoID), m.continueSort())
-		}
-		return m, m.continueSort()
-
-	case searchMsg:
-		// The popover may have been closed, or replaced by an album, while
-		// this was in flight.
-		if !m.detour.active || m.detour.tab.kind != tabSearch {
-			return m, nil
-		}
-		m.detour.arrival, m.detour.more = fromAPI(msg.page.Tracks), msg.page.Next
-		m.detour.tracks = m.detour.arrival
-		// Nothing is chosen: the results are results until the reader picks
-		// one, and picking the first for them was a guess that also cost a
-		// stream resolve for a track nobody had asked to hear.
-		m.detour.cursor, m.detour.offset = noRow, 0
-		m.loading, m.Err = false, nil
-		return m, m.continueSort()
-
-	case ratedMsg:
-		if msg.err != nil {
-			// The row was changed before the call; put it back.
-			m.setRating(msg.videoID, msg.previous)
-			m.Err = msg.err
-			return m, nil
-		}
-		m.lastRated.videoID, m.lastRated.rating = msg.videoID, msg.applied
-		// A thumbs-up adds the track to Liked Music and clearing one takes
-		// it out again, so what is held for that tab no longer describes it.
-		delete(m.cache, likedPlaylistID)
-
-		if msg.applied != RatingUp {
-			// Take the row out here rather than refetching. The server can
-			// take a moment to agree, and a refetch that still listed the
-			// track would put it straight back.
-			m.dropFromLiked(msg.videoID)
-			return m, nil
-		}
-		if tab := m.tabAt(m.tabCursor); tab.ID == likedPlaylistID {
-			return m, m.fetchTracks(tab)
-		}
-		return m, nil
-
-	case playingMsg:
-		m.Length = msg.length
-		m.Position, m.Paused, m.Err = 0, false, nil
-		m.playing = msg.track
-		if next, ok := m.following(); ok && next.VideoID != m.playing.VideoID {
-			return m, m.prefetch(next.VideoID)
-		}
-		return m, nil
-
-	case eventMsg:
-		return m.handleEvent(player.Event(msg))
-
-	case errMsg:
-		m.Err, m.loading = msg.err, false
-		return m, nil
-	}
-	return m, nil
-}
-
-// handleEvent folds an mpv property change into the model. Every branch
-// re-arms the watch; forgetting to would silently end the event stream.
-func (m Model) handleEvent(ev player.Event) (tea.Model, tea.Cmd) {
-	switch ev.Name {
-	case "time-pos":
-		// A drag owns the position until the button comes up. mpv carries on
-		// playing and reporting where it actually is, and letting that
-		// through makes the bar fight the pointer.
-		if f, ok := ev.Data.(float64); ok && !m.scrubbing {
-			m.Position = time.Duration(f * float64(time.Second))
-		}
-	case "duration":
-		if f, ok := ev.Data.(float64); ok && f > 0 {
-			m.Length = time.Duration(f * float64(time.Second))
-		}
-	case "pause":
-		if b, ok := ev.Data.(bool); ok {
-			m.Paused = b
-		}
-	case player.EndFile:
-		// Only a track running out advances the list. Loading a replacement
-		// ends the previous file too, and advancing on that would run away
-		// through the playlist.
-		//
-		// This is deliberately not the eof-reached property: mpv unloads the
-		// file at the same moment, so the property goes unavailable rather
-		// than true and nothing ever fires.
-		if reason, _ := ev.Data.(string); reason == "eof" {
-			if next, ok := m.following(); ok {
-				return m, batch(m.watchEvents(), m.play(next))
-			}
-		}
-	}
-	return m, m.watchEvents()
-}
-
-func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	k := appKeys
-
-	switch {
-	case matches(msg, k.Quit):
-		m.record()
-		return m, tea.Quit
-
-	case matches(msg, k.Help):
-		return m.toggleSheet()
-
-	case matches(msg, k.Search):
-		return m.openSearch()
-
-	case matches(msg, k.Open):
-		if t, ok := m.SelectedTrack(); ok {
-			return m.open(t)
-		}
-
-	case matches(msg, k.PlayPause):
-		return m.press(controlPlayPause)
-
-	case matches(msg, k.Sort):
-		if m.detour.active {
-			return m, nil
-		}
-		return m.sortBy(m.sort.next())
-	case matches(msg, k.SortReverse):
-		if m.detour.active {
-			return m, nil
-		}
-		return m.sortBy(sortSpec{by: max(m.sort.by, sortTitle), desc: !m.sort.desc})
-
-	case matches(msg, k.Next):
-		return m.press(controlNext)
-	case matches(msg, k.Previous):
-		return m.press(controlPrevious)
-	case matches(msg, k.Repeat):
-		return m.press(controlRepeat)
-	case matches(msg, k.Mix):
-		return m.press(controlMix)
-
-	case matches(msg, k.PrevTab):
-		return m.selectTab(m.tabCursor - 1)
-	case matches(msg, k.NextTab):
-		return m.selectTab(m.tabCursor + 1)
-
-	case matches(msg, k.Up):
-		m.moveCursor(-1)
-		return m.afterCursorMove()
-	case matches(msg, k.Down):
-		m.moveCursor(1)
-		return m.afterCursorMove()
-
-	case matches(msg, k.PageUp):
-		m.moveCursor(-m.listHeight())
-		return m.afterCursorMove()
-	case matches(msg, k.PageDown):
-		m.moveCursor(m.listHeight())
-		return m.afterCursorMove()
-
-	case matches(msg, k.Top):
-		m.moveCursor(-m.rowCount())
-		return m.afterCursorMove()
-	case matches(msg, k.Bottom):
-		m.moveCursor(m.rowCount())
-		return m.afterCursorMove()
-
-	case matches(msg, k.Like):
-		return m.applyRating(RatingUp)
-	case matches(msg, k.Dislike):
-		return m.applyRating(RatingDown)
-	}
-	return m, nil
-}
-
-// prefetchDelay is how long the cursor has to sit still before the row under
-// it is resolved. Without it, holding j down the length of a playlist starts
-// a yt-dlp process per row.
-const prefetchDelay = 250 * time.Millisecond
-
-type prefetchTickMsg struct{ generation int }
-
-// schedulePrefetch arms a delayed resolve of the highlighted row, cancelling
-// any earlier one by moving the generation past it.
-func (m Model) schedulePrefetch() (tea.Model, tea.Cmd) {
-	if m.services.Streams == nil {
-		return m, nil
-	}
-	m.prefetchGen++
-	generation := m.prefetchGen
-	return m, tea.Tick(prefetchDelay, func(time.Time) tea.Msg {
-		return prefetchTickMsg{generation: generation}
-	})
-}
-
-// setRating puts a rating on the row and on the playing track, which are
-// not always the same object.
-func (m *Model) setRating(videoID string, r Rating) {
-	if m.playing.VideoID == videoID {
-		m.playing.Rating = r
-	}
-	// The same track can be anywhere: in the list, in the popover over it, in
-	// a popover stacked behind that one — which the inset leaves showing, so
-	// a stale mark there is a stale mark on the screen — and in any listing
-	// already fetched and kept, which is what a later visit is served from.
-	//
-	// Each in the order it arrived in as well as the order it is shown in,
-	// because that is what a sort rebuilds from.
-	lists := [][]Track{m.Tracks, m.arrival, m.detour.tracks, m.detour.arrival}
-	for _, behind := range m.history {
-		lists = append(lists, behind.tracks, behind.arrival)
-	}
-	for _, entry := range m.cache {
-		lists = append(lists, entry.tracks)
-	}
-	for _, rows := range lists {
-		for i := range rows {
-			if rows[i].VideoID == videoID {
-				rows[i].Rating = r
-			}
-		}
-	}
-	if m.menu.track.VideoID == videoID {
-		m.menu.track.Rating = r
-	}
-}
-
-// applyRating toggles the thumbs state of the highlighted track: rating it
-// the same way twice clears it, which is what the YouTube Music API does.
-//
-// The row changes immediately and the server is told afterwards. Waiting for
-// the round trip would make a keystroke feel like a network call; if it
-// fails, the message handler puts the row back.
-func (m Model) applyRating(r Rating) (tea.Model, tea.Cmd) {
-	if m.trackCursor >= len(m.Tracks) {
-		return m, nil
-	}
-	videoID := m.Tracks[m.trackCursor].VideoID
-	previous := m.Tracks[m.trackCursor].Rating
-	if previous == r {
-		r = RatingNone
-	}
-	return m.rated(videoID, r, previous)
-}
-
-// rated applies a rating and, where it is a dislike of what is playing, moves
-// on. Nothing honours "do not play this" like not playing it.
-//
-// Only of what is playing: disliking a row further down the list says
-// something about that row, not about the next three minutes. And only a
-// dislike that lands — pressing it again takes the dislike off, which is not
-// a reason to skip anything.
-func (m Model) rated(videoID string, r, previous Rating) (tea.Model, tea.Cmd) {
-	m.setRating(videoID, r)
-	cmd := m.rate(videoID, r, previous)
-	if r != RatingDown || videoID != m.playing.VideoID {
-		return m, cmd
-	}
-	next, onward := m.skip(true)
-	return next, batch(cmd, onward)
-}
-
-// --------------------------------------------------------------- view ----
-
-// Every colour in the interface comes from these, so recolouring it is one
-// edit rather than a search.
-//
-// They are named palette entries, not indices into the 256-colour cube:
-// 0-15 are the terminal's own scheme, and anything above that is a fixed
-// table that ignores it.
-//
-// The names below say what a colour is for and not what it looks like, and
-// that distinction is the whole of getting this right. A sixteen colour
-// scheme is not sixteen fixed colours: 0 is the end of the range the
-// background sits at and 7 the end the text sits at, so a light theme swaps
-// what those two literally are. One in use while this was written sets 0 to
-// #FFFFFF and 7 to #272727 — "black" is white and "white" is nearly black.
-// Pick a colour for its name and it inverts with the theme; pick it for its
-// role and it follows.
-// The interface is monochrome: one hue, and it is the terminal's own. There
-// is no accent. Everything that has to stand out does it by weight —
-// faint, ordinary, bright — or by being turned inside out, a fill of the
-// foreground with the background as its text. Shape does the rest.
-var (
-	// alert is the one exception, and it earns it: an error announcing
-	// itself by colour is the point of colouring it.
-	alert = lipgloss.Red
-	// good, busy and live join it on the state block. Green is nothing to
-	// report, yellow is waiting on the network, and blue is the player: it
-	// also goes everywhere else the track playing is pointed at — the played
-	// part of the bar, the row in the list, its mark in the scrollbar. One
-	// fact, one colour, wherever it is being said.
-	//
-	// Yellow earns its own step because a wait is neither of the other two: it
-	// is not trouble, and saying it is fine while the screen has not filled in
-	// yet is the state that reads as a hang.
-	//
-	// All four are ANSI colours and not hex, for the same reason everything
-	// else here is: they are the terminal's own red, green, yellow and blue,
-	// so they come out of whatever scheme is loaded rather than fighting it.
-	good = lipgloss.Green
-	busy = lipgloss.Yellow
-	live = lipgloss.Blue
-
-	// station is a mix the server built, which is a page of somebody else's
-	// choosing rather than one of yours — the one other kind of page that is
-	// worth telling apart at a glance.
-	mixHue = lipgloss.Cyan
-
-	// liked and disliked are what you think of a track, which the list said
-	// with a pair of thumbs until a hue could say it without spending a cell
-	// of the title on it.
-	//
-	// Magenta because it was the one hue in the scheme nothing else here had
-	// taken. The dislike shares red with trouble, deliberately: it is the one
-	// mark on a row you would not want more of, and a scheme of sixteen has
-	// only so many ways to say that.
-	liked    = lipgloss.Magenta
-	disliked = lipgloss.Red
-
-	// background and foreground are the terminal's own two ends, whichever
-	// way round the theme has them.
-	background = lipgloss.Black
-	foreground = lipgloss.White
-	// muted is only ever a background. As a foreground it does not clear any
-	// contrast worth having: a light theme has to spend colour 8 on being a
-	// shade of its own page, and #BDBDBD on #FFFFFF is about 1.8:1, which is
-	// not text and is not a border either. Dim text is the terminal's own
-	// faint instead, and anything that has to hold a line takes the
-	// foreground.
-	muted = lipgloss.BrightBlack
-	// emphasis is the far end of the foreground. It is what the accent used
-	// to be — the strongest thing available — and doubles as the fill under
-	// text drawn in the background colour.
-	emphasis = lipgloss.BrightWhite
-
-	// surface is a raised background — the status bar's band. It is the dim
-	// foreground used the other way round, which puts it one step off the
-	// terminal's background in whichever direction that is.
-	surface = muted
-	// onSurface is text on that surface. It cannot be muted, because muted
-	// is the surface.
-	onSurface = foreground
-	// played is the paused bar's filled part: a step below the lit state, so
-	// nothing about it reads as playing, but well clear of the groove behind
-	// it, so the playhead is still there to see.
-	played = foreground
-)
-
-var (
-	// dim is faint rather than a colour, and that is deliberate. Colour 8 is
-	// the only grey a sixteen colour scheme has for dim text, and a light
-	// theme has to spend it on being a shade of the background: the one in
-	// use while this was written sets it to #BDBDBD, which against a #FFFFFF
-	// page is around 1.8:1 and cannot be read. Faint asks the terminal to
-	// take its own foreground down instead, which lands right on any theme,
-	// and where it is not supported the text comes back at full strength —
-	// a flatter hierarchy rather than an invisible one.
-	dim    = lipgloss.NewStyle().Faint(true)
-	failed = lipgloss.NewStyle().Foreground(alert)
-	active = lipgloss.NewStyle().Foreground(emphasis).Bold(true)
-)
 
 // dropFromLiked removes a track from the liked playlist wherever it is on
 // screen, which is what unliking it means there.
@@ -1180,17 +691,18 @@ const maxAutoPages = 50
 // Ordering half a list puts the wrong rows at the top, so an order is only
 // true once everything is in — and asking for it is the only way to know.
 func (m *Model) continueSort() tea.Cmd {
-	// A popover cannot be sorted, so there is no order to complete there.
+	// A popover cannot be sorted, and neither can a mix: its order is the
+	// server's, it is endless, and completing a sort on it would fetch page
+	// after page for an answer nobody asked for.
 	if m.sort.by == sortNone || m.loadingMore || m.detour.active ||
-		m.autoPages >= maxAutoPages {
+		m.tabAt(m.tabCursor).kind == tabMix || m.autoPages >= maxAutoPages {
 		return nil
 	}
 	if !m.more.More() {
 		return nil
 	}
 	m.autoPages++
-	m.loadingMore = true
-	return m.loadMore(m.more, false)
+	return batch(m.startLoadingMore(), m.loadMore(m.more, false, false))
 }
 
 // isPlaying reports whether a row is the track mpv is on.
@@ -1285,21 +797,35 @@ const (
 // say it, which is honest — a track can be in two playlists, and both of them
 // do hold it.
 func (m Model) tabHoldsPlaying(index int) bool {
+	return m.playingTabSet()[m.tabAt(index).ID]
+}
+
+// playingTabSet is every tab whose fetched listing holds the playing track,
+// found in one pass. The tab row asks about each tab it draws, so answering
+// one tab at a time was a scan per tab per frame; this scans the caches once.
+func (m Model) playingTabSet() map[string]bool {
+	out := map[string]bool{}
 	if m.playing.VideoID == "" {
-		return false
+		return out
 	}
-	id := m.tabAt(index).ID
-	rows := m.cache[id].tracks
-	if id == m.showingID {
-		// The visible listing is not in the cache until it is left.
-		rows = m.Tracks
-	}
-	for _, t := range rows {
-		if t.VideoID == m.playing.VideoID {
-			return true
+	for id, entry := range m.cache {
+		for _, t := range entry.tracks {
+			if t.VideoID == m.playing.VideoID {
+				out[id] = true
+				break
+			}
 		}
 	}
-	return false
+	// The visible listing is not in the cache until it is left.
+	if m.showingID != "" {
+		for _, t := range m.Tracks {
+			if t.VideoID == m.playing.VideoID {
+				out[m.showingID] = true
+				break
+			}
+		}
+	}
+	return out
 }
 
 const (
@@ -1464,24 +990,25 @@ func tabWidth(title string, marked bool) int {
 	return width
 }
 
-// tabSpanWidth is how wide the tab at an index is, marker included.
-func (m Model) tabSpanWidth(index int) int {
-	return tabWidth(m.tabAt(index).Title, m.tabHoldsPlaying(index))
-}
-
 // tabSpans lays out the tabs that fit, always including the one in front.
 // Rendering and hit-testing share it, so a click lands on the tab it looks
 // like it should.
 func (m Model) tabSpans() []tabSpan {
+	return m.tabSpansWith(m.playingTabSet())
+}
+
+// tabSpansWith is tabSpans with the set of tabs holding the playing track
+// worked out already, so a render does not scan the caches once per tab.
+func (m Model) tabSpansWith(holds map[string]bool) []tabSpan {
 	count := m.tabCount()
 	if count == 0 || m.width <= 0 {
 		return nil
 	}
 	// Walk back from the selected tab until the row is full, then forward.
 	first := clamp(m.tabCursor, count)
-	used := m.tabSpanWidth(first)
+	used := tabWidth(m.tabAt(first).Title, holds[m.tabAt(first).ID])
 	for i := first - 1; i >= 0; i-- {
-		w := m.tabSpanWidth(i)
+		w := tabWidth(m.tabAt(i).Title, holds[m.tabAt(i).ID])
 		if used+w > m.width {
 			break
 		}
@@ -1490,7 +1017,7 @@ func (m Model) tabSpans() []tabSpan {
 	spans := []tabSpan{}
 	at := 0
 	for i := first; i < count; i++ {
-		w := m.tabSpanWidth(i)
+		w := tabWidth(m.tabAt(i).Title, holds[m.tabAt(i).ID])
 		if at+w > m.width {
 			break
 		}
@@ -1501,7 +1028,8 @@ func (m Model) tabSpans() []tabSpan {
 }
 
 func (m Model) renderTabs() string {
-	spans := m.tabSpans()
+	holds := m.playingTabSet()
+	spans := m.tabSpansWith(holds)
 	if len(spans) == 0 {
 		// With no tabs the row still has to be exactly as tall, or
 		// everything below it moves up and the mouse lands on the wrong
@@ -1514,7 +1042,7 @@ func (m Model) renderTabs() string {
 		// With a popover in front, no tab is the tab in front and the whole
 		// row sinks towards the page.
 		label := m.tabLabel(s.index).Render(truncate(m.tabAt(s.index).Title, maxTabTitle))
-		if m.tabHoldsPlaying(s.index) {
+		if holds[m.tabAt(s.index).ID] {
 			mark := lipgloss.NewStyle().Foreground(m.playerHue())
 			if m.covered() {
 				mark = lipgloss.NewStyle().Foreground(m.quietColor())
@@ -1704,7 +1232,7 @@ func (m Model) statusState() (string, color.Color) {
 	switch {
 	case m.Err != nil:
 		return "ERROR", alert
-	case m.loading || m.loadingMore:
+	case m.busy():
 		// A wait is not trouble and it is not nothing either: something is
 		// outstanding, and yellow is how long a wait gets noticed.
 		return "LOADING", busy

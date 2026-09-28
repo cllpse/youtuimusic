@@ -64,6 +64,11 @@ func (m *Model) restorePlaying(id string) {
 	}
 }
 
+// Record writes what is playing and where, for the next time the app opens.
+// It is exported so main can save on a signal that does not come through the
+// key handler, and it is safe to call more than once.
+func (m Model) Record() { m.record() }
+
 // record writes what is playing and where, for the next time the app opens.
 // It is called on the way out, where a blocking write of a few dozen bytes
 // costs nothing and is certain to have happened before the process ends.
