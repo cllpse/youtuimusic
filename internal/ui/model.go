@@ -1198,16 +1198,29 @@ func (m Model) likedTabInFront() bool {
 	return m.tabAt(m.tabCursor).ID == likedPlaylistID
 }
 
-// tabMarker is the blue block a tab carries while the track playing is in its
-// listing: the same block the scrollbar marks that track with, in the same
-// colour, since it is the same statement about where the track is.
+// tabMarker is what a tab carries while the track playing is in its listing, in
+// the blue the scrollbar marks that track with: it is the same statement about
+// where the track is, in the same colour.
+//
+// U+25A0 BLACK SQUARE rather than the full block the scrollbar uses. A terminal
+// cell is about twice as tall as it is wide, so a full block in the middle of a
+// line is a tall bar; this one is square and sits clear of the text above and
+// below it. Measured in the font this was written in, at the size it is read at:
+// the cell is 75 by 121, the full block fills it, and the square's ink is 72 by
+// 73 with 14 of the cell above it and 34 below.
+//
+// It is also the only square that font has. U+25AA SMALL, U+25FC MEDIUM, U+25AC
+// RECTANGLE and U+2B1B LARGE all draw nothing there, which is the usual state of
+// the geometric shapes block — and the wide ones among them would take two cells
+// where they exist at all. This one is a single cell, which is what the layout
+// counts on.
 //
 // It costs the tab two cells and is not held for when there is nothing to say —
 // a tab reserving room for a marker it does not have is two cells of nothing on
 // every tab, most of the time.
 const (
-	tabMarker      = blockFull
-	tabMarkerWidth = 2 // the block and the space after it
+	tabMarker      = "■"
+	tabMarkerWidth = 2 // the square and the space after it
 )
 
 // tabHoldsPlaying reports whether the track playing is in a tab's listing.
