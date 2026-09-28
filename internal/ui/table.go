@@ -153,7 +153,7 @@ func (t trackTable) rows() []string {
 		case index >= 0 && index < len(t.tracks):
 			track := t.tracks[index]
 			style, styled := t.rowStyle(track, index == t.cursor)
-			line = t.trackLine(track, cols, styled)
+			line = t.trackLine(track, cols)
 			if styled {
 				line = style.Render(line)
 			}
@@ -251,10 +251,12 @@ func (t trackTable) ratingHue(track Track) (color.Color, bool) {
 // front of one, now that how a track is rated is the colour of the row rather
 // than a mark on it.
 //
-// Everything but the title is muted, which leaves the eye one thing to read
-// down. A styled row is drawn plain and coloured whole by the caller — dimming
-// part of it would fight the colour.
-func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string {
+// One colour across the row, whatever that colour turns out to be. The artist
+// and the length used to be faint against a plain title, which reads as three
+// columns of different weight rather than as one row — and it only ever applied
+// to rows that were not otherwise coloured, so a list was faint in places and
+// not in others depending on what was playing and what you thought of it.
+func (t trackTable) trackLine(track Track, cols layout) string {
 	title := track.Title
 	// A release is the artist's own work rather than a song of theirs, and
 	// weight is what says so now that it has no icon. Not while the block is
@@ -277,9 +279,6 @@ func (t trackTable) trackLine(track Track, cols layout, highlighted bool) string
 	length := strings.Repeat(" ", cols.length)
 	if !track.isRelease() {
 		length = padLeft(truncate(formatDuration(track.Duration), cols.length), cols.length)
-	}
-	if !highlighted && !t.inactive {
-		artist, length = dim.Render(artist), dim.Render(length)
 	}
 	return pad(truncate(title, cols.title), cols.title) + " " + artist + " " + length
 }

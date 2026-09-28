@@ -173,7 +173,7 @@ func TestAReleaseRowIsMarkedAndHasNoLength(t *testing.T) {
 		t.Fatal("not recognised as a release")
 	}
 	table := trackTable{tracks: []Track{release}, width: 60, height: 3, showRating: true}
-	rendered := table.trackLine(release, table.layout(60), false)
+	rendered := table.trackLine(release, table.layout(60))
 	line := plain(rendered)
 	// An album is the artist's own work rather than a song of theirs, and
 	// weight is what says so now that nothing carries an icon.
@@ -193,7 +193,7 @@ func TestAReleaseRowIsMarkedAndHasNoLength(t *testing.T) {
 		t.Fatal("a song with a video id is not a release")
 	}
 	songs := trackTable{tracks: []Track{song}, width: 60, height: 3, showRating: true}
-	if !strings.Contains(plain(songs.trackLine(song, songs.layout(60), false)), "1:00") {
+	if !strings.Contains(plain(songs.trackLine(song, songs.layout(60))), "1:00") {
 		t.Error("a song lost its length")
 	}
 }
@@ -682,7 +682,7 @@ func TestTheLastColumnIsRightAligned(t *testing.T) {
 		table := trackTable{tracks: tracks, width: width, height: len(tracks),
 			showRating: true}
 		cols := table.layout(width)
-		row := plain(table.trackLine(tracks[0], cols, false))
+		row := plain(table.trackLine(tracks[0], cols))
 
 		if got := lipgloss.Width(row); got != width {
 			t.Fatalf("%d: the row is %d cells", width, got)
@@ -699,7 +699,7 @@ func TestTheLastColumnIsRightAligned(t *testing.T) {
 
 	// One column, and the title starts where every title does.
 	one := trackTable{tracks: tracks, width: 80, height: len(tracks), titleOnly: true}
-	row := plain(one.trackLine(tracks[1], one.layout(80), false))
+	row := plain(one.trackLine(tracks[1], one.layout(80)))
 	if !strings.HasPrefix(row, tracks[1].Title) {
 		t.Errorf("a single column does not start at the edge: %q", row)
 	}
@@ -716,7 +716,7 @@ func TestARatingIsAColourAndNotAMark(t *testing.T) {
 	cols := table.layout(80)
 
 	for _, track := range tracks {
-		row := plain(table.trackLine(track, cols, false))
+		row := plain(table.trackLine(track, cols))
 		if !strings.HasPrefix(row, track.Title) {
 			t.Errorf("%q starts %q, want the title at the edge", track.Title, row)
 		}
@@ -760,13 +760,13 @@ func TestAnInactiveRowIsOneColourAllTheWayAcross(t *testing.T) {
 	off.inactive, off.quiet = true, color.RGBA{0xBF, 0xBF, 0xBF, 0xFF}
 	want := "\x1b[38;2;191;191;191m"
 
-	// Live, the title is plain and the columns after it are faint.
+	// Live, a row that is neither chosen nor playing nor rated is drawn in
+	// nothing at all: one colour across it means the terminal's own, and the
+	// columns after the title were faint here until a row with three weights in
+	// it stopped reading as one row.
 	liveRow := live.rows()[1]
-	if strings.HasPrefix(liveRow, "\x1b[2m") {
-		t.Errorf("a live row starts faint: %q", liveRow)
-	}
-	if !strings.Contains(liveRow, "\x1b[2m") {
-		t.Fatalf("a live row has no faint columns, so this proves nothing: %q", liveRow)
+	if strings.Contains(liveRow, "\x1b[") {
+		t.Errorf("a plain row carries styling: %q", liveRow)
 	}
 
 	// Inactive, the whole row is one run of the quiet colour.
@@ -1102,3 +1102,68 @@ func TestTheTroughHasNoHolesInIt(t *testing.T) {
 		t.Errorf("the shared cell lost one of its two: %q", shared)
 	}
 }
+
+// A row is one colour all the way across, whatever colour that is. The title
+// used to be plain and the columns after it faint, which reads as three columns
+// of different weight rather than as one row — and it applied only to rows that
+// were not otherwise coloured, so a list was faint in places and not in others
+// depending on what happened to be playing.
+func TestEveryCellOfARowIsTheSameColour(t *testing.T) {
+	tracks := tableTracks()
+	tracks[1].Rating = RatingDown
+	table := trackTable{tracks: tracks, width: 60, height: len(tracks),
+		showRating: true, cursor: 2, playing: tracks[3].VideoID,
+		highlight: surface, dimmed: muted}
+
+	for i, row := range table.rows() {
+		// Whatever styling the row carries, it carries from end to end: one run
+		// of it, or none at all.
+		if n := strings.Count(row, "\x1b[m"); n > 1 {
+			t.Errorf("row %d has %d resets in it: %q", i, n, row)
+		}
+		if strings.Contains(row, faintStart) {
+			t.Errorf("row %d has a faint column: %q", i, row)
+		}
+		// The text is all there, whichever column it is in.
+		bare := plain(row)
+		for _, want := range []string{tracks[i].Title, tracks[i].Artist} {
+			if !strings.Contains(bare, want) {
+				t.Errorf("row %d lost %q: %q", i, want, bare)
+			}
+		}
+	}
+
+	// The rated row, the chosen row and the playing row each carry theirs
+	// across every cell rather than over the title alone.
+	for _, tc := range []struct {
+		name string
+		row  int
+		code string
+	}{
+		{"a disliked row", 1, dislikedFG},
+		{"the chosen row", 2, highlightSGR},
+		{"the playing row", 3, liveFG},
+	} {
+		row := table.rows()[tc.row]
+		if !sgrCodes(row)[tc.code] {
+			t.Errorf("%s is not SGR %s: %q", tc.name, tc.code, row)
+		}
+		// The styling opens before the title and closes after the length.
+		if !strings.HasPrefix(row, "\x1b[") {
+			t.Errorf("%s does not start styled: %q", tc.name, row)
+		}
+		if got := strings.Index(row, "\x1b[m"); got >= 0 &&
+			got < strings.Index(row, strings.TrimSpace(fieldOf(table, tc.row))) {
+			t.Errorf("%s stops being styled before its last column: %q", tc.name, row)
+		}
+	}
+}
+
+// fieldOf is a row's last column as drawn, which is where its styling has to
+// reach.
+func fieldOf(t trackTable, row int) string {
+	return formatDuration(t.tracks[row].Duration)
+}
+
+// faintStart is what the terminal's own faint opens with.
+const faintStart = "\x1b[2m"
