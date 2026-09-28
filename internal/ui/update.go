@@ -334,6 +334,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.sortBy(sortSpec{by: max(m.sort.by, sortTitle), desc: !m.sort.desc})
 
+	case matches(msg, k.Monochrome):
+		return m.toggleMono()
+
 	case matches(msg, k.Refresh):
 		return m.refreshTab()
 

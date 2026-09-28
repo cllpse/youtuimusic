@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"image/color"
+
 	"charm.land/lipgloss/v2"
 )
 
@@ -104,3 +106,52 @@ var (
 	failed = lipgloss.NewStyle().Foreground(alert)
 	active = lipgloss.NewStyle().Foreground(emphasis).Bold(true)
 )
+
+// palette is every accent the interface is allowed, in one value. The colour
+// theme spends a hue on each; the monochrome one has no hue to spend, so every
+// accent becomes the bright end of the terminal's own foreground — or the dim
+// one where two marks have to stay apart — which is what the interface looked
+// like before any of the hues arrived. Red is kept for trouble in both: an
+// error announcing itself by colour is the point of colouring it.
+type palette struct {
+	liked    color.Color
+	disliked color.Color
+	mix      color.Color
+	live     color.Color
+	good     color.Color
+	busy     color.Color
+	alert    color.Color
+}
+
+var (
+	colourPalette = palette{
+		liked:    liked,
+		disliked: disliked,
+		mix:      mixHue,
+		live:     live,
+		good:     good,
+		busy:     busy,
+		alert:    alert,
+	}
+	// The disliked mark is the one grey the scheme can spare for it; the
+	// bright end would make it indistinguishable from a like, which is worse
+	// than a mark that is merely quiet.
+	monoPalette = palette{
+		liked:    emphasis,
+		disliked: muted,
+		mix:      emphasis,
+		live:     emphasis,
+		good:     emphasis,
+		busy:     emphasis,
+		alert:    alert,
+	}
+)
+
+// palette is the accents in force for this model: the hues, or the greys when
+// the reader has asked for monochrome.
+func (m Model) palette() palette {
+	if m.mono {
+		return monoPalette
+	}
+	return colourPalette
+}

@@ -150,7 +150,7 @@ func (m Model) handleSheetKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	case matches(msg, k.Close, k.Help):
 		m.sheetOpen = false
 		return m, nil, true
-	case matches(msg, k.Quit, k.PlayPause, k.Next, k.Previous, k.Repeat):
+	case matches(msg, k.Quit, k.PlayPause, k.Next, k.Previous, k.Repeat, k.Monochrome):
 		return m, nil, false
 	}
 	return m, nil, true

@@ -38,11 +38,17 @@ const (
 // rated row and says nothing the row could not have said by being a colour,
 // and it cost a glyph that had to exist in the reader's font — which is the
 // last thing in the app that did.
-func (r Rating) hue() (color.Color, bool) {
+func (r Rating) hue(mono bool) (color.Color, bool) {
 	switch r {
 	case RatingUp:
+		if mono {
+			return emphasis, true
+		}
 		return liked, true
 	case RatingDown:
+		if mono {
+			return muted, true
+		}
 		return disliked, true
 	default:
 		return nil, false
@@ -146,6 +152,10 @@ type Model struct {
 	dimmed    color.Color
 	quiet     color.Color
 
+	// mono drops the accent hues for the terminal's own greys, turned over with
+	// the theme key. It is the reader's choice and it is not remembered.
+	mono bool
+
 	// restoring is what the last session was playing, held until the
 	// pieces it names exist: the library for the tab, that tab's listing
 	// for the track. Nil once there is nothing left to put back.
@@ -218,6 +228,25 @@ func New(s Services) Model {
 		pausedBar: newBar(mutedRamp),
 		spin:      newLoader(),
 	}
+}
+
+// barFill is the colour the played part of the bar is drawn in. Monochrome has
+// no hue to spend on it, so it takes the bright end of the foreground, which is
+// what the bar used before there were any colours.
+func (m Model) barFill() progress.ColorFunc {
+	if m.mono {
+		return func(_, _ float64) color.Color { return emphasis }
+	}
+	return litRamp
+}
+
+// toggleMono switches between the accent hues and the terminal's own greys,
+// rebuilding the one component that holds its colour rather than looking it up
+// per frame.
+func (m Model) toggleMono() (tea.Model, tea.Cmd) {
+	m.mono = !m.mono
+	m.bar = newBar(m.barFill())
+	return m, nil
 }
 
 // Init starts the first fetch and opens the stream of player events.
@@ -433,6 +462,12 @@ func (m Model) tabAt(i int) Playlist {
 // not. The bar has said the difference that way all along; the marks say it the
 // same way.
 func (m Model) playerHue() color.Color {
+	if m.mono {
+		if m.Paused {
+			return foreground
+		}
+		return emphasis
+	}
 	if m.Paused {
 		return played
 	}
@@ -447,7 +482,13 @@ func (m Model) playerHue() color.Color {
 // By id, because every one of those asks from a different direction — a tab
 // from its playlist, the list from what it is showing, a popover from where it
 // came from — and an id is the one thing all three have.
-func accentOf(id string) color.Color {
+//
+// A monochrome page claims no colour at all: the accent is what the hues were
+// for, so dropping them drops this with them.
+func (m Model) accentOf(id string) color.Color {
+	if m.mono {
+		return nil
+	}
 	switch {
 	case id == likedPlaylistID:
 		return liked
@@ -758,7 +799,7 @@ func (m Model) tabLabel(index int) lipgloss.Style {
 	default:
 		style = style.Faint(true)
 	}
-	if hue := accentOf(m.tabAt(index).ID); hue != nil {
+	if hue := m.accentOf(m.tabAt(index).ID); hue != nil {
 		style = style.Foreground(hue)
 	}
 	return style
@@ -1113,6 +1154,7 @@ func (m Model) table(width, height int) trackTable {
 		dimmed:      m.dimmedColor(),
 		inactive:    m.covered(),
 		quiet:       m.quietColor(),
+		mono:        m.mono,
 		now:         m.clock(),
 		tracks:      m.Tracks,
 		cursor:      m.trackCursor,
@@ -1120,7 +1162,7 @@ func (m Model) table(width, height int) trackTable {
 		width:       width,
 		height:      height,
 		showRating:  m.showsRating(),
-		accent:      accentOf(m.showingID),
+		accent:      m.accentOf(m.showingID),
 		playing:     m.playing.VideoID,
 		paused:      m.Paused,
 		more:        m.more.More(),
@@ -1229,19 +1271,20 @@ func (m Model) statusBlock() string {
 // The order is the one that matters. Trouble first, then a wait, then the
 // player, and ready only when there is nothing else to say.
 func (m Model) statusState() (string, color.Color) {
+	p := m.palette()
 	switch {
 	case m.Err != nil:
-		return "ERROR", alert
+		return "ERROR", p.alert
 	case m.busy():
 		// A wait is not trouble and it is not nothing either: something is
 		// outstanding, and yellow is how long a wait gets noticed.
-		return "LOADING", busy
+		return "LOADING", p.busy
 	case m.playing.VideoID != "" && m.Paused:
-		return "PAUSED", live
+		return "PAUSED", p.live
 	case m.playing.VideoID != "":
-		return "PLAYING", live
+		return "PLAYING", p.live
 	default:
-		return "READY", good
+		return "READY", p.good
 	}
 }
 
@@ -1329,7 +1372,7 @@ func (m Model) separatorColor() color.Color {
 	if m.covered() {
 		return m.quietColor()
 	}
-	if hue := accentOf(m.tabAt(m.tabCursor).ID); hue != nil {
+	if hue := m.accentOf(m.tabAt(m.tabCursor).ID); hue != nil {
 		return hue
 	}
 	return m.dimmedColor()

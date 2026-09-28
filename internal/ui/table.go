@@ -53,8 +53,11 @@ type trackTable struct {
 	inactive bool
 	// quiet is the colour it says nothing in.
 	quiet color.Color
-	sort  sortSpec
-	now   time.Time
+	// mono drops the accent hues for the terminal's own greys, so a rating
+	// and the player are told apart by weight rather than by colour.
+	mono bool
+	sort sortSpec
+	now  time.Time
 
 	// more draws one extra row at the end, offering the next page. While
 	// that page is on its way it becomes the same loader the rest of the
@@ -203,6 +206,12 @@ func (t trackTable) moreRow(width int) string {
 // existed — lit while it runs, a step down while it holds — so the marks say it
 // the same way rather than inventing a second language for the same fact.
 func (t trackTable) playerPen() color.Color {
+	if t.mono {
+		if t.paused {
+			return foreground
+		}
+		return emphasis
+	}
 	if t.paused {
 		return played
 	}
@@ -261,7 +270,17 @@ func (t trackTable) ratingHue(track Track) (color.Color, bool) {
 	if !t.showRating {
 		return nil, false
 	}
-	return track.Rating.hue()
+	return track.Rating.hue(t.mono)
+}
+
+// dislikedPen is the colour a dislike is drawn in. The scrollbar uses it as the
+// one mark that outranks a like, so it has to name the same colour the rows do
+// under whichever theme is in force.
+func (t trackTable) dislikedPen() color.Color {
+	if t.mono {
+		return muted
+	}
+	return disliked
 }
 
 // trackLine draws one row. Every title starts at the edge: nothing goes in
@@ -355,7 +374,7 @@ func (t trackTable) scrollbarMarks() map[int]color.Color {
 			continue
 		}
 		at := markAt(i, total, halves)
-		if marks[at] == disliked {
+		if marks[at] == t.dislikedPen() {
 			continue
 		}
 		marks[at] = hue

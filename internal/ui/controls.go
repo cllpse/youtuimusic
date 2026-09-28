@@ -181,7 +181,7 @@ func (m Model) controlButtons() []button {
 	groups := [][]button{
 		transport,
 		{{control: controlRepeat, label: m.repeat.label(), state: repeat}},
-		{{control: controlMix, label: labelMix, state: mix, hue: mixHue}},
+		{{control: controlMix, label: labelMix, state: mix, hue: m.palette().mix}},
 	}
 
 	// A row too narrow for all of it gives up a group at a time from the right:

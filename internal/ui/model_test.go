@@ -1985,3 +1985,41 @@ func TestThePlayingMarksFollowThePlayState(t *testing.T) {
 		}
 	}
 }
+
+// The theme key drops every hue the colour theme spends and keeps everything
+// else: a rated row, a playing row and the state block are still told apart by
+// weight and by being turned inside out, which is what they were before the
+// colours arrived. Red stays, because trouble is the one thing an error has to
+// say by colour.
+func TestTheMonochromeKeyDropsTheHues(t *testing.T) {
+	m := sample()
+	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
+	m = next.(Model)
+	m.Tracks = rows(100)
+	m.playing, m.Length, m.Position = m.Tracks[3], time.Minute, 20*time.Second
+	m.Tracks[3].Rating = RatingUp
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked Music"}, {ID: "PL1", Title: "Favorites"}}
+
+	if !press(m, "m").mono {
+		t.Fatal("the theme key did not switch to monochrome")
+	}
+	mono := press(m, "m")
+
+	// It is not just a flag: the frame has to lose the hues.
+	for row, line := range strings.Split(mono.View().Content, "\n") {
+		for code := range sgrCodes(line) {
+			if slices.Contains(chromaticCodes, code) {
+				t.Errorf("a hue survived in monochrome on row %d: SGR %s", row, code)
+			}
+		}
+	}
+	// And the played part of the bar is the bright foreground, not the blue.
+	bar := strings.Split(mono.View().Content, "\n")[mono.barRow()]
+	if sgrCodes(bar)[liveFG] {
+		t.Errorf("the bar kept the player's blue: %q", bar)
+	}
+	// Pressing it again brings the colours back.
+	if back := press(mono, "m"); back.mono {
+		t.Fatal("the theme key did not switch back")
+	}
+}

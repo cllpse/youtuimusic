@@ -59,26 +59,27 @@ const dividerAfter = 2
 
 func (m Model) menuRows() []menuRow {
 	t := m.menu.track
+	p := m.palette()
 	// Each row says what pressing it does, so a track that already carries a
 	// rating offers to take it off rather than offering to do it again.
 	//
 	// English has a word for one of those and not the other — unlike is one,
 	// undislike is not — so the dislike says it the long way round. Both rows
 	// are the same key they answer to elsewhere: + and -.
-	like := menuRow{menuLike, "Like track", t.VideoID != "", liked}
+	like := menuRow{menuLike, "Like track", t.VideoID != "", p.liked}
 	if t.Rating == RatingUp {
-		like = menuRow{menuLike, "Unlike track", true, liked}
+		like = menuRow{menuLike, "Unlike track", true, p.liked}
 	}
-	dislike := menuRow{menuDislike, "Dislike track", t.VideoID != "", disliked}
+	dislike := menuRow{menuDislike, "Dislike track", t.VideoID != "", p.disliked}
 	if t.Rating == RatingDown {
-		dislike = menuRow{menuDislike, "Remove dislike", true, disliked}
+		dislike = menuRow{menuDislike, "Remove dislike", true, p.disliked}
 	}
 	return []menuRow{
 		{menuAlbum, "Go to album", t.AlbumID != "", nil},
 		{menuArtist, "Go to artist", t.ArtistID != "", nil},
 		// In the colour of the page it opens, the way the button that does the
 		// same thing is. A release has no track to build a mix around.
-		{menuMix, "Start mix", t.VideoID != "", mixHue},
+		{menuMix, "Start mix", t.VideoID != "", p.mix},
 		like,
 		dislike,
 	}
@@ -218,6 +219,9 @@ func (m Model) handleMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Space runs the row here rather than pausing: with a menu open on a
 		// track, the nearest thing it can mean is this one.
 		return m.activate(m.menu.cursor)
+	case matches(msg, k.Monochrome):
+		// The theme is about the screen, not the menu, so it works here too.
+		return m.toggleMono()
 	}
 	return m, nil
 }
