@@ -506,10 +506,12 @@ func TestTheScrollbarMarksThePlayingTrack(t *testing.T) {
 	}
 }
 
-// hasMark reports whether a cell of the trough draws a mark, which is half a
-// block: a cell holds two of them, so a mark takes the half it falls in.
+// hasMark reports whether a cell of the trough is drawn as a block rather than
+// as the trough's line — which is what a mark in it makes it, whole where the
+// mark has the cell to itself and half where it shares it. The callers find the
+// cell by its colour first; this says the shape is right.
 func hasMark(cell string) bool {
-	return strings.ContainsAny(plain(cell), blockUpper+blockLower)
+	return strings.ContainsAny(plain(cell), blockFull+blockUpper+blockLower)
 }
 
 // The ends of the list are reachable: a mark must never fall off the trough.
@@ -577,7 +579,7 @@ func TestTheMarkAndTheThumbShareACell(t *testing.T) {
 	// A long list moves its thumb by well under a cell per row, so at the
 	// top both the thumb and a mark for an early track are on row 0.
 	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
-		playing: "v0", highlight: surface}
+		playing: "v0", highlight: surface, dimmed: surface}
 	bar := table.scrollbar()
 
 	cell := bar[0]
@@ -588,9 +590,14 @@ func TestTheMarkAndTheThumbShareACell(t *testing.T) {
 	if !codes[liveFG] {
 		t.Errorf("the shared cell does not say the track is there: %v", codes)
 	}
-	// And the thumb is still under it, as the background of that half.
+	// And the thumb is still under it, as the background of that half. Half a
+	// block is only drawn where there is something behind it: on the bare
+	// trough a mark takes the whole cell, or the line would have a hole in it.
 	if !codes[highlightSGR] {
 		t.Errorf("the thumb is not behind the mark: %v", codes)
+	}
+	if got := plain(cell); !strings.Contains(got, blockUpper) {
+		t.Errorf("the shared cell is %q, want the mark's half of it", got)
 	}
 	// Below the thumb the trough is its ordinary self.
 	if got := plain(bar[height-1]); !strings.Contains(got, "│") {
@@ -1049,5 +1056,49 @@ func TestTheMainViewColoursItsBarByThePageShown(t *testing.T) {
 	frame = strings.Split(m.View().Content, "\n")[tabsHeight+headerRows]
 	if sgrCodes(frame)[likedFG] {
 		t.Errorf("another playlist's row carries magenta: %q", frame)
+	}
+}
+
+// Every cell of the trough is painted from edge to edge. A mark drawn as half a
+// block with nothing behind the other half left a hole in the line, which reads
+// as the line breaking rather than as something marked in it — so a mark alone
+// in a cell takes the whole cell, and only a mark sharing one is half of it.
+func TestTheTroughHasNoHolesInIt(t *testing.T) {
+	const height, total = 10, 40
+	tracks := trough(total)
+	tracks[0].Rating = RatingUp    // cell 0, top half, inside the thumb
+	tracks[20].Rating = RatingDown // cell 5, top half, on the bare trough
+	// Cell 8 is halves 16 and 17, which rows 32 and 34 fall in.
+	tracks[32].Rating = RatingUp
+	tracks[34].Rating = RatingDown
+	table := trackTable{tracks: tracks, width: 60, height: height + headerRows,
+		showRating: true, playing: "v12", highlight: surface, dimmed: muted}
+
+	for i, cell := range table.scrollbar() {
+		bare := strings.TrimSpace(plain(cell))
+		if bare != blockFull && bare != blockUpper && bare != troughLine {
+			t.Errorf("cell %d draws %q", i, bare)
+		}
+		// A half block only where something is drawn behind it.
+		if bare == blockUpper && !strings.Contains(cell, "\x1b[") {
+			t.Errorf("cell %d is half a block on nothing: %q", i, cell)
+		}
+	}
+
+	// The marks that share no cell fill theirs, so the line runs through them.
+	for _, at := range []int{5} {
+		if got := strings.TrimSpace(plain(table.scrollbar()[at])); got != blockFull {
+			t.Errorf("the lone mark in cell %d is %q, want a whole block", at, got)
+		}
+	}
+	// The one sharing with the thumb keeps its half, since the thumb fills the
+	// rest of that cell.
+	if got := strings.TrimSpace(plain(table.scrollbar()[0])); got != blockUpper {
+		t.Errorf("the mark in the thumb is %q, want half a block", got)
+	}
+	// And two marks in one cell are still both there.
+	shared := table.scrollbar()[8]
+	if !sgrCodes(shared)[likedFG] || !sgrCodes(shared)[dislikedBG] {
+		t.Errorf("the shared cell lost one of its two: %q", shared)
 	}
 }

@@ -394,29 +394,36 @@ func (t trackTable) troughCell(top, bottom color.Color, inThumb bool, furniture 
 		}
 		return furniture.Render(troughLine)
 	}
+	// Whatever is in it, a cell is painted from edge to edge. A mark drawn as
+	// half a block with nothing behind the other half leaves a hole, and a hole
+	// in a line reads as the line breaking rather than as a mark in it.
 	switch {
 	case top != nil && bottom != nil:
 		// Two marks in one cell, one above the other: the upper is drawn and
 		// the lower is what it is drawn on.
 		return lipgloss.NewStyle().Foreground(top).Background(bottom).Render(blockUpper)
 	case top != nil:
-		return halfMark(blockUpper, top, inThumb, t.highlight)
+		return mark(blockUpper, top, inThumb, t.barPen())
 	case bottom != nil:
-		return halfMark(blockLower, bottom, inThumb, t.highlight)
+		return mark(blockLower, bottom, inThumb, t.barPen())
 	case inThumb:
 		return furniture.Render(blockFull)
 	}
 	return furniture.Render(troughLine)
 }
 
-// halfMark is a mark in one half of a cell. Inside the window the other half
-// is the thumb, drawn as this one's background so that neither hides the other.
-func halfMark(glyph string, hue color.Color, inThumb bool, highlight color.Color) string {
-	style := lipgloss.NewStyle().Foreground(hue)
-	if inThumb {
-		style = style.Background(highlight)
+// mark is the one thing in a cell, in the half it falls in.
+//
+// Inside the window the other half is the thumb, drawn as this one's background
+// so that neither hides the other. Outside it there is nothing to draw under the
+// mark and nothing to hide, so the mark takes the whole cell: half of it would
+// be half a mark over a hole in the trough, and the line would look broken
+// rather than marked.
+func mark(glyph string, hue color.Color, inThumb bool, thumb color.Color) string {
+	if !inThumb {
+		return lipgloss.NewStyle().Foreground(hue).Render(blockFull)
 	}
-	return style.Render(glyph)
+	return lipgloss.NewStyle().Foreground(hue).Background(thumb).Render(glyph)
 }
 
 // barPen is the scrollbar's own colour, which is the line under the list's: the
