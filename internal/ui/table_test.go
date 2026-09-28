@@ -506,6 +506,24 @@ func TestTheScrollbarMarksThePlayingTrack(t *testing.T) {
 	}
 }
 
+// filled reports whether a cell paints a background as well as a glyph, which
+// is what keeps half a block from being half a hole.
+func filled(cell string) bool {
+	codes := sgrCodes(cell)
+	if codes["48"] {
+		return true // a derived colour, written as 48;2;r;g;b
+	}
+	for _, code := range []string{
+		"40", "41", "42", "43", "44", "45", "46", "47",
+		"100", "101", "102", "103", "104", "105", "106", "107",
+	} {
+		if codes[code] {
+			return true
+		}
+	}
+	return false
+}
+
 // hasMark reports whether a cell of the trough is drawn as a block rather than
 // as the trough's line — which is what a mark in it makes it, whole where the
 // mark has the cell to itself and half where it shares it. The callers find the
@@ -1059,10 +1077,15 @@ func TestTheMainViewColoursItsBarByThePageShown(t *testing.T) {
 	}
 }
 
-// Every cell of the trough is painted from edge to edge. A mark drawn as half a
-// block with nothing behind the other half left a hole in the line, which reads
-// as the line breaking rather than as something marked in it — so a mark alone
-// in a cell takes the whole cell, and only a mark sharing one is half of it.
+// Every cell of the trough is painted from edge to edge, and every mark is the
+// same half of one wherever it lands.
+//
+// Half a block with nothing behind it leaves a hole, and a hole in a line reads
+// as the line breaking rather than as something marked in it. So the other half
+// is drawn too: the mark it shares the cell with, or the bar's own colour, which
+// is the thumb inside the window and the line outside it. A mark that took the
+// whole cell on the bare trough closed the hole as well, but then how big a mark
+// is said where the window was rather than anything about the track.
 func TestTheTroughHasNoHolesInIt(t *testing.T) {
 	const height, total = 10, 40
 	tracks := trough(total)
@@ -1080,21 +1103,18 @@ func TestTheTroughHasNoHolesInIt(t *testing.T) {
 			t.Errorf("cell %d draws %q", i, bare)
 		}
 		// A half block only where something is drawn behind it.
-		if bare == blockUpper && !strings.Contains(cell, "\x1b[") {
+		if bare == blockUpper && !filled(cell) {
 			t.Errorf("cell %d is half a block on nothing: %q", i, cell)
 		}
 	}
 
-	// The marks that share no cell fill theirs, so the line runs through them.
-	for _, at := range []int{5} {
-		if got := strings.TrimSpace(plain(table.scrollbar()[at])); got != blockFull {
-			t.Errorf("the lone mark in cell %d is %q, want a whole block", at, got)
+	// Cell 0 is a mark over the thumb and cell 5 a mark over the bare trough.
+	// The same half of a cell either way: how big a mark is says nothing about
+	// where the window happens to be.
+	for _, at := range []int{0, 5} {
+		if got := strings.TrimSpace(plain(table.scrollbar()[at])); got != blockUpper {
+			t.Errorf("the mark in cell %d is %q, want half a block", at, got)
 		}
-	}
-	// The one sharing with the thumb keeps its half, since the thumb fills the
-	// rest of that cell.
-	if got := strings.TrimSpace(plain(table.scrollbar()[0])); got != blockUpper {
-		t.Errorf("the mark in the thumb is %q, want half a block", got)
 	}
 	// And two marks in one cell are still both there.
 	shared := table.scrollbar()[8]
