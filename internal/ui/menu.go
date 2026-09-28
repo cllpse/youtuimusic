@@ -24,14 +24,24 @@ const (
 	menuMix
 	menuLike
 	menuDislike
+	menuCancel
 )
 
 // trackMenu is the menu a right-click on a track opens.
+//
+// confirming is the step between choosing the dislike row and doing it. A
+// dislike is the one thing in the menu that changes what the server thinks of
+// a track you may have pointed at by accident, and it also changes what plays
+// next when the track is the one playing — so it asks once, in place, and the
+// same menu answers. No other row asks: going somewhere and liking are both
+// undone by going back, and a menu that asked after everything would be a
+// dialog rather than a menu.
 type trackMenu struct {
-	open   bool
-	track  Track
-	x, y   int
-	cursor int
+	open       bool
+	confirming bool
+	track      Track
+	x, y       int
+	cursor     int
 }
 
 // menuRow is one line of it.
@@ -55,9 +65,32 @@ type menuRow struct {
 // leads — its album, its artist, and the mix built around it, which is a page
 // that did not exist until you asked for it. Below it, what you think of the
 // row. Going somewhere is the commoner errand of the two and reads first.
+//
+// The confirm view has two rows and no rule, so the constant is only reached
+// when there are rows enough to pass it.
 const dividerAfter = 2
 
 func (m Model) menuRows() []menuRow {
+	if m.menu.confirming {
+		return m.confirmRows()
+	}
+	return m.rateRows()
+}
+
+// confirmRows is what the menu becomes while it is asking. The question is
+// the row itself rather than a line of prose above it: a menu is a column of
+// things you can do, and "Confirm dislike" is one.
+func (m Model) confirmRows() []menuRow {
+	p := m.palette()
+	return []menuRow{
+		{menuDislike, "Confirm dislike", true, p.disliked},
+		{menuCancel, "Cancel", true, nil},
+	}
+}
+
+// rateRows is the menu as it opens: where the track leads, then what you
+// think of it.
+func (m Model) rateRows() []menuRow {
 	t := m.menu.track
 	p := m.palette()
 	// Each row says what pressing it does, so a track that already carries a
@@ -135,7 +168,7 @@ func (m Model) menuSize() (width, height int) {
 // with no album page or no linked artist, and a menu that opens on a dead row
 // swallows the first thing you press.
 func (m Model) openMenu(t Track, x, y int) Model {
-	m.menu = trackMenu{open: true, track: t}
+	m.menu = trackMenu{open: true, track: t, confirming: false}
 	for i, row := range m.menuRows() {
 		if row.enabled {
 			m.menu.cursor = i
@@ -208,6 +241,14 @@ func (m Model) handleMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	rows, k := m.menuRows(), appKeys
 	switch {
 	case matches(msg, k.Close):
+		if m.menu.confirming {
+			// esc steps back to the menu rather than dismissing it, the way
+			// esc steps back through a stack of popovers. Dismissing the lot
+			// from here would make the confirm step a trap: choosing to look
+			// at the menu again would not put it back.
+			m = m.stepBack()
+			return m, nil
+		}
 		m.menu = trackMenu{}
 	case matches(msg, k.Quit):
 		return m, tea.Quit
@@ -226,28 +267,59 @@ func (m Model) handleMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// activate runs a menu row and closes the menu.
+// activate runs a menu row and closes the menu — except the dislike row,
+// which asks first, and whose answer closes it.
 func (m Model) activate(row int) (tea.Model, tea.Cmd) {
 	rows := m.menuRows()
 	if row < 0 || row >= len(rows) || !rows[row].enabled {
 		return m, nil
 	}
 	t := m.menu.track
-	m.menu = trackMenu{}
 
+	switch rows[row].item {
+	case menuDislike:
+		if !m.menu.confirming {
+			return m.askDislike()
+		}
+		m.menu = trackMenu{}
+		return m.rateTrack(t, RatingDown)
+	case menuCancel:
+		return m.stepBack(), nil
+	}
+
+	m.menu = trackMenu{}
 	switch rows[row].item {
 	case menuMix:
 		return m.mixFrom(t)
 	case menuLike:
 		return m.rateTrack(t, RatingUp)
-	case menuDislike:
-		return m.rateTrack(t, RatingDown)
 	case menuAlbum:
 		return m.goTo(Playlist{ID: t.AlbumID, Title: t.Album, kind: tabAlbum})
 	case menuArtist:
 		return m.goTo(Playlist{ID: t.ArtistID, Title: t.Artist, kind: tabArtist})
 	}
 	return m, nil
+}
+
+// askDislike turns the menu into the question. The cursor goes to the cancel
+// row, so that entering twice by accident — the gesture this step exists for
+// — does nothing at all. Confirm is one deliberate move from anywhere.
+func (m Model) askDislike() (tea.Model, tea.Cmd) {
+	m.menu.confirming = true
+	m.menu.cursor = 1 // cancel
+	return m, nil
+}
+
+// stepBack puts the menu back the way it opened. The cursor lands on the
+// dislike row, since that is where the reader just was.
+func (m Model) stepBack() Model {
+	m.menu.confirming = false
+	for i, row := range m.rateRows() {
+		if row.item == menuDislike {
+			m.menu.cursor = i
+		}
+	}
+	return m
 }
 
 // rateTrack rates any track, not only the playing or highlighted one.

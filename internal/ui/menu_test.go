@@ -1427,8 +1427,8 @@ func TestTheMenuRatingRowsCarryTheirColours(t *testing.T) {
 	}
 }
 
-// Disliking from the menu rates the row it was opened on, and moves on if that
-// row is the one playing — the same rule the key has. The menu is where the
+// Disliking from the menu rates the row it was opened on — after asking, since
+// a dislike is the one row whose answer leaves the room. The menu is where the
 // thumbs went when they left the transport, and it rates what you pointed at.
 func TestDislikeFromTheMenuRatesTheTrack(t *testing.T) {
 	m, lib, _, au := menuModel(t)
@@ -1437,6 +1437,23 @@ func TestDislikeFromTheMenuRatesTheTrack(t *testing.T) {
 	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
 	m = drain(t, next.(Model), cmd)
 	x, y := rowAt(m, menuDislike)
+	next, cmd = m.Update(click(x, y))
+	m = drain(t, next.(Model), cmd)
+
+	// Choosing it asked, and nothing has happened yet.
+	if !m.menu.confirming {
+		t.Fatal("choosing the dislike row did not ask")
+	}
+	if len(lib.rated) != 0 {
+		t.Fatalf("rated %+v before the answer", lib.rated)
+	}
+
+	// Confirm is the row the cursor is not on: entering twice by accident —
+	// the gesture this step exists for — lands on cancel.
+	if m.menu.cursor != rowIndex(m, menuCancel) {
+		t.Errorf("the cursor is on row %d, want cancel", m.menu.cursor)
+	}
+	x, y = rowAt(m, menuDislike)
 	next, cmd = m.Update(click(x, y))
 	m = drain(t, next.(Model), cmd)
 
@@ -1467,8 +1484,72 @@ func TestDislikeFromTheMenuRatesTheTrack(t *testing.T) {
 	x, y = rowAt(m, menuDislike)
 	next, cmd = m.Update(click(x, y))
 	m = drain(t, next.(Model), cmd)
+	x, y = rowAt(m, menuDislike)
+	next, cmd = m.Update(click(x, y))
+	m = drain(t, next.(Model), cmd)
 	if len(lib.rated) != 2 || lib.rated[1].rating != ytm.RatingNone {
 		t.Fatalf("rated %+v, want it cleared", lib.rated)
+	}
+}
+
+// The confirm step can be refused, three ways: the cancel row, esc, and
+// clicking away. None of them rates anything, and the first two put the menu
+// back rather than dismissing it, since the reader may only have been looking
+// at it.
+func TestADislikeCanBeRefused(t *testing.T) {
+	ask := func(t *testing.T) Model {
+		t.Helper()
+		m, _, _, _ := menuModel(t)
+		at, _ := m.openMenu(m.Tracks[0], 4, 4).activate(rowIndex(m, menuDislike))
+		return at.(Model)
+	}
+
+	// The cancel row puts the menu back with nothing done.
+	m := ask(t)
+	back, _ := m.activate(rowIndex(m, menuCancel))
+	m = back.(Model)
+	if m.menu.confirming || !m.menu.open {
+		t.Errorf("cancel left confirming=%v open=%v", m.menu.confirming, m.menu.open)
+	}
+	if m.menu.cursor != rowIndex(m, menuDislike) {
+		t.Errorf("the cursor is on row %d, want the dislike row", m.menu.cursor)
+	}
+
+	// esc does the same from the keyboard.
+	m = ask(t)
+	back, _ = m.Update(keyPress("esc"))
+	m = back.(Model)
+	if m.menu.confirming || !m.menu.open {
+		t.Errorf("esc left confirming=%v open=%v", m.menu.confirming, m.menu.open)
+	}
+
+	// Clicking away dismisses the lot, as it does from the menu itself.
+	// Well clear of the box, which sits at (4,4) and would otherwise read
+	// the click as a row of its own.
+	m = ask(t)
+	back, _ = m.Update(click(0, 0))
+	m = back.(Model)
+	if m.menu.open {
+		t.Error("clicking away left the menu open")
+	}
+
+	// Enter on cancel also refuses — the cursor opens there.
+	m = ask(t)
+	back, _ = m.activate(m.menu.cursor)
+	m = back.(Model)
+	if m.menu.confirming {
+		t.Error("enter on cancel confirmed anyway")
+	}
+
+	// And the keyboard path confirms like the click does.
+	m, lib, _, _ := menuModel(t)
+	at, _ := m.openMenu(m.Tracks[0], 4, 4).activate(rowIndex(m, menuDislike))
+	m = at.(Model)
+	m.menu.cursor = rowIndex(m, menuDislike) // confirm
+	next, cmd := m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+	if len(lib.rated) != 1 || lib.rated[0].rating != ytm.RatingDown {
+		t.Fatalf("rated %+v, want a dislike", lib.rated)
 	}
 }
 
