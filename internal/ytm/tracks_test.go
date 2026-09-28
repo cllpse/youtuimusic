@@ -610,3 +610,53 @@ func TestEveryFieldIsTidied(t *testing.T) {
 		t.Errorf("got %q / %q / %q", got.Title, got.Artist, got.Album)
 	}
 }
+
+// link is a byline run that points at an artist or an album, which is how a
+// queue row says who made it.
+func link(text, id, pageType string) string {
+	return `{"text":"` + text + `","navigationEndpoint":{"browseEndpoint":{"browseId":"` + id + `",
+		"browseEndpointContextSupportedConfigs":{"browseEndpointContextMusicConfig":{"pageType":"` + pageType + `"}}}}}`
+}
+
+func queueRow(videoID, title, length, byline string) string {
+	return `{"playlistPanelVideoRenderer":{"videoId":"` + videoID + `",
+		"title":{"runs":[{"text":"` + title + `"}]},
+		"lengthText":{"runs":[{"text":"` + length + `"}]},
+		"longBylineText":{"runs":[` + byline + `]}}}`
+}
+
+// Some rows of a queue are wrapped: the song, and the same song as a music
+// video. Both are the renderer a walk looks for, so the song came out twice —
+// once with its artist and album and once without, since the video carries
+// neither. That is what a duplicate in a mix was.
+func TestAQueueLeavesOutTheVideoCounterparts(t *testing.T) {
+	byline := link("A", "UCa", pageTypeArtist) +
+		`,{"text":" • "},` + link("First", "MPREa", pageTypeAlbum)
+	plain := queueRow("song1", "One", "3:00", byline)
+	song := queueRow("song2", "Two", "4:00", link("B", "UCb", pageTypeArtist))
+	video := queueRow("video2", "Two", "4:00", "")
+	wrapped := `{"playlistPanelVideoWrapperRenderer":{"primaryRenderer":` + song +
+		`,"counterpart":[{"counterpartRenderer":` + video + `}]}}`
+	raw := []byte(`{"contents":{"playlistPanelRenderer":{"contents":[` +
+		plain + `,` + wrapped + `]}}}`)
+
+	got := queueTracks(raw)
+	if len(got) != 2 {
+		t.Fatalf("got %d tracks, want one per row: %+v", len(got), got)
+	}
+	if got[0].VideoID != "song1" || got[1].VideoID != "song2" {
+		t.Errorf("ids = %q %q", got[0].VideoID, got[1].VideoID)
+	}
+	for _, tr := range got {
+		if tr.VideoID == "video2" {
+			t.Error("the counterpart is in the queue")
+		}
+	}
+	// The row that was wrapped keeps everything the wrapper held for it.
+	if got[1].Title != "Two" || got[1].Artist != "B" || got[1].ArtistID != "UCb" {
+		t.Errorf("the wrapped row is %+v", got[1])
+	}
+	if got[0].Album != "First" || got[0].AlbumID != "MPREa" || got[0].Duration != 3*time.Minute {
+		t.Errorf("the plain row is %+v", got[0])
+	}
+}

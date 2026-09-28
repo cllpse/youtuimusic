@@ -125,6 +125,7 @@ func queueTracks(raw json.RawMessage) []Track {
 	if err := json.Unmarshal(raw, &tree); err != nil {
 		return nil
 	}
+	skip := counterparts(tree)
 	var out []Track
 	for _, node := range findAll(tree, "playlistPanelVideoRenderer") {
 		item, ok := node.(map[string]any)
@@ -132,7 +133,7 @@ func queueTracks(raw json.RawMessage) []Track {
 			continue
 		}
 		id, _ := item["videoId"].(string)
-		if id == "" {
+		if id == "" || skip[id] {
 			continue
 		}
 		out = append(out, Track{
@@ -144,6 +145,35 @@ func queueTracks(raw json.RawMessage) []Track {
 			ArtistID: browseTarget(item, pageTypeArtist),
 			AlbumID:  browseTarget(item, pageTypeAlbum),
 		})
+	}
+	return out
+}
+
+// counterparts is every row of a queue that is another row's music video.
+//
+// Some rows come wrapped: a primaryRenderer holding the song, and a
+// counterpartRenderer holding the same song as a video, which is what the queue
+// would play if you asked for video rather than audio. Both are
+// playlistPanelVideoRenderers, so a walk that looks for those finds the song
+// twice — once with its artist and album, and once without, since the video
+// carries neither. Measured on a live mix: fifty rows, six of them wrapped, and
+// fifty-six tracks out the other end.
+//
+// They are gathered by their own video ids rather than by where they sit,
+// because the first page of a mix and the pages after it are not the same shape
+// and an id is an id in both.
+func counterparts(tree any) map[string]bool {
+	out := map[string]bool{}
+	for _, node := range findAll(tree, "counterpartRenderer") {
+		for _, inner := range findAll(node, "playlistPanelVideoRenderer") {
+			item, ok := inner.(map[string]any)
+			if !ok {
+				continue
+			}
+			if id, _ := item["videoId"].(string); id != "" {
+				out[id] = true
+			}
+		}
 	}
 	return out
 }
