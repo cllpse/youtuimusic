@@ -120,9 +120,9 @@ func groupWidth(group []button) int {
 
 // groupGap is the space between one kind of control and another: the transport
 // moves about the list and repeat says what happens when a track ends, which is
-// a different errand. One cell more than the gap between two buttons, which is
-// the least that reads as a separation rather than as a typo.
-const groupGap = buttonGap + 1
+// a different errand. Twice the gap between two buttons, so that it reads as a
+// gap of its own rather than as one that happens to be wider.
+const groupGap = buttonGap * 2
 
 // controlButtons lays the row out: the transport against the left edge, repeat
 // a little clear of it. Rendering and hit-testing share it, so a click lands on
