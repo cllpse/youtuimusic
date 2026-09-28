@@ -991,10 +991,10 @@ func TestTwoMarksShareACellOneAbleTheOther(t *testing.T) {
 // is liked, so the bar is all it has left to say it with.
 func TestTheScrollbarIsMagentaOnTheLikedPlaylist(t *testing.T) {
 	onLiked := trackTable{tracks: trough(40), width: 60, height: 10 + headerRows,
-		likedList: true, highlight: surface, dimmed: muted,
+		accent: liked, highlight: surface, dimmed: muted,
 		quiet: color.RGBA{0xBF, 0xBF, 0xBF, 0xFF}}
 	elsewhere := onLiked
-	elsewhere.likedList = false
+	elsewhere.accent = nil
 
 	for _, cell := range onLiked.scrollbar() {
 		if !sgrCodes(cell)[likedFG] {
@@ -1044,8 +1044,8 @@ func TestTheMainViewColoursItsBarByThePageShown(t *testing.T) {
 	m.Tracks = rows(100)
 
 	m.showingID = likedPlaylistID
-	if !m.table(m.width, m.bodyHeight()).likedList {
-		t.Error("the table was not told it is the liked playlist")
+	if m.table(m.width, m.bodyHeight()).accent != liked {
+		t.Error("the table was not told whose page it is showing")
 	}
 	frame := strings.Split(m.View().Content, "\n")[tabsHeight+headerRows]
 	if !sgrCodes(frame)[likedFG] {

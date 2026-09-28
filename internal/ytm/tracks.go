@@ -61,6 +61,89 @@ func (c *Client) PlaylistTracks(ctx context.Context, playlistID string) (Page, e
 	return c.page(ctx, "browse", map[string]any{"browseId": browseID})
 }
 
+// RadioPrefix turns a video id into the id of the mix built around it, which
+// is what YouTube Music calls a radio. It is a playlist id like any other as
+// far as the rest of the app is concerned — it names a listing, and it is the
+// one prefix that says the listing was made for you rather than by you.
+const RadioPrefix = "RDAMVM"
+
+// RadioID is the radio of one track.
+func RadioID(videoID string) string { return RadioPrefix + videoID }
+
+// RadioSeed is the track a radio was built around.
+func RadioSeed(playlistID string) string {
+	return strings.TrimPrefix(playlistID, RadioPrefix)
+}
+
+// Radio returns the mix the server builds around a track: the track itself
+// first, and then what it would play after it.
+//
+// It goes to next rather than browse, because a mix is a queue and not a
+// listing — there is nothing to browse until the server has made one. The
+// three settings are what the web player sends; without
+// enablePersistentPlaylistPanel the answer describes the track and leaves the
+// queue out entirely.
+//
+// Deliberately no params. The value ytmusicapi sends for a radio,
+// wAEB8gECKAE%3D, now comes back with the queue missing — measured against a
+// live account: 17kB and no panel with it, 2.4MB and sixty-five tracks
+// without. Nothing in the answer says why, so this sends what works.
+func (c *Client) Radio(ctx context.Context, videoID string) (Page, error) {
+	if videoID == "" {
+		return Page{}, fmt.Errorf("ytm: radio: no track to start from")
+	}
+	raw, err := c.post(ctx, "next", map[string]any{
+		"videoId":                       videoID,
+		"playlistId":                    RadioID(videoID),
+		"enablePersistentPlaylistPanel": true,
+		"isAudioOnly":                   true,
+		"tunerSettingValue":             "AUTOMIX_SETTING_NORMAL",
+	})
+	if err != nil {
+		return Page{}, err
+	}
+	return Page{Tracks: queueTracks(raw)}, nil
+}
+
+// queueTracks reads the rows of a watch queue.
+//
+// A queue row is a playlistPanelVideoRenderer, which is not the shape a
+// listing uses: the title, the length and the byline are their own fields
+// rather than columns. What the byline is made of is the same though, so the
+// artist and the album are read out of it by their links the way they are
+// everywhere else.
+//
+// No rating comes back on these rows. The panel carries a like button rather
+// than a like status, so a mix opens with nothing marked and marks what you
+// rate while you are in it.
+func queueTracks(raw json.RawMessage) []Track {
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		return nil
+	}
+	var out []Track
+	for _, node := range findAll(tree, "playlistPanelVideoRenderer") {
+		item, ok := node.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, _ := item["videoId"].(string)
+		if id == "" {
+			continue
+		}
+		out = append(out, Track{
+			VideoID:  id,
+			Title:    tidy(runsText(item["title"])),
+			Artist:   tidy(linkedText(item, pageTypeArtist)),
+			Album:    tidy(linkedText(item, pageTypeAlbum)),
+			Duration: parseDuration(runsText(item["lengthText"])),
+			ArtistID: browseTarget(item, pageTypeArtist),
+			AlbumID:  browseTarget(item, pageTypeAlbum),
+		})
+	}
+	return out
+}
+
 // songsFilter restricts search to songs. Without it the server answers with
 // whatever matches — mostly user-uploaded videos, with view counts where the
 // album should be — which is not what a music player wants.

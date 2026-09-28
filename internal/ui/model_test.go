@@ -488,6 +488,8 @@ const (
 	// fill is allowed.
 	likedBG    = "45"
 	dislikedBG = "41"
+	// stationFG is a mix, which is a page somebody else chose for you.
+	stationFG = "36"
 	// liveFG is the same blue as text: what is playing takes it wherever it
 	// is pointed at — the row in the list, its mark in the scrollbar, the
 	// played part of the bar.
@@ -1152,13 +1154,13 @@ var chromaticCodes = []string{
 // turned inside out, so a hue anywhere else is a regression — and an easy one
 // to make, since reaching for a colour is the obvious way to mark something.
 //
-// Three things earn one. The player's blue goes wherever the track playing is
+// Four things earn one. The player's blue goes wherever the track playing is
 // pointed at: the row in the list, its mark in the scrollbar, the played part
 // of the bar, the state block. Magenta and red are a rating, on the row and on
-// the button that sets it. And the state block alone also carries green, yellow
-// or red, since it is the one thing on screen that says how the app is going
-// rather than what it holds — which of those it says is
-// TestTheStateBlockIsColouredByState's.
+// the row menu. Cyan is a mix — the button that starts one, and the edges of the
+// page it opens. And the state block alone also carries green, yellow or red,
+// since it is the one thing on screen that says how the app is going rather than
+// what it holds — which of those it says is TestTheStateBlockIsColouredByState's.
 //
 // All four of those appear as a background as well as a foreground: two marks
 // in one cell of the scrollbar are drawn as one over the other. Which means red
@@ -1206,6 +1208,8 @@ func TestNothingIsColouredButThePlayerAndTheRatings(t *testing.T) {
 					case code == likedFG || code == dislikedFG,
 						code == likedBG || code == dislikedBG:
 						// What you think of a row: on the row, in the trough.
+					case code == stationFG:
+						// A mix: the button that starts one, and its page.
 					case row == at.statusRow() && (code == goodBG || code == busyBG):
 						// The state block, on the row the state block is on.
 					case slices.Contains(chromaticCodes, code):

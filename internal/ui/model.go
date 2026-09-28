@@ -57,6 +57,7 @@ const (
 	tabSearch
 	tabAlbum
 	tabArtist
+	tabRadio
 )
 
 // Playlist is one tab.
@@ -113,6 +114,10 @@ type Model struct {
 
 	menu   trackMenu
 	detour detour
+	// radio is the mix started from a track, which is a tab for as long as the
+	// app is open and never longer: it is not one of the library's playlists,
+	// nothing brings it back, and starting another replaces it.
+	radio Playlist
 	// sheetOpen is the keys sheet, which is in front of everything when it is
 	// up and is not part of the stack behind it: it is what the app does, not
 	// somewhere you went.
@@ -368,13 +373,46 @@ func (m Model) afterDetourMove() (tea.Model, tea.Cmd, bool) {
 
 // tabCount is the playlists. Nothing else lives in the row: a search, an
 // album and an artist are all popovers.
-func (m Model) tabCount() int { return len(m.Playlists) }
+// The tab row is the library's playlists, with a radio in front of them while
+// there is one. In front because that is where the music is: a mix is started
+// and listened to, not a place you keep coming back to, and it is gone when the
+// app closes.
+func (m Model) tabCount() int {
+	if m.radio.ID != "" {
+		return len(m.Playlists) + 1
+	}
+	return len(m.Playlists)
+}
 
 func (m Model) tabAt(i int) Playlist {
+	if m.radio.ID != "" {
+		if i == 0 {
+			return m.radio
+		}
+		i--
+	}
 	if i >= 0 && i < len(m.Playlists) {
 		return m.Playlists[i]
 	}
 	return Playlist{}
+}
+
+// accentOf is the colour a page claims for itself: the liked playlist's
+// magenta, a mix's cyan, and nothing for an ordinary playlist. Its label says
+// it at the top of the page, the line under the list says it at the bottom, and
+// the scrollbar says it down the side.
+//
+// By id, because every one of those asks from a different direction — a tab
+// from its playlist, the list from what it is showing, a popover from where it
+// came from — and an id is the one thing all three have.
+func accentOf(id string) color.Color {
+	switch {
+	case id == likedPlaylistID:
+		return liked
+	case id != "" && strings.HasPrefix(id, ytm.RadioPrefix):
+		return stationHue
+	}
+	return nil
 }
 
 // SelectedPlaylist returns the tab in front.
@@ -826,6 +864,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.press(controlPrevious)
 	case matches(msg, k.Repeat):
 		return m.press(controlRepeat)
+	case matches(msg, k.Radio):
+		return m.press(controlRadio)
 
 	case matches(msg, k.PrevTab):
 		return m.selectTab(m.tabCursor - 1)
@@ -989,6 +1029,11 @@ var (
 	good = lipgloss.Green
 	busy = lipgloss.Yellow
 	live = lipgloss.Blue
+
+	// station is a mix the server built, which is a page of somebody else's
+	// choosing rather than one of yours — the one other kind of page that is
+	// worth telling apart at a glance.
+	stationHue = lipgloss.Cyan
 
 	// liked and disliked are what you think of a track, which the list said
 	// with a pair of thumbs until a hue could say it without spending a cell
@@ -1170,8 +1215,8 @@ func (m Model) tabPen(index int) color.Color {
 }
 
 // tabLabel is how a tab's own name reads: faint behind, bold and emphasised in
-// front, the quiet colour behind a popover — and the liked playlist's magenta
-// wherever it sits, because that is whose playlist it is rather than where it is.
+// front, the quiet colour behind a popover — and its page's accent wherever it
+// sits, because that is what the page is rather than where it is.
 //
 // The label and nothing else of the tab. Its outline and the rule under the row
 // have their own job, which is saying which tab is in front and what is covered;
@@ -1186,16 +1231,10 @@ func (m Model) tabLabel(index int) lipgloss.Style {
 	default:
 		style = style.Faint(true)
 	}
-	if m.tabAt(index).ID == likedPlaylistID {
-		style = style.Foreground(liked)
+	if hue := accentOf(m.tabAt(index).ID); hue != nil {
+		style = style.Foreground(hue)
 	}
 	return style
-}
-
-// likedTabInFront reports whether the tab in front is the liked playlist, which
-// is what colours its label and the line at the bottom of its page.
-func (m Model) likedTabInFront() bool {
-	return m.tabAt(m.tabCursor).ID == likedPlaylistID
 }
 
 // tabMarker is what a tab carries while the track playing is in its listing, in
@@ -1537,7 +1576,7 @@ func (m Model) table(width, height int) trackTable {
 		width:       width,
 		height:      height,
 		showRating:  m.showsRating(),
-		likedList:   m.showingID == likedPlaylistID,
+		accent:      accentOf(m.showingID),
 		playing:     m.playing.VideoID,
 		more:        m.more.More(),
 		loadingMore: m.loadingMore,
@@ -1620,7 +1659,7 @@ func (m Model) renderStatusBar() string {
 		if m.sheetOpen {
 			state = buttonActive
 		}
-		tail = fill.Render(renderButton(labelHelp, state) + " ")
+		tail = fill.Render(renderButton(labelHelp, state, nil) + " ")
 		room -= helpButtonWidth + 1
 	}
 	return block + fillRow(m.statusSegments(), fill, room) + tail
@@ -1733,20 +1772,20 @@ func (m Model) separator() string {
 		Render(strings.Repeat("─", max(m.width, 0)))
 }
 
-// separatorColor is the dimmed colour, or the liked playlist's magenta while
-// that is the tab in front. It closes off the page above it, so with the label
-// at the top of that page saying whose it is, this says it at the bottom.
+// separatorColor is the dimmed colour, or the accent of the page in front. It
+// closes off the page above it, so with the label at the top of that page
+// saying what it is, this says it at the bottom.
 //
 // And it sinks to the quiet colour with a popover in front of the list, the way
 // the tab row above it does. The line reads as the bottom edge of the page
 // rather than as the top of the player: with something over that page, the page
 // has nothing to say and neither has either of its edges.
 func (m Model) separatorColor() color.Color {
-	switch {
-	case m.covered():
+	if m.covered() {
 		return m.quietColor()
-	case m.likedTabInFront():
-		return liked
+	}
+	if hue := accentOf(m.tabAt(m.tabCursor).ID); hue != nil {
+		return hue
 	}
 	return m.dimmedColor()
 }

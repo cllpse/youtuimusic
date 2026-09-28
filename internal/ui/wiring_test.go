@@ -73,6 +73,23 @@ func (f *fakeLibrary) Search(_ context.Context, query string) (ytm.Page, error) 
 	return ytm.Page{Tracks: f.results, Next: f.next}, nil
 }
 
+// Radio answers with whatever was staged for the seed's mix, or with the seed
+// and one track after it, which is the shape a mix has: the track you started
+// from and what follows it.
+func (f *fakeLibrary) Radio(_ context.Context, videoID string) (ytm.Page, error) {
+	f.askedFor = append(f.askedFor, "radio:"+videoID)
+	if f.err != nil {
+		return ytm.Page{}, f.err
+	}
+	if staged, ok := f.tracks[ytm.RadioID(videoID)]; ok {
+		return ytm.Page{Tracks: staged}, nil
+	}
+	return ytm.Page{Tracks: []ytm.Track{
+		{VideoID: videoID, Title: "Seed", Artist: "A"},
+		{VideoID: videoID + "-mix", Title: "Mixed", Artist: "B"},
+	}}, nil
+}
+
 // More hands back whatever was staged for the next page, once.
 func (f *fakeLibrary) More(context.Context, ytm.Continuation) (ytm.Page, error) {
 	f.askedFor = append(f.askedFor, "more")

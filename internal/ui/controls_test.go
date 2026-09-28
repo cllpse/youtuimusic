@@ -88,11 +88,12 @@ func TestTheTransportSitsAgainstTheLeft(t *testing.T) {
 			groupGap, buttonGap)
 	}
 
-	// Repeat is the last of them: nothing sits to its right any more.
-	rep, _ := buttonAt(m, controlRepeat)
+	// Radio is the last of them: it makes a page rather than working this one,
+	// so it sits at the far end of the row.
+	last, _ := buttonAt(m, controlRadio)
 	for _, b := range m.controlButtons() {
-		if b.start > rep.start {
-			t.Errorf("%v sits past repeat, at %d", b.control, b.start)
+		if b.start > last.start {
+			t.Errorf("%v sits past radio, at %d", b.control, b.start)
 		}
 	}
 
@@ -516,7 +517,7 @@ func TestTheWholeButtonIsClickable(t *testing.T) {
 func TestAButtonIsAsWideAsItsHitbox(t *testing.T) {
 	for _, label := range []string{labelPrevious, labelPause, labelRepeatOne} {
 		for _, state := range []buttonState{buttonDefault, buttonActive, buttonDisabled} {
-			lines := strings.Split(renderButton(label, state), "\n")
+			lines := strings.Split(renderButton(label, state, nil), "\n")
 			if len(lines) != controlsRows {
 				t.Errorf("%q %v draws %d rows, want %d",
 					label, state, len(lines), controlsRows)
@@ -630,6 +631,7 @@ func TestEveryButtonNamesItsKey(t *testing.T) {
 		controlPlayPause: "(space)",
 		controlNext:      "(n)",
 		controlRepeat:    "(r)",
+		controlRadio:     "(R)",
 	}
 	for _, b := range m.controlButtons() {
 		key, ok := want[b.control]
@@ -741,9 +743,9 @@ func TestLikingWhatIsPlayingStaysPut(t *testing.T) {
 func TestTheButtonComponentsThreeStates(t *testing.T) {
 	const label = "Prev (p)"
 
-	def := renderButton(label, buttonDefault)
-	act := renderButton(label, buttonActive)
-	off := renderButton(label, buttonDisabled)
+	def := renderButton(label, buttonDefault, nil)
+	act := renderButton(label, buttonActive, nil)
+	off := renderButton(label, buttonDisabled, nil)
 
 	if def != padded(label) {
 		t.Errorf("the default state draws %q, want just the label", def)
@@ -778,7 +780,7 @@ func TestAButtonHasNoAirOfItsOwn(t *testing.T) {
 		t.Errorf("buttonPadding is %d, want none", buttonPadding)
 	}
 	for _, label := range []string{labelPrevious, labelClose, labelHelp} {
-		if got := renderButton(label, buttonDefault); got != label {
+		if got := renderButton(label, buttonDefault, nil); got != label {
 			t.Errorf("%q drew %q, want the label alone", label, got)
 		}
 		if got, want := buttonWidth(label), lipgloss.Width(label); got != want {

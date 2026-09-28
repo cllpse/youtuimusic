@@ -27,6 +27,7 @@ type Library interface {
 	AlbumTracks(ctx context.Context, browseID string) (ytm.Page, error)
 	ArtistPage(ctx context.Context, browseID string) (ytm.Page, error)
 	Search(ctx context.Context, query string) (ytm.Page, error)
+	Radio(ctx context.Context, videoID string) (ytm.Page, error)
 	More(ctx context.Context, from ytm.Continuation) (ytm.Page, error)
 	Rate(ctx context.Context, videoID string, r ytm.Rating) error
 }
@@ -163,6 +164,8 @@ func (m Model) fetchTracks(p Playlist) tea.Cmd {
 			page, err = lib.AlbumTracks(ctx, p.ID)
 		case tabArtist:
 			page, err = lib.ArtistPage(ctx, p.ID)
+		case tabRadio:
+			page, err = lib.Radio(ctx, ytm.RadioSeed(p.ID))
 		default:
 			page, err = lib.PlaylistTracks(ctx, p.ID)
 		}

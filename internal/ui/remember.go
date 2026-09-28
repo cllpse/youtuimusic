@@ -31,8 +31,8 @@ func (m *Model) restoreTab() {
 	if m.restoring == nil {
 		return
 	}
-	for i, p := range m.Playlists {
-		if p.ID == m.restoring.Playlist {
+	for i := range m.tabCount() {
+		if m.tabAt(i).ID == m.restoring.Playlist {
 			m.tabCursor = i
 			return
 		}
@@ -70,6 +70,13 @@ func (m *Model) restorePlaying(id string) {
 func (m Model) record() {
 	tab, ok := m.SelectedPlaylist()
 	if !ok {
+		return
+	}
+	// A mix is not somewhere to come back to: it is gone when the app closes
+	// and its id names nothing the next time. Leaving the last playlist written
+	// where it was opens on that instead, which is the last page of yours the
+	// reader was on.
+	if tab.kind == tabRadio {
 		return
 	}
 	// Best effort: failing to write this must not stop the app closing.

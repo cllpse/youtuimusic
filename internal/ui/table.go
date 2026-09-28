@@ -28,11 +28,10 @@ type trackTable struct {
 	// liked playlist: a page of magenta says nothing a page of plain rows does
 	// not.
 	showRating bool
-	// likedList is that playlist itself. It says nothing about the rows — that
-	// is showRating's, and the two are opposites there — but the scrollbar takes
-	// the playlist's colour, since the whole page is one thing you have an
-	// opinion about.
-	likedList bool
+	// accent is the page's own colour, where it has one — the liked playlist's
+	// magenta, a mix's cyan. It says nothing about the rows; the scrollbar takes
+	// it, because the bar is the page's edge rather than one of its rows.
+	accent color.Color
 	// titleOnly drops every column but the first. An album is one artist's
 	// record, so naming them down the page says the same thing each time.
 	titleOnly bool
@@ -427,18 +426,18 @@ func mark(glyph string, hue color.Color, inThumb bool, thumb color.Color) string
 }
 
 // barPen is the scrollbar's own colour, which is the line under the list's: the
-// dimmed colour, the liked playlist's magenta on a page of that playlist, and the
-// quiet one with something in front of the page. The bar runs down the side of
-// the same page those lines close off, so it says the same thing they do.
+// dimmed colour, the page's accent where it has one, and the quiet one with
+// something in front of the page. The bar runs down the side of the same page
+// those lines close off, so it says the same thing they do.
 //
 // Shape still says which part of it is the window — a block there, a line where
-// it is not — so the colour is free to say whose list this is.
+// it is not — so the colour is free to say what this page is.
 func (t trackTable) barPen() color.Color {
 	switch {
 	case t.inactive:
 		return t.quiet
-	case t.likedList:
-		return liked
+	case t.accent != nil:
+		return t.accent
 	}
 	return t.dimmed
 }

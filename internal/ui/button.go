@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -64,12 +65,16 @@ func padded(label string) string {
 
 // renderButton draws one button in a state.
 //
-// The two that had a colour of their own were the ratings, and they are not on
-// this row any more — rating happens on a row's own menu, where the colour is
-// the row's. So a button is the label again, faint when it cannot be pressed.
-func renderButton(label string, state buttonState) string {
+// hue is a colour the button has of its own, and nil for the ones that have
+// none — which is all of them but the radio, whose cyan is the colour of the
+// page it makes. It is not a state: the button wears it pressed or not, and
+// faint still wins where there is nothing to press.
+func renderButton(label string, state buttonState, hue color.Color) string {
 	if state == buttonDisabled {
 		return disabledButton.Render(padded(label))
 	}
-	return padded(label)
+	if hue == nil {
+		return padded(label)
+	}
+	return lipgloss.NewStyle().Foreground(hue).Render(padded(label))
 }

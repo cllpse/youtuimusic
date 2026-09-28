@@ -1,10 +1,13 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/cllpse/youtuimusic/internal/ytm"
 )
 
 // The app draws no icons at all. The last pair was a thumbs-up and a
@@ -33,6 +36,10 @@ const (
 	labelRepeatOff = "Repeat off (r)"
 	labelRepeatOn  = "Repeat on (r)"
 	labelRepeatOne = "Repeat one (r)"
+	labelRadio     = "Radio (R)"
+	// labelRadioTab names the tab it opens. Short, because the tab row is the
+	// one place in the app that is always short of room.
+	labelRadioTab = "Radio"
 )
 
 // A button whose label changes with the state is drawn at the width of its
@@ -95,6 +102,7 @@ const (
 	controlPlayPause
 	controlNext
 	controlRepeat
+	controlRadio
 )
 
 // button is one control as laid out on the row.
@@ -102,6 +110,9 @@ type button struct {
 	control control
 	label   string
 	state   buttonState
+	// hue is a colour this one has of its own, and nil for the ones that have
+	// none.
+	hue color.Color
 	// start and end are half-open columns.
 	start, end int
 }
@@ -147,13 +158,33 @@ func (m Model) controlButtons() []button {
 		{control: controlPlayPause, label: m.playPauseLabel(), state: buttonDefault},
 		{control: controlNext, label: labelNext, state: onward},
 	}
+	// Radio makes a page rather than changing this one, which is why it is the
+	// far end of the row and why it carries that page's colour. It needs a track
+	// to build from, and is quiet without one.
+	station := buttonDefault
+	if _, ok := m.radioSeed(); !ok {
+		station = buttonDisabled
+	}
 	modes := []button{
 		{control: controlRepeat, label: m.repeat.label(), state: repeat},
+		{control: controlRadio, label: labelRadio, state: station, hue: stationHue},
 	}
-	if m.contentWidth() < groupWidth(transport)+groupGap+groupWidth(modes) {
+	// A row too narrow for all of it gives up its modes from the right, one at
+	// a time: those say what the player will do next, and the transport says
+	// what it does now. Narrower than the transport itself, and there is
+	// nothing worth drawing — the bar and the status line still say where the
+	// track is and what it is.
+	for len(modes) > 0 && m.contentWidth() < groupWidth(transport)+groupGap+groupWidth(modes) {
+		modes = modes[:len(modes)-1]
+	}
+	if m.contentWidth() < groupWidth(transport) {
 		return nil
 	}
-	lay(modes, lay(transport, contentLeft)+groupGap)
+	at := lay(transport, contentLeft)
+	if len(modes) == 0 {
+		return transport
+	}
+	lay(modes, at+groupGap)
 	return append(transport, modes...)
 }
 
@@ -190,7 +221,7 @@ func (m Model) renderControls() string {
 		at[i] = contentLeft
 	}
 	for _, btn := range buttons {
-		lines := strings.Split(renderButton(btn.label, btn.state), "\n")
+		lines := strings.Split(renderButton(btn.label, btn.state, btn.hue), "\n")
 		for r := range rows {
 			if r >= len(lines) {
 				continue
@@ -229,8 +260,50 @@ func (m Model) press(c control) (tea.Model, tea.Cmd) {
 	case controlRepeat:
 		m.repeat = m.repeat.next()
 		return m, nil
+	case controlRadio:
+		return m.startRadio()
 	}
 	return m, nil
+}
+
+// radioSeed is the track a mix would be built from: the one playing, or the one
+// under the cursor when nothing is. The same rule the play button follows, for
+// the same reason — with nothing playing, what you are pointing at is what you
+// mean.
+func (m Model) radioSeed() (Track, bool) {
+	if m.playing.VideoID != "" {
+		return m.playing, true
+	}
+	if t, ok := m.SelectedTrack(); ok && t.VideoID != "" {
+		return t, true
+	}
+	return Track{}, false
+}
+
+// startRadio opens a mix built from that track: a tab of its own in front of
+// the library's, and the seed playing if it is not already.
+//
+// The old mix goes, cache and all. Two of them would be two tabs with the same
+// name and no way to tell which was which, and the one you started last is the
+// one you meant.
+func (m Model) startRadio() (tea.Model, tea.Cmd) {
+	seed, ok := m.radioSeed()
+	if !ok {
+		return m, nil
+	}
+	if m.radio.ID != "" {
+		delete(m.cache, m.radio.ID)
+	}
+	m.radio = Playlist{ID: ytm.RadioID(seed.VideoID), Title: labelRadioTab, kind: tabRadio}
+	m.detour, m.history, m.menu = detour{}, nil, trackMenu{}
+
+	m.tabCursor = 0
+	next, cmd := m.showTab()
+	if next.playing.VideoID == seed.VideoID {
+		return next, cmd
+	}
+	playing, play := next.start(seed)
+	return playing, batch(cmd, play)
 }
 
 // skip starts the next or previous track. With nothing playing yet there is
