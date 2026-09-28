@@ -1986,12 +1986,12 @@ func TestThePlayingMarksFollowThePlayState(t *testing.T) {
 	}
 }
 
-// The theme key drops every hue the colour theme spends and keeps everything
-// else: a rated row, a playing row and the state block are still told apart by
-// weight and by being turned inside out, which is what they were before the
-// colours arrived. Red stays, for trouble and for a dislike — the two marks
-// that cannot be said by weight, and the reason the dim grey is not used for
-// one of them: as a foreground it reads as a row that cannot be chosen.
+// The theme key drops every hue the colour theme spends, everywhere but the
+// status block: it is the one thing on screen that says how the app is going,
+// and a green READY is a fact rather than a decoration. Everything else reads
+// in the terminal's own foreground — and reads plain, not quiet: a dislike
+// fainted or greyed is a row that can be chosen made to look like one that
+// cannot, which is the one thing worse than a colour spent on it.
 func TestTheMonochromeKeyDropsTheHues(t *testing.T) {
 	m := sample()
 	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
@@ -2006,12 +2006,17 @@ func TestTheMonochromeKeyDropsTheHues(t *testing.T) {
 	}
 	mono := press(m, "m")
 
-	// It is not just a flag: the frame has to lose the hues.
+	// It is not just a flag: the frame has to lose the hues, the status block
+	// excepted — whichever state it is in, the hue that says it stays.
 	for row, line := range strings.Split(mono.View().Content, "\n") {
 		for code := range sgrCodes(line) {
-			if slices.Contains(chromaticCodes, code) {
-				t.Errorf("a hue survived in monochrome on row %d: SGR %s", row, code)
+			if !slices.Contains(chromaticCodes, code) {
+				continue
 			}
+			if row == mono.statusRow() {
+				continue // the status block's hue is the exception
+			}
+			t.Errorf("a hue survived in monochrome on row %d: SGR %s", row, code)
 		}
 	}
 	// And the played part of the bar is the bright foreground, not the blue.
@@ -2019,15 +2024,17 @@ func TestTheMonochromeKeyDropsTheHues(t *testing.T) {
 	if sgrCodes(bar)[liveFG] {
 		t.Errorf("the bar kept the player's blue: %q", bar)
 	}
-	// The dislike keeps its red: the dim grey that might tell it from a like
-	// is only ever a background, and as a foreground it reads as a row that
-	// cannot be chosen.
+	// A dislike is drawn plain: no hue, and none of the quiet stand-ins —
+	// the dim grey, the faint — that would read as a row that cannot be
+	// chosen. It is one of the two rows in the menu that leave the room.
 	dislike := menuLine(mono.openMenu(mono.Tracks[0], 4, 4), "Dislike track")
-	if !sgrCodes(dislike)[dislikedFG] {
-		t.Errorf("the dislike row lost its red in monochrome: %q", dislike)
+	if dislike == "" {
+		t.Fatal("no dislike row in the menu")
 	}
-	if sgrCodes(dislike)["90"] {
-		t.Errorf("the dislike row is drawn in the dim grey: %q", dislike)
+	for _, quiet := range []string{dislikedFG, "90", faintSGR} {
+		if sgrCodes(dislike)[quiet] {
+			t.Errorf("the dislike row is drawn quiet (SGR %s) in monochrome: %q", quiet, dislike)
+		}
 	}
 	// Pressing it again brings the colours back.
 	if back := press(mono, "m"); back.mono {

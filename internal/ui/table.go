@@ -275,10 +275,11 @@ func (t trackTable) ratingHue(track Track) (color.Color, bool) {
 
 // dislikedPen is the colour a dislike is drawn in. The scrollbar uses it as the
 // one mark that outranks a like, so it has to name the same colour the rows do
-// under whichever theme is in force.
+// under whichever theme is in force. Monochrome draws no rating marks at all,
+// so there is nothing for it to name there.
 func (t trackTable) dislikedPen() color.Color {
 	if t.mono {
-		return alert
+		return nil
 	}
 	return disliked
 }

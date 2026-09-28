@@ -38,17 +38,21 @@ const (
 // rated row and says nothing the row could not have said by being a colour,
 // and it cost a glyph that had to exist in the reader's font — which is the
 // last thing in the app that did.
+// hue is the colour a rated track is drawn in, and false for an unrated one,
+// which is drawn in nothing in particular.
+//
+// Monochrome draws a rating in nothing at all: no hue, and no quiet colour in
+// its place — a dislike fainted or greyed reads as a row that cannot be
+// chosen. What you think of a track is weight's business there, and weight has
+// nothing to say about it, so the row is simply plain.
 func (r Rating) hue(mono bool) (color.Color, bool) {
+	if mono {
+		return nil, false
+	}
 	switch r {
 	case RatingUp:
-		if mono {
-			return emphasis, true
-		}
 		return liked, true
 	case RatingDown:
-		if mono {
-			return alert, true
-		}
 		return disliked, true
 	default:
 		return nil, false
