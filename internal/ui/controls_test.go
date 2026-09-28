@@ -58,8 +58,10 @@ func TestTheTransportSitsAgainstTheLeft(t *testing.T) {
 		t.Fatalf("the controls row is %d cells, want %d", got, m.width)
 	}
 
-	// Against the left edge of the box, in order, repeat last. The buttons
-	// are their labels wide, so where each starts depends on the last.
+	// Against the left edge of the box, in order, repeat last and a cell
+	// further off than the rest: it says what happens when a track ends rather
+	// than moving about the list, which is a different errand. The buttons are
+	// their labels wide, so where each starts depends on the last.
 	at := contentLeft
 	for _, c := range []control{
 		controlPrevious, controlPlayPause, controlNext, controlRepeat,
@@ -75,7 +77,15 @@ func TestTheTransportSitsAgainstTheLeft(t *testing.T) {
 			t.Errorf("control %v spans %d, want %d for %q",
 				c, got, buttonWidth(b.label), b.label)
 		}
-		at = b.end + buttonGap
+		gap := buttonGap
+		if c == controlNext {
+			gap = groupGap
+		}
+		at = b.end + gap
+	}
+	if groupGap <= buttonGap {
+		t.Errorf("groupGap is %d and buttonGap %d; nothing separates the two",
+			groupGap, buttonGap)
 	}
 
 	// Repeat is the last of them: nothing sits to its right any more.

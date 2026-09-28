@@ -118,9 +118,15 @@ func groupWidth(group []button) int {
 	return total
 }
 
-// controlButtons lays the row out: one group, against the left edge, repeat on
-// the end of it. Rendering and hit-testing share it, so a click lands on the
-// button it looks like it should.
+// groupGap is the space between one kind of control and another: the transport
+// moves about the list and repeat says what happens when a track ends, which is
+// a different errand. One cell more than the gap between two buttons, which is
+// the least that reads as a separation rather than as a typo.
+const groupGap = buttonGap + 1
+
+// controlButtons lays the row out: the transport against the left edge, repeat
+// a little clear of it. Rendering and hit-testing share it, so a click lands on
+// the button it looks like it should.
 func (m Model) controlButtons() []button {
 	playing := m.playing.VideoID != ""
 
@@ -136,17 +142,19 @@ func (m Model) controlButtons() []button {
 	if m.repeat != RepeatOff {
 		repeat = buttonActive
 	}
-	group := []button{
+	transport := []button{
 		{control: controlPrevious, label: labelPrevious, state: onward},
 		{control: controlPlayPause, label: m.playPauseLabel(), state: buttonDefault},
 		{control: controlNext, label: labelNext, state: onward},
+	}
+	modes := []button{
 		{control: controlRepeat, label: m.repeat.label(), state: repeat},
 	}
-	if m.contentWidth() < groupWidth(group) {
+	if m.contentWidth() < groupWidth(transport)+groupGap+groupWidth(modes) {
 		return nil
 	}
-	lay(group, contentLeft)
-	return group
+	lay(modes, lay(transport, contentLeft)+groupGap)
+	return append(transport, modes...)
 }
 
 // lay assigns columns to a group and returns where the last button ends.
