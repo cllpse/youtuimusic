@@ -21,6 +21,7 @@ type menuItem int
 const (
 	menuAlbum menuItem = iota
 	menuArtist
+	menuRadio
 	menuLike
 	menuDislike
 )
@@ -51,9 +52,10 @@ type menuRow struct {
 }
 
 // dividerAfter is the item the rule follows. Above it are the places this row
-// leads; below it, what you think of it. Going somewhere is the commoner errand
-// of the two and reads first.
-const dividerAfter = 1
+// leads — its album, its artist, and the mix built around it, which is a page
+// that did not exist until you asked for it. Below it, what you think of the
+// row. Going somewhere is the commoner errand of the two and reads first.
+const dividerAfter = 2
 
 func (m Model) menuRows() []menuRow {
 	t := m.menu.track
@@ -74,6 +76,9 @@ func (m Model) menuRows() []menuRow {
 	return []menuRow{
 		{menuAlbum, "Go to album", t.AlbumID != "", nil},
 		{menuArtist, "Go to artist", t.ArtistID != "", nil},
+		// In the colour of the page it opens, the way the button that does the
+		// same thing is. A release has no track to build a mix around.
+		{menuRadio, "Start radio", t.VideoID != "", stationHue},
 		like,
 		dislike,
 	}
@@ -110,13 +115,6 @@ var (
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(foreground).
 		Padding(0, 1)
-	// The row under the cursor is filled, the way a chosen row of the list is.
-	// It was bold and emphasised, which is two things at once and left the two
-	// rating rows nothing to be chosen with: they carry a colour of their own
-	// already, and a fill sits behind a colour where a weight fights it.
-	menuSelected = func(highlight color.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Background(highlight)
-	}
 )
 
 // menuSize is the whole box, borders and padding included.
@@ -234,6 +232,8 @@ func (m Model) activate(row int) (tea.Model, tea.Cmd) {
 	m.menu = trackMenu{}
 
 	switch rows[row].item {
+	case menuRadio:
+		return m.radioFrom(t)
 	case menuLike:
 		return m.rateTrack(t, RatingUp)
 	case menuDislike:

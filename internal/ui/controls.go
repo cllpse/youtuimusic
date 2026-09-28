@@ -130,10 +130,23 @@ func groupWidth(group []button) int {
 }
 
 // groupGap is the space between one kind of control and another: the transport
-// moves about the list and repeat says what happens when a track ends, which is
-// a different errand. Twice the gap between two buttons, so that it reads as a
-// gap of its own rather than as one that happens to be wider.
+// moves about the list, repeat says what happens when a track ends, radio makes
+// a page that is not this one. Three errands, three groups. Twice the gap
+// between two buttons, so that it reads as a gap of its own rather than as one
+// that happens to be wider.
 const groupGap = buttonGap * 2
+
+// rowWidth is what a row of groups occupies, both kinds of gap included.
+func rowWidth(groups [][]button) int {
+	total := 0
+	for i, group := range groups {
+		if i > 0 {
+			total += groupGap
+		}
+		total += groupWidth(group)
+	}
+	return total
+}
 
 // controlButtons lays the row out: the transport against the left edge, repeat
 // a little clear of it. Rendering and hit-testing share it, so a click lands on
@@ -159,33 +172,40 @@ func (m Model) controlButtons() []button {
 		{control: controlNext, label: labelNext, state: onward},
 	}
 	// Radio makes a page rather than changing this one, which is why it is the
-	// far end of the row and why it carries that page's colour. It needs a track
-	// to build from, and is quiet without one.
+	// far end of the row, a group of its own, and in that page's colour. It
+	// needs a track to build from, and is quiet without one.
 	station := buttonDefault
 	if _, ok := m.radioSeed(); !ok {
 		station = buttonDisabled
 	}
-	modes := []button{
-		{control: controlRepeat, label: m.repeat.label(), state: repeat},
-		{control: controlRadio, label: labelRadio, state: station, hue: stationHue},
+	groups := [][]button{
+		transport,
+		{{control: controlRepeat, label: m.repeat.label(), state: repeat}},
+		{{control: controlRadio, label: labelRadio, state: station, hue: stationHue}},
 	}
-	// A row too narrow for all of it gives up its modes from the right, one at
-	// a time: those say what the player will do next, and the transport says
-	// what it does now. Narrower than the transport itself, and there is
-	// nothing worth drawing — the bar and the status line still say where the
-	// track is and what it is.
-	for len(modes) > 0 && m.contentWidth() < groupWidth(transport)+groupGap+groupWidth(modes) {
-		modes = modes[:len(modes)-1]
+
+	// A row too narrow for all of it gives up a group at a time from the right:
+	// those two say what the player will do next and what else there is, and the
+	// transport says what it does now. Narrower than the transport itself, and
+	// there is nothing worth drawing — the bar and the status line still say
+	// where the track is and what it is.
+	for len(groups) > 1 && m.contentWidth() < rowWidth(groups) {
+		groups = groups[:len(groups)-1]
 	}
-	if m.contentWidth() < groupWidth(transport) {
+	if m.contentWidth() < rowWidth(groups[:1]) {
 		return nil
 	}
-	at := lay(transport, contentLeft)
-	if len(modes) == 0 {
-		return transport
+
+	var out []button
+	at := contentLeft
+	for i, group := range groups {
+		if i > 0 {
+			at += groupGap
+		}
+		at = lay(group, at)
+		out = append(out, group...)
 	}
-	lay(modes, at+groupGap)
-	return append(transport, modes...)
+	return out
 }
 
 // lay assigns columns to a group and returns where the last button ends.
@@ -280,15 +300,23 @@ func (m Model) radioSeed() (Track, bool) {
 	return Track{}, false
 }
 
-// startRadio opens a mix built from that track: a tab of its own in front of
-// the library's, and the seed playing if it is not already.
+// startRadio opens a mix built from the track the transport would act on.
+func (m Model) startRadio() (tea.Model, tea.Cmd) {
+	seed, ok := m.radioSeed()
+	if !ok {
+		return m, nil
+	}
+	return m.radioFrom(seed)
+}
+
+// radioFrom opens a mix built from a track: a tab of its own in front of the
+// library's, and the seed playing if it is not already.
 //
 // The old mix goes, cache and all. Two of them would be two tabs with the same
 // name and no way to tell which was which, and the one you started last is the
 // one you meant.
-func (m Model) startRadio() (tea.Model, tea.Cmd) {
-	seed, ok := m.radioSeed()
-	if !ok {
+func (m Model) radioFrom(seed Track) (tea.Model, tea.Cmd) {
+	if seed.VideoID == "" {
 		return m, nil
 	}
 	if m.radio.ID != "" {

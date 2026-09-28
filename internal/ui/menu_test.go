@@ -367,7 +367,9 @@ func TestRowsThatLeadNowhereAreDisabled(t *testing.T) {
 
 	for _, row := range m.menuRows() {
 		switch row.item {
-		case menuLike, menuDislike:
+		case menuLike, menuDislike, menuRadio:
+			// Anything that needs only the track itself: rating it, and
+			// building a mix around it.
 			if !row.enabled {
 				t.Errorf("%v should always be possible on a track", row.item)
 			}
@@ -1503,7 +1505,7 @@ func TestTheMenuPutsTheRatingsLast(t *testing.T) {
 	m, _, _, _ := menuModel(t)
 	at := m.openMenu(m.Tracks[0], 4, 4)
 
-	want := []menuItem{menuAlbum, menuArtist, menuLike, menuDislike}
+	want := []menuItem{menuAlbum, menuArtist, menuRadio, menuLike, menuDislike}
 	rows := at.menuRows()
 	if len(rows) != len(want) {
 		t.Fatalf("the menu has %d rows, want %d", len(rows), len(want))
@@ -1525,12 +1527,14 @@ func TestTheMenuPutsTheRatingsLast(t *testing.T) {
 		}
 		return -1
 	}
-	album, rule, like := where("Go to album"), where("───"), where("Like track")
-	if album < 0 || rule < 0 || like < 0 {
-		t.Fatalf("album %d, rule %d, like %d", album, rule, like)
+	album, radio := where("Go to album"), where("Start radio")
+	rule, like := where("───"), where("Like track")
+	if album < 0 || radio < 0 || rule < 0 || like < 0 {
+		t.Fatalf("album %d, radio %d, rule %d, like %d", album, radio, rule, like)
 	}
-	if !(album < rule && rule < like) {
-		t.Errorf("the rule is on line %d, between %d and %d", rule, album, like)
+	if !(album < radio && radio < rule && rule < like) {
+		t.Errorf("the rows read %d %d %d %d, want places then the rule then ratings",
+			album, radio, rule, like)
 	}
 }
 
@@ -1546,7 +1550,7 @@ func TestTheMenuOpensOnARowThatCanBeChosen(t *testing.T) {
 		want  menuItem
 	}{
 		{"a track that links somewhere", m.Tracks[0], menuAlbum},
-		{"one that links nowhere", m.Tracks[1], menuLike},
+		{"one that links nowhere", m.Tracks[1], menuRadio},
 		{"a release, which cannot be rated", Track{Title: "Cherry", AlbumID: "MPRE"}, menuAlbum},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1573,7 +1577,84 @@ func TestTheMenuOpensOnARowThatCanBeChosen(t *testing.T) {
 	if at.menu.open {
 		t.Error("enter on a fresh menu did nothing at all")
 	}
-	if at.Tracks[1].Rating != RatingUp {
-		t.Errorf("the row is %v, want the first row to have run", at.Tracks[1].Rating)
+	if at.radio.ID == "" {
+		t.Error("the first row it opened on did not run")
+	}
+}
+
+// Nothing in the menu is bold. Weight is what the app says "this is playing"
+// with, and a menu is a list of things to do rather than a report on anything,
+// so the row under the cursor is filled and the rest are plain — with the two
+// colours the rows carry sitting on the fill rather than arguing with a weight.
+func TestNoMenuRowIsBold(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+
+	for _, tc := range []struct {
+		name  string
+		track Track
+	}{
+		{"a track that links everywhere", m.Tracks[0]},
+		{"one that links nowhere", m.Tracks[1]},
+		{"a liked one", func() Track { t := m.Tracks[0]; t.Rating = RatingUp; return t }()},
+		{"a disliked one", func() Track { t := m.Tracks[0]; t.Rating = RatingDown; return t }()},
+		{"a release", Track{Title: "Cherry", AlbumID: "MPRE"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at := m.openMenu(tc.track, 4, 4)
+			for cursor := range at.menuRows() {
+				at.menu.cursor = cursor
+				for row, line := range strings.Split(at.renderMenu(), "\n") {
+					if sgrCodes(line)["1"] {
+						t.Errorf("cursor %d row %d is bold: %q", cursor, row, line)
+					}
+				}
+			}
+		})
+	}
+
+	// The cursor is still said, by the fill.
+	at := m.openMenu(m.Tracks[0], 4, 4)
+	at.menu.cursor = rowIndex(at, menuArtist)
+	if !sgrCodes(menuLine(at, "Go to artist"))[highlightSGR] {
+		t.Errorf("the chosen row is not filled: %q", menuLine(at, "Go to artist"))
+	}
+	if sgrCodes(menuLine(at, "Go to album"))[highlightSGR] {
+		t.Errorf("a row that is not chosen is filled: %q", menuLine(at, "Go to album"))
+	}
+}
+
+// Starting a mix from the menu builds it around the row that was right-clicked,
+// not around whatever is playing — which is what every other row there does.
+func TestRadioFromTheMenuUsesTheClickedRow(t *testing.T) {
+	m, lib, _, _ := menuModel(t)
+	m.playing = m.Tracks[1]
+	m.trackCursor = 1
+
+	next, cmd := m.Update(rightClick(trackX, trackRow(0)))
+	m = drain(t, next.(Model), cmd)
+	x, y := rowAt(m, menuRadio)
+	next, cmd = m.Update(click(x, y))
+	m = drain(t, next.(Model), cmd)
+
+	if m.menu.open {
+		t.Error("the menu stayed open")
+	}
+	seed := m.Tracks[0]
+	if want := ytm.RadioID(seed.VideoID); m.radio.ID != want {
+		t.Errorf("the mix is %q, want one built from the clicked row %q", m.radio.ID, want)
+	}
+	var asked string
+	for _, call := range lib.askedFor {
+		if strings.HasPrefix(call, "radio:") {
+			asked = call
+		}
+	}
+	if want := "radio:" + seed.VideoID; asked != want {
+		t.Errorf("asked %v, want %q", lib.askedFor, want)
+	}
+	// And the row wears the colour of the page it opens.
+	at := m.openMenu(seed, 4, 4)
+	if !sgrCodes(menuLine(at, "Start radio"))[stationFG] {
+		t.Errorf("the row is not cyan: %q", menuLine(at, "Start radio"))
 	}
 }
