@@ -6,6 +6,22 @@ deliberately.
 
 ## Running
 
+### Install
+
+Released binaries for linux/darwin, amd64/arm64 — no Go toolchain needed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cllpse/youtuimusic/main/install.sh | sh
+# or, after a tap exists:
+brew install cllpse/homebrew-tap/youtuimusic
+# or, on Arch:
+paru -S youtuimusic
+# or, with Go installed:
+go install github.com/cllpse/youtuimusic/cmd/youtuimusic@latest
+```
+
+### Build from source
+
 Needs `mpv` and `yt-dlp` on `PATH`, and a terminal set to a [Nerd
 Font](https://www.nerdfonts.com/) — the transport controls are Material
 Design icons from the private use area, and without one they are blank boxes.

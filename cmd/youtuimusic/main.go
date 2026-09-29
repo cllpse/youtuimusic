@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -20,7 +21,26 @@ import (
 	"github.com/cllpse/youtuimusic/internal/ytm"
 )
 
+// version is overridden at link time: -X main.version=v1.2.3.
+var version = "dev"
+
 func main() {
+	if len(os.Args) > 1 {
+		fs := flag.NewFlagSet("youtuimusic", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		showVersion := fs.Bool("version", false, "print version and exit")
+		if err := fs.Parse(os.Args[1:]); err != nil {
+			os.Exit(2)
+		}
+		if *showVersion {
+			fmt.Println(version)
+			return
+		}
+		if fs.NArg() > 0 {
+			fmt.Fprintf(os.Stderr, "youtuimusic: unknown argument %q\n", fs.Arg(0))
+			os.Exit(2)
+		}
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "youtuimusic:", err)
 		os.Exit(1)
