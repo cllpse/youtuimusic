@@ -52,4 +52,4 @@ fi
 install -m755 "$TMP/$BIN" "$DEST/$BIN" 2>/dev/null || sudo install -m755 "$TMP/$BIN" "$DEST/$BIN"
 
 echo "installed: $DEST/$BIN"
-echo "still needs on PATH: mpv, yt-dlp — and a Nerd Font terminal"
+echo "still needs on PATH: mpv, yt-dlp"

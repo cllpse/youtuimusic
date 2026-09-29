@@ -26,9 +26,8 @@ current status.
 
 ### Build from source
 
-Needs `mpv` and `yt-dlp` on `PATH`, and a terminal set to a [Nerd
-Font](https://www.nerdfonts.com/) — the transport controls are Material
-Design icons from the private use area, and without one they are blank boxes.
+Needs `mpv` and `yt-dlp` on `PATH`. No particular font: the interface draws
+nothing outside the usual range, and a test enforces it.
 
 ```bash
 go build ./cmd/youtuimusic && ./youtuimusic
@@ -40,78 +39,6 @@ Tests are offline by default. The ones that need the network are opt-in:
 go test ./...                  # fast, no network
 YTM_NET=1 go test ./...        # includes resolve + end-to-end playback
 ```
-
-## Releasing
-
-A release is three pushes: the tag builds the GitHub release, a script pushes
-the Homebrew formula, and (once the AUR is set up) the same script pushes the
-PKGBUILD.
-
-```bash
-# 1. the GitHub release — builds binaries for linux/darwin x amd64/arm64,
-#    plus checksums.txt, and attaches them to a GitHub release
-git tag v0.2.0 && git push origin v0.2.0
-#    then watch: https://github.com/cllpse/youtuimusic/actions
-
-# 2. the package managers — generates the formula / PKGBUILD from the
-#    release's checksums.txt and pushes each to its channel
-scripts/release-channels.sh              # both channels
-scripts/release-channels.sh homebrew     # just the tap
-scripts/release-channels.sh aur          # just the AUR
-```
-
-Both channels must already be set up once; the script skips a channel and
-prints its setup steps when credentials are missing. Details below.
-
-### Version string
-
-`youtuimusic --version` reads `main.version`, injected at link time by
-GoReleaser (`-X main.version={{.Version}}`). A bare `go build` produces
-`dev`. A release tag should look like `v0.2.0` — the leading `v` is stripped
-for file names and package versions.
-
-### Files
-
-| file | role |
-|---|---|
-| `goreleaser.yml` | build matrix, archive names, checksums. Note: GoReleaser **v2** schema — it rejected the older `cmd:` field. |
-| `.github/workflows/release.yml` | on `v*` tags: setup-go + `goreleaser release --clean` |
-| `install.sh` | user-facing curl\|sh installer; detects OS/arch; `YTMUIMUSIC_INSTALL_DIR` overrides the destination (default `/usr/local/bin`) |
-| `scripts/release-channels.sh` | homebrew + aur publisher; `homebrew`/`aur`/`all` subcommands; optional second arg pins a tag instead of latest |
-
-### Homebrew tap (one-time setup)
-
-A tap is just a git repo named `homebrew-tap` — Homebrew itself is not
-needed on the maintainer machine. The formula lives at
-`Formula/youtuimusic.rb` in [`cllpse/homebrew-tap`](https://github.com/cllpse/homebrew-tap).
-
-1. `gh repo create cllpse/homebrew-tap --public`
-2. ssh key on the GitHub account (the script pushes over ssh)
-3. `scripts/release-channels.sh homebrew`
-
-Users then run `brew install cllpse/tap/youtuimusic`. `brew audit --strict
-youtuimusic` on a machine with Homebrew is worth one run after the first
-formula push.
-
-### AUR (one-time setup, pending)
-
-Not yet published — the AUR was down when this was set up. When it is back:
-
-1. register at <https://aur.archlinux.org/register>, add the account's ssh
-   public key under My Account, confirm with `ssh aur@aur.archlinux.org`
-2. create the package: `git clone ssh://aur@aur.archlinux.org/youtuimusic.git`
-   (empty clone is fine — first push of `PKGBUILD` + `.SRCINFO` creates it)
-3. `scripts/release-channels.sh aur`  — needs `makepkg` locally (Arch, or
-   `pacman` on other distros) to generate `.SRCINFO`
-
-Arch users then run `paru -S youtuimusic` (or their AUR helper of choice).
-
-### Gotchas hit on the first release
-
-- The tag-triggered workflow can silently not run on the first push — delete
-  and re-push the tag to force it (`git push origin :refs/tags/vX.Y.Z`).
-- GoReleaser v2 rejected `cmd: go build` in the build stanza; plain `main:`
-  is all that is needed.
 
 ## Decisions, and the measurements behind them
 
@@ -172,13 +99,12 @@ With the track menu or the popover open, `j`/`k` and `enter` work it and
 not depend on what is on top.
 
 The progress bar and the controls share a box — transport on the left,
-thumbs in the middle, repeat on the right — and under it a status bar says
-what the app is doing and what is playing, in two blocks the way lipgloss's
-own example lays one out. A liked row is marked with
-the same thumb icon the control uses, except in the liked playlist itself,
-where every row would carry it. The thumbs there act on what is playing, which is what
-sitting beside the transport means; `+` and `-` still act on the highlighted
-row.
+repeat on the right — and under it a status bar says what the app is doing
+and what is playing, in two blocks the way lipgloss's
+own example lays one out. Rating is not a glyph: a liked or disliked row is
+drawn in the colour of that rating, so a page of them reads at a glance, and
+the same colours appear as marks down the scrollbar. `+` and `-` rate the
+highlighted row.
 
 Right-clicking a track opens a menu: like or unlike it, go to its album, go
 to its artist. A track that links nowhere has those rows greyed. An artist
@@ -235,6 +161,8 @@ internal/stream     yt-dlp resolution + cache
 internal/ui         bubbletea model, tabs / table / progress. One table
                     component draws both the main list and the popover's
 ```
+
+Packaging and the release process live in [RELEASE.md](RELEASE.md).
 
 ## Status
 

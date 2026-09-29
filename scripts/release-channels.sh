@@ -109,7 +109,7 @@ class Youtuimusic < Formula
 
   def caveats
     <<~EOS
-      Requires mpv and yt-dlp on PATH, and a Nerd Font terminal.
+      Requires mpv and yt-dlp on PATH.
     EOS
   end
 
@@ -162,7 +162,6 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/$REPO"
 license=('MIT')
 depends=('mpv' 'yt-dlp')
-optdepends=('ttf-nerd-fonts-symbols: icon glyphs in the UI')
 source_x86_64=("\$pkgname-\$pkgver.tar.gz::\$url/releases/download/$VERSION/${PKG}_\${pkgver}_linux_amd64.tar.gz")
 source_aarch64=("\$pkgname-\$pkgver.tar.gz::\$url/releases/download/$VERSION/${PKG}_\${pkgver}_linux_arm64.tar.gz")
 sha256sums_x86_64=('$LINUX_AMD64')
