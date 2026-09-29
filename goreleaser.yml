@@ -1,8 +1,7 @@
 version: 2
 
 builds:
-  - cmd: go build
-    main: ./cmd/youtuimusic
+  - main: ./cmd/youtuimusic
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags:
