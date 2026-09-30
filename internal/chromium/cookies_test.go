@@ -58,8 +58,9 @@ func sealed(t *testing.T, value, host string, bindHost bool) string {
 	return hex.EncodeToString(append([]byte("v10"), out...))
 }
 
-// chromiumTime renders a Go time the way the cookie store stores it.
-func chromiumTime(at time.Time) int64 { return stamp(at) }
+// chromiumTime renders a Go time the way the cookie store stores it. The
+// package no longer writes one, so the inverse lives here for the round trip.
+func chromiumTime(at time.Time) int64 { return (at.Unix() + epochGapSeconds) * 1e6 }
 
 // store writes a Chromium-shaped cookie database.
 func store(t *testing.T, path string, rows ...string) {
@@ -161,7 +162,7 @@ func TestExpirySurvivesTheEpochGap(t *testing.T) {
 		time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC),
 		time.Date(2038, 1, 19, 3, 14, 8, 0, time.UTC),
 	} {
-		if got := expiry(stamp(at)); !got.Equal(at) {
+		if got := expiry(chromiumTime(at)); !got.Equal(at) {
 			t.Errorf("round trip of %s gave %s", at, got)
 		}
 	}
@@ -170,7 +171,7 @@ func TestExpirySurvivesTheEpochGap(t *testing.T) {
 	}
 	// A cookie a year out must not read as stale.
 	year := time.Now().Add(365 * 24 * time.Hour)
-	if expiry(stamp(year)).Before(time.Now()) {
+	if expiry(chromiumTime(year)).Before(time.Now()) {
 		t.Error("a cookie expiring next year reads as already expired")
 	}
 }

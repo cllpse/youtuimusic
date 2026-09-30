@@ -92,11 +92,6 @@ func expiry(raw any) time.Time {
 	return time.Unix(micros/1e6-epochGapSeconds, micros%1e6*1e3).UTC()
 }
 
-// stamp is the inverse, for anything that has to write one.
-func stamp(at time.Time) int64 {
-	return (at.Unix() + epochGapSeconds) * 1e6
-}
-
 // Read returns the cookies in this profile that a request to host would
 // send. Cookies that cannot be decrypted are skipped rather than failing
 // the read: one unreadable cookie should not cost the whole session.
