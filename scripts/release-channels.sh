@@ -83,6 +83,9 @@ class Youtuimusic < Formula
   version "$VER"
   license "MIT"
 
+  depends_on "mpv"
+  depends_on "yt-dlp"
+
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/$REPO/releases/download/$VERSION/${PKG}_#{version}_darwin_arm64.tar.gz"
@@ -109,7 +112,7 @@ class Youtuimusic < Formula
 
   def caveats
     <<~EOS
-      Requires mpv and yt-dlp on PATH.
+      mpv and yt-dlp are installed as dependencies.
     EOS
   end
 

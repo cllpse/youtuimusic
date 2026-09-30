@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/cllpse/youtuimusic/internal/tool"
 )
 
 // Event is something mpv pushed: either an observed property changing, in
@@ -93,7 +95,7 @@ func New(ctx context.Context) (*Player, error) {
 	}
 	socket := filepath.Join(dir, "mpv.sock")
 
-	cmd := exec.CommandContext(ctx, "mpv",
+	cmd := exec.CommandContext(ctx, tool.Path("mpv"),
 		"--idle=yes",
 		"--no-video",
 		"--no-terminal",

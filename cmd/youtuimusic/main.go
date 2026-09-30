@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -13,7 +12,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/cllpse/youtuimusic/internal/auth"
-	"github.com/cllpse/youtuimusic/internal/chromium"
 	"github.com/cllpse/youtuimusic/internal/player"
 	"github.com/cllpse/youtuimusic/internal/state"
 	"github.com/cllpse/youtuimusic/internal/stream"
@@ -29,11 +27,20 @@ func main() {
 		fs := flag.NewFlagSet("youtuimusic", flag.ContinueOnError)
 		fs.SetOutput(os.Stderr)
 		showVersion := fs.Bool("version", false, "print version and exit")
+		clearAuth := fs.Bool("auth-clear", false, "clear the saved sign-in and exit")
 		if err := fs.Parse(os.Args[1:]); err != nil {
 			os.Exit(2)
 		}
 		if *showVersion {
 			fmt.Println(version)
+			return
+		}
+		if *clearAuth {
+			if err := auth.Clear(); err != nil {
+				fmt.Fprintln(os.Stderr, "youtuimusic:", err)
+				os.Exit(1)
+			}
+			fmt.Println("authorization cleared")
 			return
 		}
 		if fs.NArg() > 0 {
@@ -48,23 +55,8 @@ func main() {
 }
 
 func run() error {
-	session, err := auth.Load()
-	if err != nil {
-		// Telling someone to export a session would be wrong now: the
-		// app reads the browser, so the fix is nearly always in the
-		// browser rather than in a file.
-		if errors.Is(err, chromium.ErrNoBrowser) || errors.Is(err, auth.ErrNoSession) {
-			return fmt.Errorf("%w\n\nSign in to %s in a Chromium-based browser and "+
-				"run this again — the session is read from there. If the browser's "+
-				"keyring is locked, unlock it first. To use a captured session "+
-				"instead, point %s at a file of request headers",
-				err, auth.Host, auth.EnvPath)
-		}
-		return err
-	}
-
-	// A signal stops the program the way ctrl+c does, so the session is saved
-	// on the way out and mpv is not left behind.
+	// A signal stops the program the way ctrl+c does, so mpv is not left
+	// behind.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, cancel := context.WithCancel(ctx)
@@ -82,10 +74,34 @@ func run() error {
 	streams.CachePath = stream.DefaultCachePath()
 	streams.Load()
 
+	// A cached session starts straight into the library. Without one the TUI
+	// shows the sign-in screen, and enter reads the browser. This is what
+	// --auth-clear resets: it removes the cache, not the browser's cookies.
+	var library ui.Library
+	if session, ok := auth.Cached(); ok {
+		library = ytm.NewClient(session)
+	}
+	signIn := func(context.Context) (ui.Library, error) {
+		// Signing in is a browser window: open the browser you already use,
+		// so it gets your extensions and saved passwords, then read the
+		// session out of it. The read can still succeed without the window
+		// when the browser is already signed in.
+		openErr := auth.OpenLogin()
+		session, err := auth.Load()
+		if err == nil {
+			return ytm.NewClient(session), nil
+		}
+		if openErr != nil {
+			return nil, fmt.Errorf("%w (could not open a browser: %v)", err, openErr)
+		}
+		return nil, err
+	}
+
 	model := ui.New(ui.Services{
-		Library: ytm.NewClient(session),
+		Library: library,
 		Streams: streams,
 		Audio:   audio,
+		SignIn:  signIn,
 	}).Restore(state.Load())
 
 	final, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()

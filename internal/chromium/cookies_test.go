@@ -200,6 +200,7 @@ func TestPrefersTheProfileThatIsSignedIn(t *testing.T) {
 	noKeyring(t)
 	base := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", base)
+	t.Setenv("HOME", base)
 	future := chromiumTime(time.Now().Add(24 * time.Hour))
 
 	// Brave: plenty of cookies, no session.
@@ -232,6 +233,7 @@ func TestSignedOutProfileSaysSo(t *testing.T) {
 	noKeyring(t)
 	base := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", base)
+	t.Setenv("HOME", base)
 	store(t, filepath.Join(base, "chromium", "Default", "Cookies"),
 		row(".youtube.com", "YSC", "anonymous", "", 0))
 
@@ -241,6 +243,45 @@ func TestSignedOutProfileSaysSo(t *testing.T) {
 	}
 	if !errorsIs(err, ErrNoBrowser) {
 		t.Errorf("err = %v, want ErrNoBrowser", err)
+	}
+}
+
+// A browser installed as a Flatpak or Snap keeps its own config root; both
+// have to be searched, not just ~/.config.
+func TestFindsSandboxedInstalls(t *testing.T) {
+	noKeyring(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	future := chromiumTime(time.Now().Add(time.Hour))
+
+	flatpakDir := filepath.Join(home, ".var", "app", "org.chromium.Chromium", "config", "chromium")
+	store(t, filepath.Join(flatpakDir, "Default", "Cookies"),
+		row(".youtube.com", bellwether, "flatpak", "", future))
+	snapDir := filepath.Join(home, "snap", "brave", "common", "BraveSoftware", "Brave-Browser")
+	store(t, filepath.Join(snapDir, "Profile 1", "Cookies"),
+		row(".youtube.com", "SID", "snap", "", future))
+
+	found := map[string]string{}
+	for _, b := range Installed() {
+		found[b.Name] = b.Dir
+	}
+	if found["Chromium"] != flatpakDir {
+		t.Errorf("Chromium dir = %q, want the flatpak one %q", found["Chromium"], flatpakDir)
+	}
+	if found["Brave"] != snapDir {
+		t.Errorf("Brave dir = %q, want the snap one %q", found["Brave"], snapDir)
+	}
+
+	got, from, err := Cookies("music.youtube.com", time.Now())
+	if err != nil {
+		t.Fatalf("Cookies: %v", err)
+	}
+	if from.Browser.Name != "Chromium" {
+		t.Errorf("picked %s, want the flatpak Chromium", from.Browser.Name)
+	}
+	if h := Header(got); h != bellwether+"=flatpak" {
+		t.Errorf("header = %q", h)
 	}
 }
 

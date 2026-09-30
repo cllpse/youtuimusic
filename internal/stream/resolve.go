@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cllpse/youtuimusic/internal/tool"
 	"github.com/cllpse/youtuimusic/internal/ytm"
 )
 
@@ -89,7 +90,9 @@ func New() *Resolver {
 		cache:    make(map[string]entry),
 		inFlight: make(map[string]*call),
 		failures: make(map[string]failure),
-		Binary:   "yt-dlp",
+		// System, not Path: yt-dlp has to keep up with YouTube, so a newer
+		// copy on PATH beats the one bundled in the archive.
+		Binary: tool.System("yt-dlp"),
 		// Prefer opus (itag 251, ~136kbps) and fall back to whatever audio
 		// exists. Never a video stream.
 		Format: "bestaudio[acodec=opus]/bestaudio/best",

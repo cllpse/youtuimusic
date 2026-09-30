@@ -149,6 +149,12 @@ type Model struct {
 	repeat      Repeat
 	loading     bool
 
+	// signedOut is true before a session exists and SignIn can get one: the
+	// app draws the sign-in screen instead of the library. signingIn is true
+	// while the browser sign-in runs, so enter does not start a second one.
+	signedOut bool
+	signingIn bool
+
 	// highlight is the selected row's fill and dimmed the colour of a line
 	// that has to be quiet, both derived from the terminal's own background.
 	// Nil until it answers, and some never do.
@@ -223,7 +229,7 @@ type Model struct {
 // New returns a Model with nothing loaded. A zero Services makes a model
 // that talks to nothing, which is what the view tests use.
 func New(s Services) Model {
-	return Model{
+	m := Model{
 		services:  s,
 		loading:   s.Library != nil,
 		now:       time.Now,
@@ -232,6 +238,8 @@ func New(s Services) Model {
 		pausedBar: newBar(mutedRamp),
 		spin:      newLoader(),
 	}
+	m.signedOut = s.Library == nil && s.SignIn != nil
+	return m
 }
 
 // barFill is the colour the played part of the bar is drawn in. Monochrome has
@@ -257,8 +265,14 @@ func (m Model) setMono(on bool) Model {
 	return m
 }
 
-// Init starts the first fetch and opens the stream of player events.
+// Init starts the first fetch and opens the stream of player events. Before
+// there is a session it starts the sign-in instead.
 func (m Model) Init() tea.Cmd {
+	if m.signedOut {
+		// The sign-in screen waits for enter rather than reading the browser
+		// on its own, so the flow is visible and testable.
+		return batch(m.watchEvents(), tea.RequestBackgroundColor)
+	}
 	cmds := []tea.Cmd{m.fetchPlaylists(), m.watchEvents(), tea.RequestBackgroundColor}
 	if m.loading {
 		cmds = append(cmds, m.spin.Tick)
@@ -660,10 +674,6 @@ func clamp(v, length int) int {
 
 // -------------------------------------------------------------- update ---
 
-
-
-
-
 // dropFromLiked removes a track from the liked playlist wherever it is on
 // screen, which is what unliking it means there.
 func (m *Model) dropFromLiked(videoID string) {
@@ -961,6 +971,15 @@ func (m Model) View() tea.View {
 		// next against, and a mode missing here is a mode never asked for.
 		v := tea.NewView("")
 		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		v.ReportFocus = true
+		return v
+	}
+
+	if m.signedOut {
+		v := tea.NewView(m.renderSignIn(m.width, m.height))
+		v.AltScreen = true
+		v.WindowTitle = "youtuimusic"
 		v.MouseMode = tea.MouseModeCellMotion
 		v.ReportFocus = true
 		return v

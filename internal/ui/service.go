@@ -13,10 +13,12 @@ import (
 )
 
 // Timeouts bound every call the UI makes, so nothing can wedge the event
-// loop. Resolving is slower than an API call because it runs yt-dlp.
+// loop. Resolving is slower than an API call because it runs yt-dlp, and a
+// sign-in can wait on a browser window for minutes.
 const (
 	requestTimeout = 30 * time.Second
 	resolveTimeout = 60 * time.Second
+	signInTimeout  = 5 * time.Minute
 )
 
 // Library is the part of the YouTube Music client the UI drives. These are
@@ -55,6 +57,9 @@ type Services struct {
 	Library Library
 	Streams Streams
 	Audio   Audio
+	// SignIn makes a Library when there is none yet, running off the event
+	// loop. The model draws a sign-in screen while it works.
+	SignIn func(ctx context.Context) (Library, error)
 }
 
 // Messages carry the result of everything that happens off the event loop.
@@ -92,6 +97,11 @@ type (
 	}
 	eventMsg player.Event
 	errMsg   struct{ err error }
+	// signedInMsg carries the outcome of the browser sign-in.
+	signedInMsg struct {
+		library Library
+		err     error
+	}
 )
 
 // api maps the UI's thumbs state onto the client's.

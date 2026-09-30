@@ -6,7 +6,8 @@ PKGBUILD.
 
 ```bash
 # 1. the GitHub release — builds binaries for linux/darwin x amd64/arm64,
-#    plus checksums.txt, and attaches them to a GitHub release
+#    bundles mpv + yt-dlp into each archive, writes checksums.txt, and
+#    attaches them to a GitHub release
 git tag v0.2.0 && git push origin v0.2.0
 #    then watch: https://github.com/cllpse/youtuimusic/actions
 
@@ -31,9 +32,11 @@ for file names and package versions.
 
 | file | role |
 |---|---|
-| `goreleaser.yml` | build matrix, archive names, checksums. Note: GoReleaser **v2** schema — it rejected the older `cmd:` field. |
+| `goreleaser.yml` | build matrix, archive names, checksums, and the per-target `mpv`/`yt-dlp` files. Note: GoReleaser **v2** schema — it rejected the older `cmd:` field. |
 | `.github/workflows/release.yml` | on `v*` tags: setup-go + `goreleaser release --clean` |
-| `install.sh` | user-facing curl\|sh installer; detects OS/arch; `YTMUIMUSIC_INSTALL_DIR` overrides the destination (default `/usr/local/bin`) |
+| `scripts/bundle-deps.sh` | `before` hook: downloads `mpv` + `yt-dlp` for all four targets into `deps/<os>_<arch>/`. ~300 MB of downloads per release; yt-dlp is checksum-verified. |
+| `install.sh` | user-facing curl\|sh installer; detects OS/arch; installs the binary and unpacks the bundled `mpv`/`yt-dlp` into `libexec`, skipping any dep already on `PATH`. `YTMUIMUSIC_INSTALL_DIR` overrides the binary destination and `YTMUIMUSIC_LIBEXEC_DIR` the dependency destination. |
+| `THIRD_PARTY_NOTICES.md` | licenses of the bundled `mpv` (GPL/LGPL) and `yt-dlp` (Unlicense); ships inside every archive. |
 | `scripts/release-channels.sh` | homebrew + aur publisher; `homebrew`/`aur`/`all` subcommands; optional second arg pins a tag instead of latest |
 
 ## Homebrew tap (one-time setup)
@@ -69,5 +72,10 @@ Arch users then run `paru -S youtuimusic` (or their AUR helper of choice).
   and re-push the tag to force it (`git push origin :refs/tags/vX.Y.Z`).
 - GoReleaser v2 rejected `cmd: go build` in the build stanza; plain `main:`
   is all that is needed.
-- `git push origin main` is wrong for this repo: the default branch is
-  `master`.
+- The archives are large (~70-85 MB): the bundled dependencies dominate. If a
+  local `goreleaser build` is all that is needed, skip the fetch with
+  `goreleaser build --skip=before` (after running `scripts/bundle-deps.sh`
+  once, or not at all when only the Go binary matters).
+- `bundle-deps.sh` runs on the x86_64 CI runner but must fetch arm64 payloads
+  too. The Linux AppImage is therefore shipped un-extracted and unpacked by
+  `install.sh` on the target, where the architecture matches.

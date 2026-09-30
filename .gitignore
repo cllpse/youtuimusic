@@ -1,6 +1,7 @@
 # Build output
 /youtuimusic
 /dist/
+/deps/
 *.test
 
 # Local config / credentials — never commit

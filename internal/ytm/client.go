@@ -5,10 +5,9 @@
 // tracks, search, and rating a track. That is the whole surface — which is why
 // writing it is tractable where porting a general-purpose client would not be.
 //
-// Authentication is cookie-based. Requests carry a SAPISIDHASH header derived
-// from the __Secure-3PAPISID cookie and the origin; this was verified against
-// a real account before any of it was written, returning logged_in=1 and the
-// full library.
+// Authentication is a bearer token from the OAuth device flow the app runs at
+// sign-in. A SAPISIDHASH cookie is still accepted for the archived
+// browser-based path, but the token takes precedence when present.
 package ytm
 
 import (
@@ -33,7 +32,8 @@ const (
 
 // Session is the credential material a signed-in request needs.
 type Session struct {
-	Cookie    string // the whole Cookie header
+	Token     string // OAuth access token; preferred over Cookie when set
+	Cookie    string // the whole Cookie header (archived browser path)
 	UserAgent string
 	VisitorID string
 	AuthUser  string
@@ -75,8 +75,12 @@ func NewClient(s Session) *Client {
 // indistinguishable from an account that genuinely has no playlists.
 var ErrSignedOut = errors.New("ytm: request was not authenticated")
 
-// authorization builds the SAPISIDHASH header value.
+// authorization builds the Authorization header: a bearer token from the
+// OAuth flow, or a SAPISIDHASH derived from the archived cookie path.
 func (c *Client) authorization() (string, error) {
+	if c.Session.Token != "" {
+		return "Bearer " + c.Session.Token, nil
+	}
 	sapisid, err := c.Session.sapisid()
 	if err != nil {
 		return "", err
@@ -119,8 +123,15 @@ func (c *Client) post(ctx context.Context, endpoint string, body map[string]any)
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Cookie", c.Session.Cookie)
+	if c.Session.Cookie != "" {
+		req.Header.Set("Cookie", c.Session.Cookie)
+	}
 	req.Header.Set("Authorization", authz)
+	if c.Session.Token != "" {
+		// OAuth requests carry the time they were made, so a replayed
+		// bearer token is distinguishable.
+		req.Header.Set("X-Goog-Request-Time", strconv.FormatInt(c.Now().Unix(), 10))
+	}
 	req.Header.Set("Origin", origin)
 	req.Header.Set("Accept-Encoding", "gzip")
 	if c.Session.UserAgent != "" {

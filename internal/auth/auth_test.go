@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cllpse/youtuimusic/internal/ytm"
 )
@@ -45,6 +47,66 @@ func browserWith(t *testing.T, home string, cookies map[string]string) {
 	cmd.Stdin = strings.NewReader(sql)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("sqlite3: %v\n%s", err, out)
+	}
+}
+
+// firefoxWith writes a Firefox cookie store holding the named cookies, with
+// a profiles.ini pointing at it.
+func firefoxWith(t *testing.T, home string, cookies map[string]string) {
+	t.Helper()
+	bin, err := exec.LookPath("sqlite3")
+	if err != nil {
+		t.Skip("sqlite3 not on PATH; cannot build fixtures")
+	}
+	root := filepath.Join(home, ".mozilla", "firefox")
+	dir := filepath.Join(root, "abc.default-release")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sql := `CREATE TABLE moz_cookies (id INTEGER PRIMARY KEY, name TEXT,
+		value TEXT, host TEXT, path TEXT, expiry INTEGER);` + "\n"
+	for name, value := range cookies {
+		sql += fmt.Sprintf(
+			"INSERT INTO moz_cookies (name,value,host,path,expiry) VALUES ('%s','%s','.youtube.com','/',0);\n",
+			name, value)
+	}
+	cmd := exec.Command(bin, filepath.Join(dir, "cookies.sqlite"))
+	cmd.Stdin = strings.NewReader(sql)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("sqlite3: %v\n%s", err, out)
+	}
+	ini := "[Profile0]\nName=default\nIsRelative=1\nPath=abc.default-release\nDefault=1\n"
+	if err := os.WriteFile(filepath.Join(root, "profiles.ini"), []byte(ini), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// With no Chromium browser signed in, the Firefox store is the one read.
+func TestFirefoxIsUsedWhenThereIsNoChromiumBrowser(t *testing.T) {
+	home := isolate(t)
+	firefoxWith(t, home, map[string]string{"__Secure-1PSIDTS": "fox"})
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !strings.Contains(got.Cookie, "__Secure-1PSIDTS=fox") {
+		t.Errorf("cookie = %q, want the Firefox session", got.Cookie)
+	}
+}
+
+// When both engines are signed in, the Chromium session is the one used.
+func TestChromiumWinsOverFirefox(t *testing.T) {
+	home := isolate(t)
+	browserWith(t, home, map[string]string{"__Secure-1PSIDTS": "chromium"})
+	firefoxWith(t, home, map[string]string{"__Secure-1PSIDTS": "fox"})
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !strings.Contains(got.Cookie, "__Secure-1PSIDTS=chromium") {
+		t.Errorf("cookie = %q, want the Chromium session", got.Cookie)
 	}
 }
 
@@ -126,9 +188,10 @@ func TestSaveReplacesCleanly(t *testing.T) {
 	}
 }
 
-// Our own file wins over the Python player's, so a session we refresh is
-// the one that gets used.
-func TestOwnIsPreferred(t *testing.T) {
+// A session captured by another tool is not a source: it goes stale, and
+// handing it back as live starts the app into a library that fails every
+// request.
+func TestAnotherToolsFileIsNotASource(t *testing.T) {
 	home := isolate(t)
 	other := filepath.Join(home, ".config", "ytm-player")
 	if err := os.MkdirAll(other, 0o700); err != nil {
@@ -138,15 +201,11 @@ func TestOwnIsPreferred(t *testing.T) {
 		[]byte(`{"cookie":"theirs=1"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Save(ytm.Session{Cookie: "ours=1"}); err != nil {
-		t.Fatalf("Save: %v", err)
+	if _, ok := Cached(); ok {
+		t.Fatal("another tool's session was picked up")
 	}
-	got, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got.Cookie != "ours=1" {
-		t.Errorf("loaded %q, want ours", got.Cookie)
+	if _, err := Load(); err == nil {
+		t.Fatal("Load used another tool's session instead of failing")
 	}
 }
 
@@ -228,6 +287,55 @@ func TestAnExplicitFileIsUsedAlone(t *testing.T) {
 	}
 	if got.Cookie != "picked=1" {
 		t.Errorf("cookie = %q, want the file that was named", got.Cookie)
+	}
+}
+
+// Cached reads only the saved file, so main can decide whether to show the
+// sign-in screen without touching the browser.
+func TestCachedReadsOnlyTheFile(t *testing.T) {
+	isolate(t)
+	if _, ok := Cached(); ok {
+		t.Fatal("Cached reported a session with no file")
+	}
+	if err := Save(ytm.Session{Cookie: "SID=x", UserAgent: "ua"}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := Cached()
+	if !ok || got.Cookie != "SID=x" {
+		t.Fatalf("Cached = (%+v, %v)", got, ok)
+	}
+}
+
+// OpenLogin prefers $BROWSER, so a desktop that sets its own launcher is
+// used rather than a guess. A fake launcher records the URL it was given.
+func TestOpenLoginUsesBROWSER(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS only uses open")
+	}
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "opened")
+	script := filepath.Join(dir, "fake-browser")
+	body := "#!/bin/sh\nprintf '%s' \"$1\" > " + marker + "\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BROWSER", script)
+
+	if err := OpenLogin(); err != nil {
+		t.Fatalf("OpenLogin: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if raw, err := os.ReadFile(marker); err == nil {
+			if string(raw) != LoginURL {
+				t.Fatalf("opened %q, want %q", raw, LoginURL)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the fake browser was never run")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

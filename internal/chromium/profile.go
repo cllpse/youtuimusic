@@ -18,60 +18,84 @@ type Browser struct {
 	Keyring string
 }
 
-// layout is one browser's directory, relative to the platform's application
-// data root, and the name it uses in the keyring.
-type layout struct{ name, linux, mac, keyring string }
+// layout is one browser: where it keeps its profile directory relative to a
+// base, the name it uses in the keyring, and the sandbox names it ships under
+// on Linux. Flatpak and Snap installs each keep their own copy of the config
+// root, so a browser installed that way is invisible under ~/.config unless
+// its sandbox path is tried too.
+type layout struct {
+	name, linux, mac, keyring string
+	flatpak, snap             string
+}
 
 // The Chromium-based browsers worth looking for. Helium is here because the
 // Python player already supports it, so a setup that works there keeps
 // working here.
 var layouts = []layout{
-	{"Chromium", "chromium", "Chromium", "chromium"},
-	{"Google Chrome", "google-chrome", "Google/Chrome", "chrome"},
-	{"Brave", "BraveSoftware/Brave-Browser", "BraveSoftware/Brave-Browser", "brave"},
-	{"Microsoft Edge", "microsoft-edge", "Microsoft Edge", "microsoft-edge"},
-	{"Vivaldi", "vivaldi", "Vivaldi", "vivaldi"},
-	{"Opera", "opera", "com.operasoftware.Opera", "opera"},
-	{"Helium", "net.imput.helium", "net.imput.helium", "chromium"},
+	{"Chromium", "chromium", "Chromium", "chromium", "org.chromium.Chromium", "chromium"},
+	{"Google Chrome", "google-chrome", "Google/Chrome", "chrome", "com.google.Chrome", ""},
+	{"Brave", "BraveSoftware/Brave-Browser", "BraveSoftware/Brave-Browser", "brave", "com.brave.Browser", "brave"},
+	{"Microsoft Edge", "microsoft-edge", "Microsoft Edge", "microsoft-edge", "com.microsoft.Edge", ""},
+	{"Vivaldi", "vivaldi", "Vivaldi", "vivaldi", "com.vivaldi.Vivaldi", ""},
+	{"Opera", "opera", "com.operasoftware.Opera", "opera", "com.opera.Opera", ""},
+	{"Helium", "net.imput.helium", "net.imput.helium", "chromium", "", ""},
 }
 
-// root is where this platform keeps application data.
+// nativeBases is where this platform keeps application data itself.
 //
 // Windows is absent on purpose rather than by oversight: it encrypts cookies
 // with DPAPI and AES-GCM, which shares nothing with the scheme in decrypt.go,
 // so pretending to look there would only produce a confusing failure.
-func root() (string, bool) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", false
+func nativeBases(home string) []string {
+	if runtime.GOOS == "darwin" {
+		return []string{filepath.Join(home, "Library", "Application Support")}
 	}
-	switch runtime.GOOS {
-	case "linux", "freebsd", "openbsd", "netbsd":
-		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-			return xdg, true
-		}
-		return filepath.Join(home, ".config"), true
-	case "darwin":
-		return filepath.Join(home, "Library", "Application Support"), true
-	default:
-		return "", false
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return []string{xdg}
 	}
+	return []string{filepath.Join(home, ".config")}
+}
+
+// dirs returns every directory this browser's profiles may live in: the
+// native root first, then the Flatpak and Snap sandboxes on Linux.
+func (l layout) dirs(home string) []string {
+	rel := l.linux
+	if runtime.GOOS == "darwin" {
+		rel = l.mac
+	}
+	var out []string
+	for _, base := range nativeBases(home) {
+		out = append(out, filepath.Join(base, filepath.FromSlash(rel)))
+	}
+	if runtime.GOOS == "darwin" {
+		return out
+	}
+	if l.flatpak != "" {
+		out = append(out, filepath.Join(home, ".var", "app", l.flatpak, "config", filepath.FromSlash(l.linux)))
+	}
+	if l.snap != "" {
+		out = append(out, filepath.Join(home, "snap", l.snap, "common", filepath.FromSlash(l.linux)))
+	}
+	return out
 }
 
 // Installed returns the browsers that are actually on this machine.
 func Installed() []Browser {
-	base, ok := root()
-	if !ok {
+	home, err := os.UserHomeDir()
+	if err != nil {
 		return nil
 	}
 	var out []Browser
+	seen := map[string]bool{}
 	for _, l := range layouts {
-		dir := filepath.Join(base, filepath.FromSlash(l.linux))
-		if runtime.GOOS == "darwin" {
-			dir = filepath.Join(base, filepath.FromSlash(l.mac))
-		}
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			out = append(out, Browser{Name: l.name, Dir: dir, Keyring: l.keyring})
+		for _, dir := range l.dirs(home) {
+			if seen[dir] {
+				continue
+			}
+			if info, err := os.Stat(dir); err == nil && info.IsDir() {
+				seen[dir] = true
+				out = append(out, Browser{Name: l.name, Dir: dir, Keyring: l.keyring})
+			}
 		}
 	}
 	return out

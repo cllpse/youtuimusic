@@ -1,5 +1,11 @@
 version: 2
 
+# Fetch mpv + yt-dlp for every target before building. The archives below pick
+# them up per os/arch, so each release is self-contained and needs no packages.
+before:
+  hooks:
+    - sh scripts/bundle-deps.sh
+
 builds:
   - main: ./cmd/youtuimusic
     goos: [linux, darwin]
@@ -11,6 +17,15 @@ archives:
   - formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - THIRD_PARTY_NOTICES.md
+      # The bundled runtime dependencies. The app resolves these beside its own
+      # executable (see internal/tool); install.sh unpacks mpv.tar.gz.
+      - src: deps/{{ .Os }}_{{ .Arch }}/yt-dlp
+        dst: yt-dlp
+      - src: deps/{{ .Os }}_{{ .Arch }}/mpv.tar.gz
+        dst: mpv.tar.gz
 
 checksum:
   name_template: checksums.txt

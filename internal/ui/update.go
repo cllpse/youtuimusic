@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
@@ -62,6 +63,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.RequestBackgroundColor
 
 	case tea.KeyPressMsg:
+		if m.signedOut {
+			switch msg.String() {
+			case "enter":
+				if !m.signingIn {
+					return m.startSignIn()
+				}
+			case "ctrl+c":
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		if m.sheetOpen {
 			if next, cmd, handled := m.handleSheetKey(msg); handled {
 				return next, cmd
@@ -81,10 +93,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 
 	case spinner.TickMsg:
-		// The loop stops as soon as nothing is waiting on the network. That
-		// includes the next-page row, which is why this is busy() and not
-		// loading: otherwise the load-more spinner is drawn but never moves.
-		if !m.busy() {
+		// The loop stops as soon as nothing is waiting. That includes the
+		// next-page row, which is why this is busy() and not loading:
+		// otherwise the load-more spinner is drawn but never moves. A
+		// sign-in is a wait too, and is not part of busy().
+		if !m.busy() && !m.signingIn {
 			return m, nil
 		}
 		spin, cmd := m.spin.Update(msg)
@@ -110,6 +123,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.fetchTracks(tab)
+
+	case signedInMsg:
+		m.signingIn = false
+		if msg.err != nil {
+			m.Err = msg.err
+			return m, nil
+		}
+		m.signedOut = false
+		m.Err = nil
+		m.services.Library = msg.library
+		m.loading = true
+		return m, batch(m.fetchPlaylists(), m.spin.Tick)
 
 	case playlistsMsg:
 		// A fresh slice rather than truncating in place: the model travels by
@@ -381,4 +406,27 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.applyRating(RatingDown)
 	}
 	return m, nil
+}
+
+// signIn runs the browser sign-in off the event loop, so the screen keeps
+// animating while it waits. Services.SignIn owns where the browser comes
+// from; the model only carries the result.
+func (m Model) signIn() tea.Cmd {
+	signIn := m.services.SignIn
+	if signIn == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), signInTimeout)
+		defer cancel()
+		library, err := signIn(ctx)
+		return signedInMsg{library: library, err: err}
+	}
+}
+
+// startSignIn clears the last failure and starts the browser sign-in.
+func (m Model) startSignIn() (tea.Model, tea.Cmd) {
+	m.signingIn = true
+	m.Err = nil
+	return m, batch(m.signIn(), m.spin.Tick)
 }

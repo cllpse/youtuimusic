@@ -8,21 +8,56 @@ deliberately.
 
 ### Install
 
-Released binaries for linux/darwin, amd64/arm64 — no Go toolchain needed:
+Released binaries for linux/darwin, amd64/arm64 — no Go toolchain needed.
+Each archive is self-contained: it carries `mpv` and `yt-dlp` beside the
+binary, and the installer unpacks them into `libexec`, so nothing else has to
+be installed.
 
 ```bash
-# linux / macos, amd64 / arm64 — binaries, no Go toolchain needed
+# linux / macos, amd64 / arm64 — self-contained binaries
 curl -fsSL https://raw.githubusercontent.com/cllpse/youtuimusic/main/install.sh | sh
 
 # macos (or linuxbrew), from the tap
 brew install cllpse/tap/youtuimusic
 
-# with Go installed
+# with Go installed (deps must be on PATH)
 go install github.com/cllpse/youtuimusic/cmd/youtuimusic@latest
 ```
 
 Arch (AUR) packaging exists too; see `scripts/release-channels.sh` for its
-current status.
+current status. Homebrew and AUR install `mpv` and `yt-dlp` as dependencies
+rather than unpacking the bundled copies.
+
+At runtime youtuimusic looks beside its own executable first, then on `PATH`.
+`yt-dlp` is the exception: it has to keep up with YouTube, so a newer copy on
+`PATH` wins over the bundled snapshot and the bundle is only the fallback.
+The installer skips a bundled dependency that is already on `PATH`, so it
+fills in only what is missing rather than shadowing what you already have.
+The bundled programs are third-party works with their own licenses — see
+`THIRD_PARTY_NOTICES.md`. Skip dependency handling entirely with
+`YTMUIMUSIC_NO_DEPS=1`.
+
+### Signing in
+
+youtuimusic reads the session out of a browser you are already signed in to.
+Chrome, Chromium, Edge, Brave, Opera, Vivaldi and Helium are read through
+their Chromium cookie store; Firefox, LibreWolf and Waterfox through
+`cookies.sqlite`. Native installs are found first, then the Flatpak and Snap
+sandboxes. The right profile is chosen by looking for `__Secure-1PSIDTS` — the
+one cookie Google actually authenticates with — rather than by counting
+cookies. Chromium's values are decrypted the way the browser wrote them: the
+Secret Service keyring, or the `v10` fallback when there is none.
+
+If no browser has a session, the TUI shows a sign-in screen. Press **enter**
+and youtuimusic opens your default browser to the sign-in page — the browser
+you already use, with its extensions and saved passwords, not a fresh profile.
+Sign in there, then press **enter** again to read it. The session is cached in the
+config directory (`youtuimusic/session.json`) as the fallback for a locked
+keyring or a machine with no browser, and refreshed from the browser on every
+successful read. Set `YOUTUIMUSIC_SESSION` to use a captured header file
+alone, or run `youtuimusic --auth-clear` to delete the cached session. The
+browser's own cookies are left alone, so the next run offers the sign-in
+screen again.
 
 ### Build from source
 
@@ -156,6 +191,9 @@ frame ever emits a `38;5;` or `38;2;` sequence.
 ```
 cmd/youtuimusic     entry point
 internal/ytm        InnerTube client (auth, playlists, search, rating)
+internal/auth       the session: the browser's cookies first, a file second
+internal/chromium   Chromium family: profiles, keyring, cookie decryption
+internal/gecko      Firefox family: cookies.sqlite and profiles.ini
 internal/player     mpv over JSON IPC
 internal/stream     yt-dlp resolution + cache
 internal/ui         bubbletea model, tabs / table / progress. One table
@@ -172,6 +210,7 @@ Packaging and the release process live in [RELEASE.md](RELEASE.md).
       against a real account
 - [x] `internal/ui` — bubbletea shell, wired to the backends, keyboard and
       mouse, scrolling
-- [ ] `internal/chromium` — reading the browser's cookies directly, so that
-      signing in needs no steps. Decryption and the keyring are done; profile
-      discovery is not. Until it lands, `internal/auth` reads a session file.
+- [x] `internal/auth` — reads the session out of a signed-in browser, in the
+      TUI when none is found, with a cached file as fallback
+- [x] `internal/chromium` + `internal/gecko` — profile discovery, keyring and
+      cookie decryption for the Chromium and Firefox families
