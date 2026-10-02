@@ -1739,3 +1739,11 @@ func TestAMixFromTheMenuUsesTheClickedRow(t *testing.T) {
 		t.Errorf("the row is not cyan: %q", menuLine(at, "Start mix"))
 	}
 }
+
+// visualRow is the line an item is drawn on, once the rule is counted.
+func visualRow(item int) int {
+	if item > dividerAfter {
+		return item + 1
+	}
+	return item
+}

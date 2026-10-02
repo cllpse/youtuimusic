@@ -4,30 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/cllpse/youtuimusic/internal/jar"
 	"github.com/cllpse/youtuimusic/internal/sqlitescan"
 )
 
-// Cookie is one stored cookie.
-type Cookie struct {
-	Name    string
-	Value   string
-	Host    string    // the host_key it is filed under
-	Expires time.Time // zero for a session cookie
-}
-
-// ErrNoBrowser means no browser profile held a usable session.
-var ErrNoBrowser = errors.New("chromium: no signed-in browser profile found")
-
-// bellwether is the cookie a YouTube session actually turns on. Measured:
-// remove it and a library request comes back signed out, while removing
-// __Secure-3PSIDTS or the SIDCC family changes nothing. Picking the profile
-// that has it beats guessing from how many cookies a profile holds, because
-// a signed-out profile can easily hold more.
-const bellwether = "__Secure-1PSIDTS"
+// ErrNoBrowser means no Chromium-based browser is installed.
+var ErrNoBrowser = errors.New("chromium: no Chromium-based browser found")
 
 // iterations is what Chromium stretches a storage password with. The number
 // differs per platform in Chromium itself, not by our choice.
@@ -38,44 +24,47 @@ func iterations() int {
 	return 1
 }
 
-// keys builds the decryption key for each value prefix a browser may have
-// written. On Linux v10 means the hardcoded fallback password and v11 means
-// the one in the keyring, so a missing keyring costs the v11 cookies and
-// leaves the rest readable.
-func (b Browser) keys() (map[string][]byte, error) {
-	out := map[string][]byte{}
+// keySet is the keys worth trying for each value prefix, most likely first.
+type keySet map[string][][]byte
+
+// keys builds the decryption keys for each value prefix a browser may have
+// written.
+//
+// On Linux v10 means the hardcoded fallback password and v11 the one in the
+// keyring, so a missing keyring costs the v11 cookies and leaves the rest
+// readable. Both also get the key stretched from an empty password, which
+// Chromium uses when the keyring answered but had nothing to give; yt-dlp
+// found that one in the wild. On macOS there is no fallback: v10 is the
+// Keychain's password.
+//
+// More than one key per prefix is safe because decrypt only accepts a
+// result that unpads and reads as a cookie value.
+func (b Browser) keys() (keySet, error) {
+	passwords, keyErr := storagePasswords(b)
+	var stored [][]byte
+	for _, pw := range passwords {
+		k, err := deriveKey(pw, iterations())
+		if err != nil {
+			return nil, err
+		}
+		stored = append(stored, k)
+	}
+	if runtime.GOOS == "darwin" {
+		return keySet{"v10": stored}, keyErr
+	}
+
 	fallback, err := deriveKey([]byte(fallbackPassword), iterations())
 	if err != nil {
 		return nil, err
 	}
-	out["v10"] = fallback
-
-	password, err := keyringPassword(b.Keyring)
+	empty, err := deriveKey(nil, iterations())
 	if err != nil {
-		// Not fatal: say so, and let the v10 cookies through.
-		return out, fmt.Errorf("%s: %w", b.Name, err)
+		return nil, err
 	}
-	stored, err := deriveKey(password, iterations())
-	if err != nil {
-		return out, err
-	}
-	out["v11"] = stored
-	if runtime.GOOS == "darwin" {
-		// macOS has no fallback password; v10 is the stored one.
-		out["v10"] = stored
-	}
-	return out, nil
-}
-
-// sends reports whether a cookie filed under hostKey would be sent to host.
-// A leading dot means the cookie covers subdomains, which is how the
-// account cookies reach music.youtube.com from .youtube.com.
-func sends(hostKey, host string) bool {
-	hostKey, host = strings.ToLower(hostKey), strings.ToLower(host)
-	if strings.HasPrefix(hostKey, ".") {
-		return host == hostKey[1:] || strings.HasSuffix(host, hostKey)
-	}
-	return host == hostKey
+	return keySet{
+		"v10": {fallback, empty},
+		"v11": append(stored, empty),
+	}, keyErr
 }
 
 // Chromium counts microseconds from 1601-01-01 UTC. The gap to the Unix
@@ -84,125 +73,140 @@ func sends(hostKey, host string) bool {
 // from 1601 overflows and comes back looking long expired.
 const epochGapSeconds = 11644473600
 
-func expiry(raw any) time.Time {
+func chromiumTime(raw any) time.Time {
 	micros, ok := raw.(int64)
 	if !ok || micros <= 0 {
-		return time.Time{} // a session cookie
+		return time.Time{} // a session cookie, or a column the store lacks
 	}
 	return time.Unix(micros/1e6-epochGapSeconds, micros%1e6*1e3).UTC()
 }
 
 // Read returns the cookies in this profile that a request to host would
-// send. Cookies that cannot be decrypted are skipped rather than failing
-// the read: one unreadable cookie should not cost the whole session.
-func (p Profile) Read(host string, now time.Time) ([]Cookie, error) {
-	keys, keyErr := p.Browser.keys()
-
-	db, err := sqlitescan.Open(p.Path)
+// send. keys is asked only when a cookie for host is encrypted, so a profile
+// with no YouTube cookies never reaches the keyring. Cookies that cannot be
+// decrypted are skipped rather than failing the read, unless they cost the
+// session, in which case the keyring is the thing to report.
+func (p Profile) Read(host string, now time.Time, keys func() (keySet, error)) (jar.Jar, error) {
+	tbl, err := sqlitescan.ReadTable(p.Path, "cookies")
 	if err != nil {
-		return nil, fmt.Errorf("chromium: %s: %w", p.Path, err)
-	}
-	tbl, err := db.Table("cookies")
-	if err != nil {
-		return nil, fmt.Errorf("chromium: %s: %w", p.Path, err)
+		return jar.Jar{}, fmt.Errorf("chromium: %s: %w", p.Path, err)
 	}
 
-	var out []Cookie
-	var undecrypted int
+	out := jar.Jar{Browser: p.Browser.Name, Profile: p.Name, Modified: jar.StoreModified(p.Path)}
+	col := chromiumColumns(tbl)
+	var undecrypted []string
+	var keyErr error
 	for _, row := range tbl.Rows {
-		text := func(name string) string {
-			v, _ := tbl.Column(row, name)
-			s, _ := v.(string)
-			return s
+		hostKey := text(row, col.host)
+		if !jar.Sends(hostKey, host) {
+			continue // most rows: checked first, so they cost one lookup
 		}
-		hostKey, name := text("host_key"), text("name")
-		if name == "" || !sends(hostKey, host) {
+		name, path := text(row, col.name), text(row, col.path)
+		if name == "" || !jar.PathMatches(path, jar.RequestPath) {
 			continue
 		}
-		if at := expiry(func() any { v, _ := tbl.Column(row, "expires_utc"); return v }()); !at.IsZero() &&
-			at.Before(now) {
+		// A partitioned cookie belongs to the site it was embedded under,
+		// not to a request made to the host itself.
+		if text(row, col.partition) != "" {
+			continue
+		}
+		expires := chromiumTime(sqlitescan.Cell(row, col.expires))
+		if !expires.IsZero() && expires.Before(now) {
 			continue
 		}
 
-		value := text("value")
+		value := text(row, col.value)
 		if value == "" {
-			raw, _ := tbl.Column(row, "encrypted_value")
-			blob, _ := raw.([]byte)
+			blob, _ := sqlitescan.Cell(row, col.encrypted).([]byte)
 			if len(blob) == 0 {
 				continue
 			}
-			plain, err := decrypt(blob, hostKey, keys)
+			set, err := keys()
 			if err != nil {
-				undecrypted++
+				keyErr = err
+			}
+			plain, err := decrypt(blob, hostKey, set)
+			if err != nil {
+				undecrypted = append(undecrypted, name)
 				continue
 			}
 			value = plain
 		}
-		out = append(out, Cookie{Name: name, Value: value, Host: hostKey})
+		if !jar.Valid(value) {
+			continue
+		}
+		out.Cookies = append(out.Cookies, jar.Cookie{
+			Name: name, Value: value, Host: hostKey, Path: path,
+			Expires: expires, LastAccess: chromiumTime(sqlitescan.Cell(row, col.lastAccess)),
+		})
 	}
 
-	// A profile where nothing decrypted is a keyring problem wearing the
-	// costume of an empty profile, so it is worth saying which it was.
-	if len(out) == 0 && undecrypted > 0 {
-		if keyErr != nil {
-			return nil, fmt.Errorf("chromium: %s: %d cookies are locked: %w",
-				p.Browser.Name, undecrypted, keyErr)
+	// A profile whose session is locked away is a keyring problem wearing
+	// the costume of a signed-out profile, so it is worth saying which.
+	if len(undecrypted) > 0 && !out.SignedIn() {
+		reason := keyErr
+		if reason == nil {
+			reason = fmt.Errorf("%w: the keyring's password does not fit", ErrEncrypted)
 		}
-		return nil, fmt.Errorf("chromium: %s: none of the %d cookies could be decrypted",
-			p.Browser.Name, undecrypted)
+		return out, fmt.Errorf("chromium: %s/%s: %d cookies are locked (%s): %w",
+			p.Browser.Name, p.Name, len(undecrypted), strings.Join(undecrypted, ", "), reason)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
-// Cookies finds the browser profile signed in to host and returns its
-// cookies. Every installed browser is tried, most recently used profile
-// first, and the first one holding a real session wins.
-func Cookies(host string, now time.Time) ([]Cookie, Profile, error) {
+// columns is where Chromium's cookie table keeps what Read needs, looked up
+// by name once per table: the table has gained columns over the years, so a
+// fixed position would mean a different column on a different build. A
+// column the store lacks is -1, and reads as empty.
+type columns struct {
+	host, name, value, encrypted, path, partition, expires, lastAccess int
+}
+
+func chromiumColumns(tbl *sqlitescan.Table) columns {
+	return columns{
+		host:       tbl.Index("host_key"),
+		name:       tbl.Index("name"),
+		value:      tbl.Index("value"),
+		encrypted:  tbl.Index("encrypted_value"),
+		path:       tbl.Index("path"),
+		partition:  tbl.Index("top_frame_site_key"),
+		expires:    tbl.Index("expires_utc"),
+		lastAccess: tbl.Index("last_access_utc"),
+	}
+}
+
+// text is a cell read as a string, empty when it is not one.
+func text(row []any, i int) string {
+	s, _ := sqlitescan.Cell(row, i).(string)
+	return s
+}
+
+// Jars reads every profile of every installed Chromium-based browser and
+// returns what each would send to host. Choosing between them is
+// jar.Pick's job. The error collects the profiles that could not be read;
+// it is not fatal while others could.
+//
+// The keyring is asked at most once per browser, and only if one of its
+// profiles needs it: a locked keyring is a prompt, and a browser holding no
+// YouTube cookies has no business raising one.
+func Jars(host string, now time.Time) ([]jar.Jar, error) {
 	installed := Installed()
 	if len(installed) == 0 {
-		return nil, Profile{}, fmt.Errorf("%w: no Chromium-based browser on this machine",
-			ErrNoBrowser)
+		return nil, ErrNoBrowser
 	}
-
-	var reasons []string
-	var best []Cookie
-	var from Profile
+	var jars []jar.Jar
+	var errs []error
 	for _, b := range installed {
+		keys := sync.OnceValues(b.keys)
 		for _, p := range b.Profiles() {
-			got, err := p.Read(host, now)
+			got, err := p.Read(host, now, keys)
 			if err != nil {
-				reasons = append(reasons, err.Error())
-				continue
+				errs = append(errs, err)
 			}
-			for _, c := range got {
-				if c.Name == bellwether {
-					return got, p, nil
-				}
-			}
-			if len(got) > len(best) {
-				best, from = got, p
+			if len(got.Cookies) > 0 {
+				jars = append(jars, got)
 			}
 		}
 	}
-
-	// Something, but nothing signed in: report it as such rather than
-	// handing back cookies that will look like an empty library.
-	if len(best) > 0 {
-		return best, from, fmt.Errorf("%w: %s/%s has cookies for %s but no %s",
-			ErrNoBrowser, from.Browser.Name, from.Name, host, bellwether)
-	}
-	if len(reasons) > 0 {
-		return nil, Profile{}, fmt.Errorf("%w: %s", ErrNoBrowser, strings.Join(reasons, "; "))
-	}
-	return nil, Profile{}, fmt.Errorf("%w: no profile had cookies for %s", ErrNoBrowser, host)
-}
-
-// Header renders cookies as a Cookie request header.
-func Header(cookies []Cookie) string {
-	parts := make([]string, 0, len(cookies))
-	for _, c := range cookies {
-		parts = append(parts, c.Name+"="+c.Value)
-	}
-	return strings.Join(parts, "; ")
+	return jars, errors.Join(errs...)
 }

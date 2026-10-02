@@ -1,8 +1,8 @@
 # youtuimusic
 
 A small YouTube Music TUI: playlists as tabs, tracks below them, a progress
-bar at the bottom. Search, and thumbs up/down. That is the whole scope,
-deliberately.
+bar at the bottom. Search, albums and artists, mixes, and thumbs up/down. It
+is kept that small deliberately.
 
 ## Running
 
@@ -24,56 +24,128 @@ brew install cllpse/tap/youtuimusic
 go install github.com/cllpse/youtuimusic/cmd/youtuimusic@latest
 ```
 
-Arch (AUR) packaging exists too; see `scripts/release-channels.sh` for its
-current status. Homebrew and AUR install `mpv` and `yt-dlp` as dependencies
-rather than unpacking the bundled copies.
+An Arch (AUR) package is written but not yet published; see
+[RELEASE.md](RELEASE.md). Homebrew installs `mpv` and `yt-dlp` as
+dependencies rather than unpacking the bundled copies, and the AUR package
+will too.
 
-At runtime youtuimusic looks beside its own executable first, then on `PATH`.
-`yt-dlp` is the exception: it has to keep up with YouTube, so a newer copy on
-`PATH` wins over the bundled snapshot and the bundle is only the fallback.
-The installer skips a bundled dependency that is already on `PATH`, so it
-fills in only what is missing rather than shadowing what you already have.
-The bundled programs are third-party works with their own licenses — see
-`THIRD_PARTY_NOTICES.md`. Skip dependency handling entirely with
-`YTMUIMUSIC_NO_DEPS=1`.
+The installer checks the archive against the release's `checksums.txt` before
+unpacking anything. It takes its options from the environment, which with a
+pipe means setting them on `sh`, not on `curl`:
+
+```bash
+# a given release rather than the latest
+curl -fsSL https://raw.githubusercontent.com/cllpse/youtuimusic/main/install.sh | sh -s -- v0.2.0
+
+# no sudo: the binary in ~/.local/bin, mpv and yt-dlp in ~/.local/libexec/youtuimusic
+curl -fsSL https://raw.githubusercontent.com/cllpse/youtuimusic/main/install.sh | YOUTUIMUSIC_INSTALL_DIR="$HOME/.local/bin" sh
+
+# the binary only; mpv and yt-dlp are up to you
+curl -fsSL https://raw.githubusercontent.com/cllpse/youtuimusic/main/install.sh | YOUTUIMUSIC_NO_DEPS=1 sh
+```
+
+| variable | what it does |
+|---|---|
+| `YOUTUIMUSIC_INSTALL_DIR` | where the binary goes; `/usr/local/bin` by default, with `sudo` only if it is not writable |
+| `YOUTUIMUSIC_LIBEXEC_DIR` | where the bundled `mpv` and `yt-dlp` go; `<install dir>/../libexec/youtuimusic` by default |
+| `YOUTUIMUSIC_NO_DEPS=1` | install the binary and nothing else |
+
+The older `YTMUIMUSIC_*` spellings of these still work.
+
+youtuimusic only looks for its bundled programs in three places: beside its
+own executable, in `libexec/youtuimusic` next to it, or in
+`../libexec/youtuimusic` above it (symlinks to the executable are followed
+first). `YOUTUIMUSIC_LIBEXEC_DIR` has to be one of those —
+`<install dir>/../libexec/youtuimusic` or `<install dir>/libexec/youtuimusic`
+— or the programs are installed where nothing will find them.
+
+The two are looked up in opposite orders. `mpv` takes the bundled copy first
+and `PATH` second. `yt-dlp` is the other way round: it has to keep up with
+YouTube, so a newer copy on `PATH` wins over the bundled snapshot and the
+bundle is only the fallback. The installer skips a bundled program that is
+already on `PATH`, so it fills in only what is missing rather than shadowing
+what you already have. The bundled programs are third-party works with their
+own licenses — see `THIRD_PARTY_NOTICES.md`.
 
 ### Signing in
 
 youtuimusic reads the session out of a browser you are already signed in to.
-Chrome, Chromium, Edge, Brave, Opera, Vivaldi and Helium are read through
-their Chromium cookie store; Firefox, LibreWolf and Waterfox through
-`cookies.sqlite`. Native installs are found first, then the Flatpak and Snap
-sandboxes. The right profile is chosen by looking for `__Secure-1PSIDTS` — the
-one cookie Google actually authenticates with — rather than by counting
-cookies. Chromium's values are decrypted the way the browser wrote them: the
-Secret Service keyring, or the `v10` fallback when there is none.
+Chrome (stable, Beta and Dev), Chromium, Ungoogled Chromium, Edge, Brave,
+Opera, Vivaldi and Helium are read through their Chromium cookie store;
+Firefox, LibreWolf, Waterfox, Zen and Floorp through `cookies.sqlite`. On
+Linux, native installs are found first, then the Flatpak and Snap sandboxes.
+A profile counts as signed in when it has both `__Secure-1PSIDTS`, the cookie
+Google authenticates with, and `__Secure-3PAPISID`, the one requests are
+signed with. When several are, the one whose session was used most recently
+wins, whichever browser it is in.
 
-If no browser has a session, the TUI shows a sign-in screen. Press **enter**
-and youtuimusic opens your default browser to the sign-in page — the browser
-you already use, with its extensions and saved passwords, not a fresh profile.
-Sign in there, then press **enter** again to read it. The session is cached in the
-config directory (`youtuimusic/session.json`) as the fallback for a locked
-keyring or a machine with no browser, and refreshed from the browser on every
-successful read. Set `YOUTUIMUSIC_SESSION` to use a captured header file
-alone, or run `youtuimusic --auth-clear` to delete the cached session. The
-browser's own cookies are left alone, so the next run offers the sign-in
-screen again.
+Chromium's values are decrypted with the password from the Secret Service or
+KWallet on Linux, or the Keychain on macOS. On Linux, cookies written with
+Chromium's `v10` fallback password need no keyring at all; macOS has no such
+fallback. The keyring is only asked when a YouTube cookie needs it.
+
+The cookie Google authenticates with rotates about every ten minutes, and
+only the browser is handed the new one. When a request comes back signed out partway
+through a session, youtuimusic reads the browser again and retries.
+
+To sign in, sign in to [music.youtube.com](https://music.youtube.com) in one
+of those browsers and start youtuimusic. The session is cached in
+`~/.config/youtuimusic/session.json` as the fallback
+for a locked keyring or a machine with no browser, and rewritten from the
+browser on every successful read. If no browser has a session and there is
+no cached one either, youtuimusic says so and exits, with the reason for each
+browser it looked in. `youtuimusic --auth-clear` deletes the cached session;
+the browser's own cookies are left alone.
+
+To sign in with a captured session instead, point `YOUTUIMUSIC_SESSION` at a
+file. The browser is then not read at all, not even mid-session, and the file
+is never written to; if it does not exist, the cached session above is used.
+The file is a JSON object of request headers. `cookie` is required;
+`user-agent`, `x-goog-authuser` and `x-goog-visitor-id` are used when present,
+and header names match regardless of case:
+
+```json
+{
+  "cookie": "__Secure-1PSIDTS=…; __Secure-3PAPISID=…; …",
+  "user-agent": "Mozilla/5.0 …"
+}
+```
+
+### Files
+
+| path | what is in it |
+|---|---|
+| `~/.config/youtuimusic/session.json` | the cached session (mode 0600) — the whole account, so treat it like a password |
+| `~/.config/youtuimusic/state.json` | the playlist that was open, the track that was playing, and `"colour": true` if colour was switched on |
+| `~/.cache/youtuimusic/streams.json` | resolved stream URLs until they expire; `$XDG_CACHE_HOME/youtuimusic/` when that is set, `~/Library/Caches/youtuimusic/` on macOS |
+
+The first two are kept under `~/.config` on macOS too. Deleting the cache
+costs one `yt-dlp` run per track and nothing else.
 
 ### Build from source
 
-Needs `mpv` and `yt-dlp` on `PATH`. No particular font: the interface draws
-nothing outside the usual range, and a test enforces it.
+Needs the Go version named in `go.mod`, and `mpv` and `yt-dlp` on `PATH`. No
+cgo, so `CGO_ENABLED=0` gives a static binary, which is how releases are
+built. No particular font: the interface draws nothing outside the usual
+range, and a test enforces it.
 
 ```bash
 go build ./cmd/youtuimusic && ./youtuimusic
 ```
 
+A build outside GoReleaser reports its version as `dev`.
+
 Tests are offline by default. The ones that need the network are opt-in:
 
 ```bash
-go test ./...                  # fast, no network
-YTM_NET=1 go test ./...        # includes resolve + end-to-end playback
+go test ./...                       # fast, no network
+YTM_NET=1 go test ./...             # adds resolve, end-to-end playback and the live API tests
+YTM_NET=1 YTM_MUTATE=1 go test ./internal/ytm   # also rates a real track, then puts it back
 ```
+
+The live API tests sign in with the session youtuimusic saved on its last run
+(`~/.config/youtuimusic/session.json`, or the file `YOUTUIMUSIC_SESSION`
+names), and skip when there is none — run the app once first.
 
 ## Decisions, and the measurements behind them
 
@@ -114,19 +186,39 @@ walking onto it, scrolling to it, or clicking it — is what asks.
 
 ## Using it
 
+`?` shows every key in the app. That sheet is drawn from the same bindings
+the keys dispatch on, so it cannot fall behind; this table is a copy of it.
+
+The player — these work whatever is in front:
+
 | | |
 |---|---|
-| `h`/`l`, `←`/`→`, `tab` | move between playlist tabs |
-| `j`/`k`, `↑`/`↓` | move the cursor |
-| `pgup`/`pgdown`, `ctrl+u`/`ctrl+d` | a window at a time |
-| `g` / `G`, `home`/`end` | the top, the bottom |
-| `enter` | play the highlighted track |
-| `space` | pause and resume, or start the highlighted track |
+| `space` | play or pause; with nothing played yet, play the highlighted track |
 | `n` / `p` | next and previous track |
-| `r` | repeat: off, all, one |
+| `r` | repeat: off, on (the whole list, round and round), one |
+| `+` / `-` | like or dislike the highlighted track; the same key again clears it (`=` and `_` work too). Disliking the track that is playing moves on from it |
+
+Getting around:
+
+| | |
+|---|---|
+| `j`/`k`, `↓`/`↑` | down and up a row |
+| `pgdown`/`pgup`, `ctrl+d`/`ctrl+u` | a page at a time |
+| `g` / `G`, `home`/`end` | the first row, the last row |
+| `h`/`l`, `←`/`→`, `shift+tab`/`tab` | previous and next playlist tab |
+
+Everything else:
+
+| | |
+|---|---|
+| `enter` | play the highlighted track, or open a release |
 | `/` | search in a popover, `enter` to run it, `esc` to close |
-| `+` / `-` | thumbs up or down; the same key again clears it |
-| `s` / `S` | sort by the next column, and reverse it |
+| `M` | start a mix from the track playing, or from the highlighted one when nothing is |
+| `s` / `S` | sort by the next column, and reverse it (not on a mix) |
+| `m` | colour on and off; the app opens in monochrome |
+| `R` | refetch the list in front, ignoring what is cached |
+| `esc` | close what is in front: the popover, the menu, the key sheet |
+| `?` | these keys |
 | `ctrl+c` | quit |
 
 With the track menu or the popover open, `j`/`k` and `enter` work it and
@@ -136,15 +228,18 @@ not depend on what is on top.
 The progress bar and the controls share a box — transport on the left,
 repeat on the right — and under it a status bar says what the app is doing
 and what is playing, in two blocks the way lipgloss's
-own example lays one out. Rating is not a glyph: a liked or disliked row is
-drawn in the colour of that rating, so a page of them reads at a glance, and
-the same colours appear as marks down the scrollbar. `+` and `-` rate the
-highlighted row.
+own example lays one out. Rating is not a glyph. With colour on, a liked or
+disliked row is drawn in the colour of that rating, so a page of them reads
+at a glance, and the same colours appear as marks down the scrollbar. In
+monochrome a rated row is drawn plain, with no marks — greying a dislike
+would make it look like a row that cannot be chosen — and the track menu
+says which way it is rated. `+` and `-` rate the highlighted row.
 
-Right-clicking a track opens a menu: like or unlike it, go to its album, go
-to its artist. A track that links nowhere has those rows greyed. An artist
-opens with their songs and then their releases; a release has nothing to
-play, so opening one shows the album.
+Right-clicking a track opens a menu: go to its album, go to its artist, start
+a mix from it, like or unlike it, dislike it or remove the dislike. A dislike
+from the menu asks for confirmation first. A track that links nowhere has
+those rows greyed. An artist opens with their songs and then their releases;
+a release has nothing to play, so opening one shows the album.
 
 Albums, artists and search all open the same popover over the list, inset so
 that what it covers is still visible around it and stopping short of the
@@ -176,15 +271,40 @@ per tab.
 
 **Colours come from the terminal, not from this program.** Everything drawn
 names an entry in the sixteen-colour ANSI palette, so the scheme the user
-already has is the scheme the app wears. Three names in `internal/ui` decide
-all of it — `accent`, `accentBright` and `muted` — so recolouring the
-interface is one edit. That rules out the progress
-component's own blend: it interpolates in RGB and emits true colour, so the
-steps between two named endpoints are values this program invented. The bar
-uses a colour function returning palette entries instead — a ramp with steps
-rather than a fade, softened by the half block, which carries a foreground
-and a background and so fits two steps in every cell. A test asserts no
-frame ever emits a `38;5;` or `38;2;` sequence.
+already has is the scheme the app wears. The colours are named for what they
+are for rather than what they look like, all in `internal/ui/theme.go`, so
+recolouring the interface is one edit there. Where the palette has no colour
+for a job, one is mixed from the terminal's own rather than invented: the row
+highlight is a tint of the background it reports, and the status block is
+each state's hue lightened, with the word on it the same hue darkened. How far
+is worked out per colour — a deep blue needs lifting further than a pastel
+yellow before dark text reads on it — so the word holds 5:1 contrast whatever
+the theme. The terminal is asked for these (OSC 11 for the background, OSC 4
+for red, green, yellow and blue) at startup and again when the window or the
+focus changes, and until it answers — or in one that never does — the
+palette colours are drawn as they are.
+
+The app opens in monochrome: the terminal's own foreground and background,
+with weight — faint, ordinary, bright — and inversion doing what hues would.
+Only the status block keeps its state colours: green for nothing to report,
+yellow while it waits — on a list, or on a track that has not started
+sounding yet (resolving it, mpv opening it, or a stall on a slow network) —
+blue for the player, red for an error. While it waits, the block carries the
+same spinner the list's loader turns — `▓LOADING` — so a wait looks the same
+wherever it is said. There is one spinner for every wait, and it stops the
+moment nothing is waited on, so a still screen is not redrawn for nothing.
+`m` switches colour on, and liked and disliked rows, mixes and the progress
+bar get their hues. The choice is remembered in
+`~/.config/youtuimusic/state.json` as `"colour": true`; a state file from
+before monochrome became the default opens in monochrome.
+
+The progress bar is drawn here rather than by the progress component, whose
+blend interpolates in RGB and emits true colour — values this program would
+have invented. It is two runs of palette colours: the played part in the
+player's colour (the bright foreground in monochrome, a quieter step while
+paused), the rest a groove in the row highlight. Two runs are two styles a
+frame, where a fill from a colour function was one style per cell. A test
+asserts no frame ever emits a `38;5;` or `38;2;` sequence.
 
 ## Layout
 
@@ -192,8 +312,12 @@ frame ever emits a `38;5;` or `38;2;` sequence.
 cmd/youtuimusic     entry point
 internal/ytm        InnerTube client (auth, playlists, search, rating)
 internal/auth       the session: the browser's cookies first, a file second
-internal/chromium   Chromium family: profiles, keyring, cookie decryption
+internal/chromium   Chromium family: profiles, keyring/KWallet/Keychain, decryption
 internal/gecko      Firefox family: cookies.sqlite and profiles.ini
+internal/jar        which cookies a request sends, and which profile is signed in
+internal/sqlitescan read-only SQLite file reader for the cookie stores, WAL included
+internal/state      what to reopen: the playlist, the track, the colour choice
+internal/tool       finds mpv and yt-dlp: the bundled copy or the one on PATH
 internal/player     mpv over JSON IPC
 internal/stream     yt-dlp resolution + cache
 internal/ui         bubbletea model, tabs / table / progress. One table
@@ -210,7 +334,14 @@ Packaging and the release process live in [RELEASE.md](RELEASE.md).
       against a real account
 - [x] `internal/ui` — bubbletea shell, wired to the backends, keyboard and
       mouse, scrolling
-- [x] `internal/auth` — reads the session out of a signed-in browser, in the
-      TUI when none is found, with a cached file as fallback
+- [x] `internal/auth` — reads the session out of a signed-in browser at
+      startup, with a cached file as fallback
 - [x] `internal/chromium` + `internal/gecko` — profile discovery, keyring and
       cookie decryption for the Chromium and Firefox families
+- [x] `internal/jar` — the cookies a request sends, and the choice between
+      signed-in profiles by which was used most recently
+- [x] `internal/sqlitescan` — the cookie stores read straight from the file
+      format, uncheckpointed write-ahead log included, without linking SQLite
+- [x] `internal/state` — the open playlist, the playing track and the colour
+      choice, restored at launch
+- [x] `internal/tool` — mpv and yt-dlp found beside the binary or on `PATH`

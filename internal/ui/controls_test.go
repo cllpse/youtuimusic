@@ -30,12 +30,6 @@ func controlsLine(m Model) string {
 	return strings.Split(m.View().Content, "\n")[m.controlsRow()+controlsRows/2]
 }
 
-// controlsBlock is all three rows of them.
-func controlsBlock(m Model) []string {
-	lines := strings.Split(m.View().Content, "\n")
-	return lines[m.controlsRow() : m.controlsRow()+controlsRows]
-}
-
 // buttonAt finds a control in the laid-out row.
 func buttonAt(m Model, c control) (button, bool) {
 	for _, b := range m.controlButtons() {
@@ -193,8 +187,8 @@ func TestRepeatCyclesThroughItsThreeStates(t *testing.T) {
 		if got := buttonWidth(b.label); got != buttonWidth(m.repeat.label()) {
 			t.Errorf("%v is %d wide", step.state, got)
 		}
-		if got := lipgloss.Width(b.label); got != widestRepeatLabel {
-			t.Errorf("%v pads to %d, want %d", step.state, got, widestRepeatLabel)
+		if widest := lipgloss.Width(steady(labelRepeatOff, repeatLabels)); lipgloss.Width(b.label) != widest {
+			t.Errorf("%v pads to %d, want %d", step.state, lipgloss.Width(b.label), widest)
 		}
 	}
 }
@@ -528,8 +522,8 @@ func TestAButtonIsAsWideAsItsHitbox(t *testing.T) {
 						label, state, i, got, buttonWidth(label))
 				}
 			}
-			// And it is the label with its padding, and nothing else.
-			if got, want := plain(lines[0]), padded(label); got != want {
+			// And it is the label, and nothing else.
+			if got, want := plain(lines[0]), label; got != want {
 				t.Errorf("%q %v draws %q, want %q", label, state, got, want)
 			}
 		}
@@ -747,7 +741,7 @@ func TestTheButtonComponentsThreeStates(t *testing.T) {
 	act := renderButton(label, buttonActive, nil)
 	off := renderButton(label, buttonDisabled, nil)
 
-	if def != padded(label) {
+	if def != label {
 		t.Errorf("the default state draws %q, want just the label", def)
 	}
 	if act != def {
@@ -760,7 +754,7 @@ func TestTheButtonComponentsThreeStates(t *testing.T) {
 	if !sgrCodes(off)[faintSGR] {
 		t.Errorf("disabled is not dimmed: %v", sgrCodes(off))
 	}
-	if plain(off) != padded(label) {
+	if plain(off) != label {
 		t.Errorf("disabled changed the label to %q", plain(off))
 	}
 	// Every state is the same width, or a click lands on the wrong button.
@@ -776,9 +770,6 @@ func TestTheButtonComponentsThreeStates(t *testing.T) {
 // right of the list above it and the bar below it, which is exactly the sort
 // of thing that is invisible until it is gone.
 func TestAButtonHasNoAirOfItsOwn(t *testing.T) {
-	if buttonPadding != 0 {
-		t.Errorf("buttonPadding is %d, want none", buttonPadding)
-	}
 	for _, label := range []string{labelPrevious, labelClose, labelHelp} {
 		if got := renderButton(label, buttonDefault, nil); got != label {
 			t.Errorf("%q drew %q, want the label alone", label, got)
@@ -805,7 +796,7 @@ func TestThePopoverButtonIsTheSameComponent(t *testing.T) {
 	m = openVia(t, m, menuArtist)
 
 	header := strings.Split(m.renderModal(), "\n")[1]
-	if !strings.Contains(plain(header), padded(labelClose)) {
+	if !strings.Contains(plain(header), labelClose) {
 		t.Errorf("the way out is not drawn through the component: %q", plain(header))
 	}
 	_, _, width, ok := m.modalCloseButton()

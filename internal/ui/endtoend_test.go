@@ -29,6 +29,7 @@ func (lavfiStreams) Resolve(_ context.Context, id string) (stream.Track, error) 
 	}, nil
 }
 func (lavfiStreams) Prefetch(string) {}
+func (lavfiStreams) Forget(string)   {}
 
 // run drives the model until the condition holds, and fails if it never
 // does.
@@ -157,5 +158,37 @@ func TestARealTrackEndingStopsAtTheEnd(t *testing.T) {
 	}
 	if m.playing.VideoID != "second" {
 		t.Fatalf("playing %q, want the last track still", m.playing.VideoID)
+	}
+}
+
+// longLavfi is lavfiStreams with a track long enough to still be playing
+// when the test looks.
+type longLavfi struct{ lavfiStreams }
+
+func (longLavfi) Resolve(_ context.Context, id string) (stream.Track, error) {
+	return stream.Track{
+		VideoID:  id,
+		URL:      "av://lavfi:anullsrc=r=8000:cl=mono:d=30",
+		Duration: 30 * time.Second,
+	}, nil
+}
+
+// Against a real mpv the block says LOADING from the press until the track
+// sounds, and then PLAYING — the wait ends on mpv's word, and does not stick.
+func TestARealTrackLoadsThenPlays(t *testing.T) {
+	m := New(Services{Streams: longLavfi{}, Audio: realPlayer(t)})
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m = sized.(Model)
+	m.Tracks = twoTracks()
+
+	started, cmd := m.start(m.Tracks[0])
+	if word, _ := started.(Model).statusState(); word != "LOADING" {
+		t.Fatalf("right after the press the block says %q, want LOADING", word)
+	}
+	m = run(t, started.(Model), batch(m.watchEvents(), cmd),
+		func(m Model) bool { word, _ := m.statusState(); return word == "PLAYING" },
+		10*time.Second)
+	if m.requested != "" {
+		t.Errorf("still waiting on %q while playing", m.requested)
 	}
 }

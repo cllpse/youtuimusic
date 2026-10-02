@@ -413,8 +413,10 @@ func TestHitTestingMatchesTheRenderedFrame(t *testing.T) {
 	if got := lipgloss.Width(lines[m.barRow()]); got != m.width {
 		t.Errorf("the bar row is %d cells wide, want the full %d", got, m.width)
 	}
+	// The status bar's block carries the spinner, whose frames are block
+	// glyphs too; that is a loader, not a bar.
 	for row, line := range lines {
-		if row != m.barRow() && strings.ContainsAny(line, barChars) {
+		if row != m.barRow() && row != m.statusRow() && strings.ContainsAny(line, barChars) {
 			t.Errorf("row %d also looks like a bar: %q", row, line)
 		}
 	}
@@ -603,7 +605,7 @@ func TestTheTimesGiveWayOnANarrowRow(t *testing.T) {
 			t.Errorf("width %d: the bar row is %d cells", width, got)
 		}
 		start, barWidth := m.barGeometry()
-		if m.barShowsTimes() {
+		if m.barLayout().times {
 			at, _ := m.barTimes()
 			if want := lipgloss.Width(at) + 1; start != want {
 				t.Errorf("width %d: the bar starts at %d, want %d", width, start, want)

@@ -23,10 +23,12 @@ import (
 // #FFFFFF and 7 to #272727 — "black" is white and "white" is nearly black.
 // Pick a colour for its name and it inverts with the theme; pick it for its
 // role and it follows.
-// The interface is monochrome: one hue, and it is the terminal's own. There
-// is no accent. Everything that has to stand out does it by weight —
-// faint, ordinary, bright — or by being turned inside out, a fill of the
-// foreground with the background as its text. Shape does the rest.
+//
+// Monochrome is where the app opens, and there everything that has to stand
+// out does it by weight — faint, ordinary, bright — or by being turned inside
+// out, a fill of the foreground with the background as its text, and shape
+// does the rest. The hues below are what colour adds to that, and the
+// palette further down is which of them each theme spends.
 var (
 	// alert is the one exception, and it earns it: an error announcing
 	// itself by colour is the point of colouring it.
@@ -48,7 +50,7 @@ var (
 	busy = lipgloss.Yellow
 	live = lipgloss.Blue
 
-	// station is a mix the server built, which is a page of somebody else's
+	// mixHue is a mix the server built, which is a page of somebody else's
 	// choosing rather than one of yours — the one other kind of page that is
 	// worth telling apart at a glance.
 	mixHue = lipgloss.Cyan
@@ -84,9 +86,6 @@ var (
 	// foreground used the other way round, which puts it one step off the
 	// terminal's background in whichever direction that is.
 	surface = muted
-	// onSurface is text on that surface. It cannot be muted, because muted
-	// is the surface.
-	onSurface = foreground
 	// played is the paused bar's filled part: a step below the lit state, so
 	// nothing about it reads as playing, but well clear of the groove behind
 	// it, so the playhead is still there to see.
@@ -103,7 +102,6 @@ var (
 	// and where it is not supported the text comes back at full strength —
 	// a flatter hierarchy rather than an invisible one.
 	dim    = lipgloss.NewStyle().Faint(true)
-	failed = lipgloss.NewStyle().Foreground(alert)
 	active = lipgloss.NewStyle().Foreground(emphasis).Bold(true)
 )
 
@@ -149,11 +147,38 @@ var (
 	}
 )
 
-// palette is the accents in force for this model: the hues, or the greys when
-// the reader has asked for monochrome.
-func (m Model) palette() palette {
-	if m.mono {
+// palette is the accents in force for this model: the hues, or none of them
+// in monochrome.
+func (m Model) palette() palette { return paletteFor(m.mono) }
+
+// paletteFor is the same for anything that carries the theme as a flag of its
+// own, as the track table does. Which accents monochrome drops is said once,
+// in monoPalette, and everything asks it rather than checking the flag.
+func paletteFor(mono bool) palette {
+	if mono {
 		return monoPalette
 	}
 	return colourPalette
+}
+
+// playerColour is the colour of everything that points at the track playing:
+// the played part of the bar, the playing row, its mark in the scrollbar and
+// the tab that holds it. The player's blue while it plays, and the paused
+// colour while it holds — the bar said the difference that way before any of
+// the marks existed, so they say it the same way rather than inventing a
+// second language for the same fact.
+//
+// Monochrome has no hue to spend on it, so playing takes the bright end of the
+// foreground, which is what the bar used before there were any colours, and
+// paused steps down to the foreground itself.
+func playerColour(mono, paused bool) color.Color {
+	switch {
+	case paused && mono:
+		return foreground
+	case paused:
+		return played
+	case mono:
+		return emphasis
+	}
+	return live
 }

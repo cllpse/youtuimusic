@@ -235,9 +235,6 @@ func (m Model) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 // everywhere else.
 const wheelStep = 3
 
-// handleWheel scrolls whatever is under the pointer. Over the list it moves
-// the view and not the selection: looking further down a playlist should not
-// lose your place in it, and nothing is resolved because nothing was chosen.
 // wheelDelta is which way a notch went, and zero for anything else.
 func wheelDelta(mouse tea.Mouse) int {
 	switch mouse.Button {
@@ -249,6 +246,9 @@ func wheelDelta(mouse tea.Mouse) int {
 	return 0
 }
 
+// handleWheel scrolls whatever is under the pointer. Over the list it moves
+// the view and not the selection: looking further down a playlist should not
+// lose your place in it, and nothing is resolved because nothing was chosen.
 func (m Model) handleWheel(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	delta := wheelDelta(mouse)
 	if delta == 0 {

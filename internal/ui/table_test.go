@@ -285,20 +285,6 @@ func TestSortCycles(t *testing.T) {
 	}
 }
 
-// Clicking a column orders by it, and clicking it again reverses.
-func TestSortOnAColumn(t *testing.T) {
-	spec := sortSpec{}.on(sortArtist)
-	if spec.by != sortArtist || spec.desc {
-		t.Fatalf("first click gave %+v", spec)
-	}
-	if spec = spec.on(sortArtist); !spec.desc {
-		t.Errorf("the second click did not reverse: %+v", spec)
-	}
-	if spec = spec.on(sortTitle); spec.by != sortTitle || spec.desc {
-		t.Errorf("moving to another column kept the direction: %+v", spec)
-	}
-}
-
 // truncate counts screen cells, which is not the same as counting runes: a
 // CJK character or an emoji takes two cells, a combining mark none.
 //
@@ -368,7 +354,7 @@ func TestRowsAreSquareWithWideCharacters(t *testing.T) {
 	}
 	for _, width := range []int{20, 42, 60, 110} {
 		table := trackTable{tracks: tracks, width: width, height: len(tracks) + headerRows,
-			showRating: true, now: time.Now()}
+			showRating: true}
 		for i, row := range table.rows() {
 			if got := lipgloss.Width(plain(row)); got != width {
 				t.Errorf("width %d: row %d is %d cells", width, i, got)
@@ -382,8 +368,7 @@ func TestRowsAreSquareWithWideCharacters(t *testing.T) {
 func TestAnAlbumsTableIsTitlesOnly(t *testing.T) {
 	tracks := tableTracks()
 
-	full := trackTable{tracks: tracks, width: 70, height: 6, showRating: true,
-		now: time.Now()}
+	full := trackTable{tracks: tracks, width: 70, height: 6, showRating: true}
 	album := full
 	album.titleOnly = true
 
@@ -980,8 +965,14 @@ func TestTwoMarksShareACellOneAbleTheOther(t *testing.T) {
 	near[0].Rating, near[2].Rating = RatingUp, RatingUp
 	at := table
 	at.tracks = near
-	if got := at.scrollbarMarks(); len(got) != 2 {
-		t.Errorf("two liked tracks made %d marks: %v", len(got), got)
+	marked := 0
+	for _, hue := range at.scrollbarMarks() {
+		if hue != nil {
+			marked++
+		}
+	}
+	if marked != 2 {
+		t.Errorf("two liked tracks made %d marks: %v", marked, at.scrollbarMarks())
 	}
 }
 
@@ -1167,3 +1158,32 @@ func fieldOf(t trackTable, row int) string {
 
 // faintStart is what the terminal's own faint opens with.
 const faintStart = "\x1b[2m"
+
+// hasScrollbar is the table's own answer, for tests that build one directly.
+func (t trackTable) hasScrollbar() bool {
+	return needsScrollbar(t.rowCount(), t.rowsHeight())
+}
+
+// A styled string is cut as a styled string. Cutting it rune by rune counted
+// the printable bytes of the escape as cells and dropped the reset with the
+// rest of the cut, so a long album title on an artist's page came out short
+// and turned the rest of its row bold.
+func TestACutTitleKeepsItsStyleToItself(t *testing.T) {
+	title := releaseStyle.Render("A very long album title indeed")
+	cut := truncate(title, 12)
+	if got := plain(cut); got != "A very long…" {
+		t.Errorf("cut to %q, want eleven cells and the ellipsis", got)
+	}
+	if !strings.HasSuffix(cut, "\x1b[m") {
+		t.Errorf("the cut lost the style's end: %q", cut)
+	}
+
+	release := Track{Title: "A very long album title that goes on and on",
+		Artist: "Artist", AlbumID: "MPREb"}
+	table := trackTable{tracks: []Track{release}, width: 40, height: 1, showRating: true}
+	for _, run := range styledRuns(table.rows()[0]) {
+		if strings.Contains(run.text, "Artist") && strings.Contains(run.codes, "1") {
+			t.Errorf("the release's weight ran on into its artist: %q", table.rows()[0])
+		}
+	}
+}

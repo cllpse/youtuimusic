@@ -13,6 +13,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/cllpse/youtuimusic/internal/player"
 )
 
 // press feeds a keystroke through Update, the way the runtime would.
@@ -1060,12 +1062,6 @@ func TestTheHighlightFallsBackToTheScheme(t *testing.T) {
 	}
 }
 
-// luminance is rough and only used to compare two shades of the same page.
-func luminance(c color.Color) float64 {
-	r, g, b, _ := c.RGBA()
-	return (0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(b)) / 65535
-}
-
 // A terminal that cannot say what colour it is must leave the fallback
 // alone. A tint of nothing is nothing, and the row would be styled and
 // invisible.
@@ -1470,11 +1466,23 @@ func TestTheBackgroundIsAskedForAgainOnFocusAndResize(t *testing.T) {
 			if cmd == nil {
 				t.Fatal("it did not ask the terminal anything")
 			}
-			// The command is the question. Its message is bubbletea's own
-			// unexported request type, so the name is all there is to go on;
-			// the answer comes back as the exported BackgroundColorMsg.
-			if got := fmt.Sprintf("%T", cmd()); !strings.Contains(got, "backgroundColor") {
-				t.Fatalf("it asked something else: %s", got)
+			// The command is the question, asked alongside the palette's
+			// yellow. Its message is bubbletea's own unexported request type,
+			// so the name is all there is to go on; the answer comes back as
+			// the exported BackgroundColorMsg.
+			var asked []string
+			msgs := []tea.Msg{cmd()}
+			if batch, ok := msgs[0].(tea.BatchMsg); ok {
+				msgs = msgs[:0]
+				for _, c := range batch {
+					msgs = append(msgs, c())
+				}
+			}
+			for _, msg := range msgs {
+				asked = append(asked, fmt.Sprintf("%T", msg))
+			}
+			if !strings.Contains(strings.Join(asked, " "), "backgroundColor") {
+				t.Fatalf("it asked something else: %v", asked)
 			}
 			lit, _ := next.(Model).Update(
 				tea.BackgroundColorMsg{Color: color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}})
@@ -2039,5 +2047,109 @@ func TestTheMonochromeKeyDropsTheHues(t *testing.T) {
 	// Pressing it again brings the colours back.
 	if back := press(mono, "m"); back.mono {
 		t.Fatal("the theme key did not switch back")
+	}
+}
+
+// setTracks puts a listing on screen, keeping the order it came in so that
+// a sort can be cleared again.
+func (m *Model) setTracks(tracks []Track) {
+	m.arrival = tracks
+	m.Tracks = sorted(tracks, m.sort)
+}
+
+// tabHoldsPlaying reports whether the track playing is in a tab's listing.
+//
+// Only the listings it has fetched: a tab nobody has opened has no rows to look
+// through and says nothing until it does. That also means more than one tab can
+// say it, which is honest — a track can be in two playlists, and both of them
+// do hold it.
+func (m Model) tabHoldsPlaying(index int) bool {
+	return m.playingTabSet()[m.tabAt(index).ID]
+}
+
+// statusKey is the word alone.
+func (m Model) statusKey() string {
+	word, _ := m.statusState()
+	return word
+}
+
+// Every part of the frame is the width of the window on its own, which is what
+// lets View join them as text instead of measuring every line to align them.
+func TestEveryPartOfTheFrameIsTheWindowWide(t *testing.T) {
+	for _, width := range []int{20, 45, 80, 200} {
+		m := New(Services{})
+		sized, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
+		m = sized.(Model)
+		m.Playlists = []Playlist{{ID: likedPlaylistID, Title: "Liked Music"},
+			{ID: "PL1", Title: "A playlist with a long title"}}
+		for i := range 80 {
+			m.Tracks = append(m.Tracks, Track{VideoID: itoa(i), Title: "日本語のタイトル " + itoa(i),
+				Artist: "Ärtist", Duration: time.Minute, Rating: Rating(i % 3)})
+		}
+		m.showingID, m.playing, m.Length = "PL1", m.Tracks[3], time.Minute
+
+		parts := map[string]string{
+			"tabs": m.renderTabs(), "list": m.renderTracks(m.width, m.bodyHeight()),
+			"player": m.renderPlayer(), "status": m.renderStatusBar(),
+		}
+		for name, part := range parts {
+			for i, line := range strings.Split(part, "\n") {
+				if got := lipgloss.Width(line); got != width {
+					t.Errorf("width %d: %s line %d is %d cells", width, name, i, got)
+				}
+			}
+		}
+	}
+}
+
+// The bar is two runs of one style each, however far along it is. It was a
+// style per filled cell: two hundred of them a frame on a wide window, for a
+// colour that is the same the whole way along.
+func TestTheBarIsTwoRunsNotACellAtATime(t *testing.T) {
+	m := New(Services{})
+	sized, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 20})
+	m = sized.(Model)
+	m.playing = Track{VideoID: "a"}
+	m.Length, m.Position = time.Minute, 45*time.Second
+
+	bar := m.renderBar()
+	// A style and its reset for each time either side and for each run.
+	if got := strings.Count(bar, "\x1b["); got > 8 {
+		t.Errorf("the bar row carries %d escapes: %q", got, bar)
+	}
+	_, width := m.barGeometry()
+	if filled := strings.Count(plain(bar), string(filledCell)); filled != filledCells(width, 0.75) {
+		t.Errorf("%d cells filled of %d, want three quarters", filled, width)
+	}
+	if !sgrCodes(bar)[liveFG] || !sgrCodes(bar)[liveBG] {
+		t.Errorf("the played part is not the player's blue on blue: %v", sgrCodes(bar))
+	}
+}
+
+// Which tabs hold the playing track is worked out when the track or a listing
+// changes, not on every frame — and a tick of the playhead changes neither.
+func TestTheTabsHoldingTheTrackAreNotWorkedOutPerTick(t *testing.T) {
+	m := sized(sample(), 120, 20)
+	m.showingID = "1"
+
+	next, _ := m.Update(playingMsg{track: m.Tracks[0], length: time.Minute})
+	m = next.(Model)
+	if !m.holds.describes(m) || !m.holds.set["1"] {
+		t.Fatalf("the tab holding the track was not kept: %+v", m.holds)
+	}
+
+	kept := m.holds
+	next, _ = m.Update(eventMsg(player.Event{Name: player.PropTimePos, Data: 5.0}))
+	if next.(Model).holds != kept {
+		t.Error("a tick of the playhead worked the tabs out again")
+	}
+
+	// A listing that changes is noticed, Update or not.
+	m.cache["2"] = cached{tracks: []Track{m.Tracks[0]}}
+	if m.holds.describes(m) {
+		t.Error("a new listing holding the track went unnoticed")
+	}
+	if !m.playingTabs()["2"] {
+		t.Error("the frame did not see the new listing")
 	}
 }

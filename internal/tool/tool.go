@@ -51,9 +51,10 @@ func System(name string) string {
 //
 // Three layouts are recognised:
 //
-//	$dir/youtuimusic, $dir/mpv, $dir/yt-dlp            one flat dir
-//	$dir/bin/youtuimusic, $dir/libexec/youtuimusic/mpv  bin/ + libexec
-//	$dir/youtuimusic, $dir/../libexec/youtuimusic/mpv  Homebrew-style
+//	$dir/youtuimusic, $dir/mpv, $dir/yt-dlp             one flat dir
+//	$dir/youtuimusic, $dir/libexec/youtuimusic/mpv      libexec beside it
+//	$dir/youtuimusic, $dir/../libexec/youtuimusic/mpv   bin/ + libexec, as
+//	                                                     Homebrew and install.sh lay it out
 func bundled(name, dir string) string {
 	for _, sub := range []string{
 		dir,

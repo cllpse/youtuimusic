@@ -572,10 +572,10 @@ func TestTidy(t *testing.T) {
 // cells.
 func TestTidyStripsWhatCannotBeDrawn(t *testing.T) {
 	for _, tc := range []struct{ name, in, want string }{
-		{"zero width joiner", "Bo‍wie", "Bowie"},
-		{"zero width space", "A​B", "AB"},
-		{"direction mark", "‏Hebrew‎", "Hebrew"},
-		{"soft hyphen", "co­operate", "cooperate"},
+		{"zero width joiner", "Bo\u200dwie", "Bowie"},
+		{"zero width space", "A\u200bB", "AB"},
+		{"direction mark", "\u200fHebrew\u200e", "Hebrew"},
+		{"soft hyphen", "co\u00adoperate", "cooperate"},
 		{"control character", "Track\x07Name", "TrackName"},
 		{"newline", "Two\nLines", "Two Lines"},
 		{"tabs", "A\t\tB", "A B"},
@@ -599,7 +599,7 @@ func TestTidyStripsWhatCannotBeDrawn(t *testing.T) {
 func TestEveryFieldIsTidied(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(signedInBody(trackRow(
-			"Ti‍tle", "Ar​tist", "Al­bum", "3:00", "v1", "s1"))))
+			"Ti\u200dtle", "Ar\u200btist", "Al\u00adbum", "3:00", "v1", "s1"))))
 	})
 	page, err := c.PlaylistTracks(context.Background(), "PL1")
 	if err != nil {

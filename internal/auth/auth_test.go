@@ -6,11 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cllpse/youtuimusic/internal/jar"
 	"github.com/cllpse/youtuimusic/internal/ytm"
 )
 
@@ -26,8 +26,23 @@ func isolate(t *testing.T) string {
 	return home
 }
 
+// session is the two cookies a signed-in profile has, both set to value.
+func session(value string) map[string]string {
+	return map[string]string{jar.Bellwether: value, jar.APISID: value}
+}
+
+// header is what session(value) renders as.
+func header(value string) string {
+	return jar.Bellwether + "=" + value + "; " + jar.APISID + "=" + value
+}
+
 // browserWith writes a Chromium cookie store holding the named cookies.
 func browserWith(t *testing.T, home string, cookies map[string]string) {
+	browserUsedAt(t, home, cookies, time.Time{})
+}
+
+// browserUsedAt is browserWith with the cookies last used at a given time.
+func browserUsedAt(t *testing.T, home string, cookies map[string]string, used time.Time) {
 	t.Helper()
 	bin, err := exec.LookPath("sqlite3")
 	if err != nil {
@@ -37,11 +52,15 @@ func browserWith(t *testing.T, home string, cookies map[string]string) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	var access int64
+	if !used.IsZero() {
+		access = (used.Unix() + 11644473600) * 1e6 // Chromium's 1601 epoch
+	}
 	sql := `CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT,
-		expires_utc INTEGER, encrypted_value BLOB);` + "\n"
+		expires_utc INTEGER, last_access_utc INTEGER, encrypted_value BLOB);` + "\n"
 	for name, value := range cookies {
 		sql += fmt.Sprintf(
-			"INSERT INTO cookies VALUES ('.youtube.com','%s','%s',0,NULL);\n", name, value)
+			"INSERT INTO cookies VALUES ('.youtube.com','%s','%s',0,%d,NULL);\n", name, value, access)
 	}
 	cmd := exec.Command(bin, filepath.Join(dir, "Cookies"))
 	cmd.Stdin = strings.NewReader(sql)
@@ -53,6 +72,11 @@ func browserWith(t *testing.T, home string, cookies map[string]string) {
 // firefoxWith writes a Firefox cookie store holding the named cookies, with
 // a profiles.ini pointing at it.
 func firefoxWith(t *testing.T, home string, cookies map[string]string) {
+	firefoxUsedAt(t, home, cookies, time.Time{})
+}
+
+// firefoxUsedAt is firefoxWith with the cookies last used at a given time.
+func firefoxUsedAt(t *testing.T, home string, cookies map[string]string, used time.Time) {
 	t.Helper()
 	bin, err := exec.LookPath("sqlite3")
 	if err != nil {
@@ -63,12 +87,16 @@ func firefoxWith(t *testing.T, home string, cookies map[string]string) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	var access int64
+	if !used.IsZero() {
+		access = used.UnixMicro()
+	}
 	sql := `CREATE TABLE moz_cookies (id INTEGER PRIMARY KEY, name TEXT,
-		value TEXT, host TEXT, path TEXT, expiry INTEGER);` + "\n"
+		value TEXT, host TEXT, path TEXT, expiry INTEGER, lastAccessed INTEGER);` + "\n"
 	for name, value := range cookies {
 		sql += fmt.Sprintf(
-			"INSERT INTO moz_cookies (name,value,host,path,expiry) VALUES ('%s','%s','.youtube.com','/',0);\n",
-			name, value)
+			"INSERT INTO moz_cookies (name,value,host,path,expiry,lastAccessed) VALUES ('%s','%s','.youtube.com','/',0,%d);\n",
+			name, value, access)
 	}
 	cmd := exec.Command(bin, filepath.Join(dir, "cookies.sqlite"))
 	cmd.Stdin = strings.NewReader(sql)
@@ -84,29 +112,43 @@ func firefoxWith(t *testing.T, home string, cookies map[string]string) {
 // With no Chromium browser signed in, the Firefox store is the one read.
 func TestFirefoxIsUsedWhenThereIsNoChromiumBrowser(t *testing.T) {
 	home := isolate(t)
-	firefoxWith(t, home, map[string]string{"__Secure-1PSIDTS": "fox"})
+	firefoxWith(t, home, session("fox"))
 
 	got, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !strings.Contains(got.Cookie, "__Secure-1PSIDTS=fox") {
+	if got.Cookie != header("fox") {
 		t.Errorf("cookie = %q, want the Firefox session", got.Cookie)
 	}
 }
 
-// When both engines are signed in, the Chromium session is the one used.
-func TestChromiumWinsOverFirefox(t *testing.T) {
+// When both engines are signed in, the session used last wins, whichever
+// browser holds it.
+func TestTheFreshestSessionWins(t *testing.T) {
+	now := time.Now()
 	home := isolate(t)
-	browserWith(t, home, map[string]string{"__Secure-1PSIDTS": "chromium"})
-	firefoxWith(t, home, map[string]string{"__Secure-1PSIDTS": "fox"})
-
-	got, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	browserUsedAt(t, home, session("chromium"), now.Add(-30*24*time.Hour))
+	firefoxUsedAt(t, home, session("fox"), now)
+	if got, err := Load(); err != nil || got.Cookie != header("fox") {
+		t.Errorf("Load = %q, %v; want the Firefox session used today", got.Cookie, err)
 	}
-	if !strings.Contains(got.Cookie, "__Secure-1PSIDTS=chromium") {
-		t.Errorf("cookie = %q, want the Chromium session", got.Cookie)
+
+	home = isolate(t)
+	browserUsedAt(t, home, session("chromium"), now)
+	firefoxUsedAt(t, home, session("fox"), now.Add(-time.Hour))
+	if got, err := Load(); err != nil || got.Cookie != header("chromium") {
+		t.Errorf("Load = %q, %v; want the Chromium session used today", got.Cookie, err)
+	}
+}
+
+// A profile with the session cookie but not the one requests are signed
+// with cannot make a request, and is not used.
+func TestHalfASessionIsNotUsed(t *testing.T) {
+	home := isolate(t)
+	browserWith(t, home, map[string]string{jar.Bellwether: "half"})
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), jar.APISID) {
+		t.Errorf("err = %v, want one naming the missing %s", err, jar.APISID)
 	}
 }
 
@@ -201,9 +243,6 @@ func TestAnotherToolsFileIsNotASource(t *testing.T) {
 		[]byte(`{"cookie":"theirs=1"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := Cached(); ok {
-		t.Fatal("another tool's session was picked up")
-	}
 	if _, err := Load(); err == nil {
 		t.Fatal("Load used another tool's session instead of failing")
 	}
@@ -216,13 +255,13 @@ func TestTheBrowserWinsOverASavedSession(t *testing.T) {
 	if err := Save(ytm.Session{Cookie: "saved=old", UserAgent: "mine", AuthUser: "3"}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	browserWith(t, home, map[string]string{"__Secure-1PSIDTS": "live"})
+	browserWith(t, home, session("live"))
 
 	got, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got.Cookie != "__Secure-1PSIDTS=live" {
+	if got.Cookie != header("live") {
 		t.Errorf("cookie = %q, want the browser's", got.Cookie)
 	}
 	// What the cookie store cannot know is carried over rather than lost.
@@ -236,7 +275,7 @@ func TestTheBrowserWinsOverASavedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if saved.Cookie != "__Secure-1PSIDTS=live" {
+	if saved.Cookie != header("live") {
 		t.Errorf("the saved copy was not refreshed: %q", saved.Cookie)
 	}
 }
@@ -273,7 +312,7 @@ func TestNeitherSourceReportsBoth(t *testing.T) {
 // An explicit file is taken at its word: no browser is consulted.
 func TestAnExplicitFileIsUsedAlone(t *testing.T) {
 	home := isolate(t)
-	browserWith(t, home, map[string]string{"__Secure-1PSIDTS": "live"})
+	browserWith(t, home, session("live"))
 
 	path := filepath.Join(home, "picked.json")
 	if err := os.WriteFile(path, []byte(`{"cookie":"picked=1"}`), 0o600); err != nil {
@@ -287,55 +326,6 @@ func TestAnExplicitFileIsUsedAlone(t *testing.T) {
 	}
 	if got.Cookie != "picked=1" {
 		t.Errorf("cookie = %q, want the file that was named", got.Cookie)
-	}
-}
-
-// Cached reads only the saved file, so main can decide whether to show the
-// sign-in screen without touching the browser.
-func TestCachedReadsOnlyTheFile(t *testing.T) {
-	isolate(t)
-	if _, ok := Cached(); ok {
-		t.Fatal("Cached reported a session with no file")
-	}
-	if err := Save(ytm.Session{Cookie: "SID=x", UserAgent: "ua"}); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := Cached()
-	if !ok || got.Cookie != "SID=x" {
-		t.Fatalf("Cached = (%+v, %v)", got, ok)
-	}
-}
-
-// OpenLogin prefers $BROWSER, so a desktop that sets its own launcher is
-// used rather than a guess. A fake launcher records the URL it was given.
-func TestOpenLoginUsesBROWSER(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip("macOS only uses open")
-	}
-	dir := t.TempDir()
-	marker := filepath.Join(dir, "opened")
-	script := filepath.Join(dir, "fake-browser")
-	body := "#!/bin/sh\nprintf '%s' \"$1\" > " + marker + "\n"
-	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("BROWSER", script)
-
-	if err := OpenLogin(); err != nil {
-		t.Fatalf("OpenLogin: %v", err)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if raw, err := os.ReadFile(marker); err == nil {
-			if string(raw) != LoginURL {
-				t.Fatalf("opened %q, want %q", raw, LoginURL)
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the fake browser was never run")
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }
 

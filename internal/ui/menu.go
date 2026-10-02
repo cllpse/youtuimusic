@@ -8,11 +8,9 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// More Material Design icons, again by their glyphnames.json names.
-
-// menuGap separates one word from the next where two sit on a line — not an
-// icon from its label, which sit against each other. One reads as
-// cramped: these glyphs are drawn tight inside their cell.
+// menuGap separates one word from the next where two sit on a line, as the
+// kind and the name do in a popover's title. One space reads as a single
+// phrase; two read as a label and what it labels.
 const menuGap = "  "
 
 // menuItem is a row of the track menu.
@@ -118,16 +116,8 @@ func (m Model) rateRows() []menuRow {
 	}
 }
 
-// visualRow is the line an item is drawn on, once the rule is counted.
-func visualRow(item int) int {
-	if item > dividerAfter {
-		return item + 1
-	}
-	return item
-}
-
-// itemAtVisual is the reverse, and reports false on the rule itself, which
-// is not something you can choose.
+// itemAtVisual is the item drawn on a line, once the rule is counted, and
+// reports false on the rule itself, which is not something you can choose.
 func itemAtVisual(line, items int) (int, bool) {
 	var item int
 	switch {
@@ -153,12 +143,13 @@ var (
 
 // menuSize is the whole box, borders and padding included.
 func (m Model) menuSize() (width, height int) {
+	rows := m.menuRows()
 	longest := 0
-	for _, row := range m.menuRows() {
+	for _, row := range rows {
 		longest = max(longest, lipgloss.Width(row.label))
 	}
 	// label, then padding and border either side.
-	return longest + 2 + 2, len(m.menuRows()) + 1 + 2
+	return longest + 2 + 2, len(rows) + 1 + 2
 }
 
 // openMenu puts the menu on screen at a point, nudged so that all of it

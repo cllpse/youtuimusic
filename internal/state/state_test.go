@@ -82,21 +82,39 @@ func TestSaveLeavesNoTemporaryFile(t *testing.T) {
 	}
 }
 
-// The theme is remembered beside the playlist, so a reader who dropped the
-// colours does not choose that again every launch.
-func TestMonoRoundTrips(t *testing.T) {
+// The theme is remembered beside the playlist, so a reader who chose the
+// colours does not choose them again every launch.
+func TestColourRoundTrips(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	if err := Save(State{Playlist: "LM", Mono: true}); err != nil {
+	if err := Save(State{Playlist: "LM", Colour: true}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	got := Load()
-	if !got.Mono || got.Playlist != "LM" {
-		t.Errorf("got %+v, want the playlist and monochrome on", got)
+	if !got.Colour || got.Playlist != "LM" {
+		t.Errorf("got %+v, want the playlist and colour on", got)
 	}
 }
 
-// The default colour theme is the absence of the field rather than a false
-// written out, so an old state file keeps opening in colour.
+// A file from before monochrome was the default says "mono" or nothing at
+// all; either way it opens in monochrome now.
+func TestAnOldFileOpensInMonochrome(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path, _ := Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, old := range []string{`{"playlist":"LM"}`, `{"playlist":"LM","mono":true}`} {
+		if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := Load(); got.Colour {
+			t.Errorf("%s opened in colour", old)
+		}
+	}
+}
+
+// The default monochrome theme is the absence of the field rather than a
+// false written out.
 func TestThemeIsLeftOutWhenItIsTheDefault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if err := Save(State{Playlist: "LM"}); err != nil {
@@ -107,7 +125,7 @@ func TestThemeIsLeftOutWhenItIsTheDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "mono") {
+	if strings.Contains(string(raw), "colour") {
 		t.Errorf("the file carries the default theme: %s", raw)
 	}
 }

@@ -345,7 +345,7 @@ func TestRefreshRefetchesTheList(t *testing.T) {
 	before := len(lib.askedFor)
 
 	next, cmd := m.Update(keyPress("R"))
-	m = drain(t, next.(Model), cmd)
+	drain(t, next.(Model), cmd)
 
 	if len(lib.askedFor) <= before {
 		t.Fatalf("nothing was refetched: %v", lib.askedFor)

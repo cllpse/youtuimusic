@@ -8,15 +8,16 @@ package ui
 
 import (
 	"image/color"
+	"math"
 	"slices"
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/progress"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/cllpse/youtuimusic/internal/state"
 	"github.com/cllpse/youtuimusic/internal/ytm"
@@ -38,25 +39,19 @@ const (
 // rated row and says nothing the row could not have said by being a colour,
 // and it cost a glyph that had to exist in the reader's font — which is the
 // last thing in the app that did.
-// hue is the colour a rated track is drawn in, and false for an unrated one,
-// which is drawn in nothing in particular.
 //
-// Monochrome draws a rating in nothing at all: no hue, and no quiet colour in
-// its place — a dislike fainted or greyed reads as a row that cannot be
-// chosen. What you think of a track is weight's business there, and weight has
-// nothing to say about it, so the row is simply plain.
-func (r Rating) hue(mono bool) (color.Color, bool) {
-	if mono {
-		return nil, false
-	}
+// The colours are the palette's, so monochrome draws a rating in nothing at
+// all: its palette has no hue for one, and no quiet colour in its place — a
+// dislike fainted or greyed reads as a row that cannot be chosen.
+func (r Rating) hue(p palette) (color.Color, bool) {
+	var hue color.Color
 	switch r {
 	case RatingUp:
-		return liked, true
+		hue = p.liked
 	case RatingDown:
-		return disliked, true
-	default:
-		return nil, false
+		hue = p.disliked
 	}
+	return hue, hue != nil
 }
 
 // tabKind says what a tab holds, which is what decides how to fetch it.
@@ -143,17 +138,28 @@ type Model struct {
 	// playing is the track mpv is on, held whole rather than by id so the
 	// controls can still show and rate it after another tab is opened.
 	playing Track
+	// retried is the track whose stream has already been resolved again
+	// after mpv refused it, so a second refusal is reported rather than
+	// retried. See playbackFailed.
+	retried string
+	// requested is a track asked for that mpv has not been handed yet: its
+	// stream is still being resolved. coreIdle and idleActive are mpv's own
+	// word on whether anything is sounding. Together they are what
+	// loadingPlayback reads.
+	requested            string
+	coreIdle, idleActive bool
+
+	// spinning is whether the spinner's tick loop is running — see
+	// keepSpinning.
+	spinning bool
 	// playingFrom is the listing that track was started from, so advancing
 	// does not depend on which tab is in front when it runs out.
 	playingFrom string
 	repeat      Repeat
-	loading     bool
-
-	// signedOut is true before a session exists and SignIn can get one: the
-	// app draws the sign-in screen instead of the library. signingIn is true
-	// while the browser sign-in runs, so enter does not start a second one.
-	signedOut bool
-	signingIn bool
+	// loading is the library or the list in the tabs waiting on its rows. A
+	// popover keeps its own — see detour — because the two wait on different
+	// answers, and one arriving says nothing about the other.
+	loading bool
 
 	// highlight is the selected row's fill and dimmed the colour of a line
 	// that has to be quiet, both derived from the terminal's own background.
@@ -161,9 +167,14 @@ type Model struct {
 	highlight color.Color
 	dimmed    color.Color
 	quiet     color.Color
+	// derived is the status block's colours for each of the first eight
+	// palette entries, made from what the terminal says that entry is. An
+	// entry it has not answered for is zero — see blockcolours.go.
+	derived [8]blockColours
 
 	// mono drops the accent hues for the terminal's own greys, turned over with
-	// the theme key. It is the reader's choice and it is not remembered.
+	// the theme key. It is where the app starts unless colour was chosen, and
+	// the choice is remembered — see Restore and record.
 	mono bool
 
 	// restoring is what the last session was playing, held until the
@@ -208,48 +219,39 @@ type Model struct {
 	lastClickRegion region
 	lastClickRow    int
 
-	// Generations invalidate a pending prefetch or tab load when the thing
-	// that armed it has moved on.
+	// Generations invalidate a pending prefetch or listing load when the thing
+	// that armed it has moved on. The tabs and the popover keep one each, so
+	// that arming one does not cancel the other.
 	prefetchGen int
 	tabGen      int
+	detourGen   int
+
+	// holds is which tabs hold the playing track, kept between frames — see
+	// playingTabs.
+	holds *tabHolds
 
 	// now is overridable so click timing is testable.
 	now func() time.Time
 
-	// bar renders the playback position. It holds no animation state: the
-	// position is drawn where it is. The paused one is the same bar in grey,
-	// built once rather than recoloured on every frame.
-	bar       progress.Model
-	pausedBar progress.Model
-	spin      spinner.Model
+	spin spinner.Model
 
 	Err error
 }
 
 // New returns a Model with nothing loaded. A zero Services makes a model
 // that talks to nothing, which is what the view tests use.
+//
+// It is in colour. Monochrome is where the app opens, but that is the
+// remembered theme's to say and Restore applies it; a model built without a
+// state behind it, as the tests build them, keeps every hue to look at.
 func New(s Services) Model {
-	m := Model{
-		services:  s,
-		loading:   s.Library != nil,
-		now:       time.Now,
-		cache:     map[string]cached{},
-		bar:       newBar(litRamp),
-		pausedBar: newBar(mutedRamp),
-		spin:      newLoader(),
+	return Model{
+		services: s,
+		loading:  s.Library != nil,
+		now:      time.Now,
+		cache:    map[string]cached{},
+		spin:     newLoader(),
 	}
-	m.signedOut = s.Library == nil && s.SignIn != nil
-	return m
-}
-
-// barFill is the colour the played part of the bar is drawn in. Monochrome has
-// no hue to spend on it, so it takes the bright end of the foreground, which is
-// what the bar used before there were any colours.
-func (m Model) barFill() progress.ColorFunc {
-	if m.mono {
-		return func(_, _ float64) color.Color { return emphasis }
-	}
-	return litRamp
 }
 
 // toggleMono switches between the accent hues and the terminal's own greys.
@@ -257,27 +259,16 @@ func (m Model) toggleMono() (tea.Model, tea.Cmd) {
 	return m.setMono(!m.mono), nil
 }
 
-// setMono applies the monochrome theme or takes it away, rebuilding the one
-// component that holds its colour rather than looking it up per frame.
+// setMono applies the monochrome theme or takes it away. Nothing holds a
+// colour of its own to be rebuilt: every frame asks the palette.
 func (m Model) setMono(on bool) Model {
 	m.mono = on
-	m.bar = newBar(m.barFill())
 	return m
 }
 
-// Init starts the first fetch and opens the stream of player events. Before
-// there is a session it starts the sign-in instead.
+// Init starts the first fetch and opens the stream of player events.
 func (m Model) Init() tea.Cmd {
-	if m.signedOut {
-		// The sign-in screen waits for enter rather than reading the browser
-		// on its own, so the flow is visible and testable.
-		return batch(m.watchEvents(), tea.RequestBackgroundColor)
-	}
-	cmds := []tea.Cmd{m.fetchPlaylists(), m.watchEvents(), tea.RequestBackgroundColor}
-	if m.loading {
-		cmds = append(cmds, m.spin.Tick)
-	}
-	return batch(cmds...)
+	return batch(m.fetchPlaylists(), m.watchEvents(), askColours())
 }
 
 // batch drops the nil commands a zero Services produces.
@@ -294,31 +285,38 @@ func batch(cmds ...tea.Cmd) tea.Cmd {
 	return tea.Batch(live...)
 }
 
-// busy is whether anything on screen is waiting on the network. The spinner
-// runs while it is true: a full load and a next page are both waits, and the
-// load-more row carries the same spinner as the centred one.
-func (m Model) busy() bool { return m.loading || m.loadingMore }
+// busy is whether any list on screen is waiting on the network: a full load,
+// a popover's rows, or a next page.
+func (m Model) busy() bool { return m.loading || m.detour.loading || m.loadingMore }
 
-// startLoading turns the spinner on and starts its tick loop. The loop runs
-// only while something is loading, so an idle screen is not redrawn eight
-// times a second forever.
-func (m *Model) startLoading() tea.Cmd {
-	already := m.busy()
-	m.loading = true
-	if already {
-		return nil // the loop is already running
-	}
-	return m.spin.Tick
-}
+// waiting is whether anything at all is waited on — a list, or a track that
+// has not started sounding — which is when the spinner turns.
+func (m Model) waiting() bool { return m.busy() || m.loadingPlayback() }
 
-// startLoadingMore is startLoading for the next-page row, which is the same
-// wait under a different flag.
-func (m *Model) startLoadingMore() tea.Cmd {
-	already := m.busy()
-	m.loadingMore = true
-	if already {
+// startLoading marks the list in the tabs as waiting on its rows. The spinner
+// starts on its own: Update starts it on the way out of any message that
+// leaves something waiting — see keepSpinning.
+func (m *Model) startLoading() { m.loading = true }
+
+// startDetourLoading is the same wait for the popover's rows.
+func (m *Model) startDetourLoading() { m.detour.loading = true }
+
+// startLoadingMore is the same wait for the next-page row.
+func (m *Model) startLoadingMore() { m.loadingMore = true }
+
+// keepSpinning starts the spinner's tick loop when something has begun to be
+// waited on and the loop is not already running. The loop stops itself on the
+// first tick that finds nothing waiting, so an idle screen is not redrawn
+// eight times a second forever.
+//
+// One flag and one place, rather than each wait starting its own: a wait can
+// begin in a list fetch, a popover coming back from the stack, a track asked
+// for or mpv stalling, and a loop started twice turns twice as fast.
+func (m *Model) keepSpinning() tea.Cmd {
+	if m.spinning || !m.waiting() {
 		return nil
 	}
+	m.spinning = true
 	return m.spin.Tick
 }
 
@@ -341,6 +339,10 @@ type detour struct {
 	cursor  int
 	offset  int
 	more    ytm.Continuation
+	// loading is the popover waiting on its own rows. It travels with the
+	// popover, so one stepped back to from the stack still knows it is
+	// waiting — see leaveDetour.
+	loading bool
 
 	// A search popover carries its own input. typing is whether keys go to
 	// it rather than to the list below, and while they do nothing in the
@@ -360,8 +362,9 @@ type detour struct {
 // goes back there when the input takes the keys again.
 const noRow = -1
 
-// currentTab is what a fetch in flight belongs to: the popover when one is
-// open, the tab in front otherwise.
+// currentTab is the listing in front: the popover when one is open, the tab
+// otherwise. A track started now was started from it, and a refetch refetches
+// it.
 func (m Model) currentTab() Playlist {
 	if m.detour.active {
 		return m.detour.tab
@@ -385,6 +388,8 @@ func (m Model) enterDetour(tab Playlist) (Model, tea.Cmd) {
 	m.detour = detour{active: true, tab: tab}
 
 	if entry, ok := m.cache[tab.ID]; ok {
+		// A load armed for the popover this replaces is not for this one.
+		m.detourGen++
 		m.detour.arrival, m.detour.more = entry.tracks, entry.next
 		m.detour.tracks = entry.tracks
 		if len(m.detour.tracks) > 0 {
@@ -392,7 +397,9 @@ func (m Model) enterDetour(tab Playlist) (Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	return m, batch(m.startLoading(), m.scheduleTabLoad())
+	m.startDetourLoading()
+	cmd := m.scheduleDetourLoad(tab)
+	return m, cmd
 }
 
 // leaveDetour steps back one popover, closing when there is nothing behind
@@ -403,10 +410,39 @@ func (m Model) leaveDetour() (Model, tea.Cmd) {
 	if n := len(m.history); n > 0 {
 		m.detour = m.history[n-1]
 		m.history = m.history[: n-1 : n-1]
-		return m, nil
+		m.catchUp()
+	} else {
+		m.detour = detour{}
 	}
-	m.detour = detour{}
 	return m, nil
+}
+
+// catchUp gives a popover stepped back to the answer it was waiting on, when
+// that arrived while another was in front of it. An answer goes into the
+// cache whoever is in front, so that is where it is waiting.
+func (m *Model) catchUp() {
+	if !m.detour.loading {
+		return
+	}
+	id := m.detour.tab.ID
+	if m.detour.tab.kind == tabSearch {
+		id = searchID(m.detour.searched)
+	}
+	if entry, ok := m.cache[id]; ok {
+		m.detour.fill(id, entry.tracks, entry.next)
+	}
+}
+
+// fill puts the first page of a listing in the popover and ends its wait. The
+// cursor goes where a fresh listing starts it: the first row, or no row at all
+// for a search, whose results are results until one is picked.
+func (d *detour) fill(id string, tracks []Track, next ytm.Continuation) {
+	d.tab.ID = id
+	d.arrival, d.tracks, d.more = tracks, tracks, next
+	d.cursor, d.offset, d.loading = 0, 0, false
+	if d.tab.kind == tabSearch {
+		d.cursor = noRow
+	}
 }
 
 // closeDetour dismisses the popover and everything behind it, which is what
@@ -453,12 +489,11 @@ func (m Model) afterDetourMove() (tea.Model, tea.Cmd, bool) {
 	return m, nil, true
 }
 
-// tabCount is the playlists. Nothing else lives in the row: a search, an
-// album and an artist are all popovers.
-// The tab row is the library's playlists, with a mix in front of them while
-// there is one. In front because that is where the music is: a mix is started
-// and listened to, not a place you keep coming back to, and it is gone when the
-// app closes.
+// tabCount is the tab row: the library's playlists, with a mix in front of
+// them while there is one. In front because that is where the music is: a mix
+// is started and listened to, not a place you keep coming back to, and it is
+// gone when the app closes. Nothing else lives in the row — a search, an album
+// and an artist are all popovers.
 func (m Model) tabCount() int {
 	if m.mix.ID != "" {
 		return len(m.Playlists) + 1
@@ -479,22 +514,9 @@ func (m Model) tabAt(i int) Playlist {
 	return Playlist{}
 }
 
-// playerHue is the colour of everything that points at the track playing: the
-// player's blue while it is playing, and the paused bar's own colour while it is
-// not. The bar has said the difference that way all along; the marks say it the
-// same way.
-func (m Model) playerHue() color.Color {
-	if m.mono {
-		if m.Paused {
-			return foreground
-		}
-		return emphasis
-	}
-	if m.Paused {
-		return played
-	}
-	return live
-}
+// playerHue is the colour of everything that points at the track playing,
+// as the player stands now — see playerColour.
+func (m Model) playerHue() color.Color { return playerColour(m.mono, m.Paused) }
 
 // accentOf is the colour a page claims for itself: the liked playlist's
 // magenta, a mix's cyan, and nothing for an ordinary playlist. Its label says
@@ -548,6 +570,9 @@ func (m Model) showTab() (Model, tea.Cmd) {
 	tab := m.tabAt(m.tabCursor)
 
 	if entry, ok := m.cache[tab.ID]; ok {
+		// A load armed for the tab this replaces is not for this one, and
+		// letting it run would fetch this one again over what is here.
+		m.tabGen++
 		m.arrival, m.more = entry.tracks, entry.next
 		m.Tracks, m.loading, m.Err = sorted(entry.tracks, m.sort), false, nil
 		m.showingID = tab.ID
@@ -559,11 +584,10 @@ func (m Model) showTab() (Model, tea.Cmd) {
 	}
 	m.Tracks, m.arrival = nil, nil
 	m.showingID, m.more = "", ytm.Continuation{}
-	return m, batch(m.startLoading(), m.scheduleTabLoad())
+	m.startLoading()
+	cmd := m.scheduleTabLoad(tab)
+	return m, cmd
 }
-
-// tabLoadDelay lets a run across the tabs settle before anything is asked
-// of the server. Holding a key would otherwise be one request per tab.
 
 // -------------------------------------------------------------- cursor ---
 
@@ -574,9 +598,6 @@ func (m Model) SelectedTrack() (Track, bool) {
 	}
 	return m.Tracks[m.trackCursor], true
 }
-
-// TrackCursor reports the highlighted track row.
-func (m Model) TrackCursor() int { return m.trackCursor }
 
 // rowCount is the tracks plus the row that offers the next page.
 func (m Model) rowCount() int { return m.list().rowCount() }
@@ -614,24 +635,35 @@ func (m Model) fetchMore(inDetour bool) (tea.Model, tea.Cmd) {
 	if m.loadingMore {
 		return m, nil
 	}
-	from := m.more
+	id, from := m.showingID, m.more
 	if inDetour {
-		from = m.detour.more
+		id, from = m.detour.tab.ID, m.detour.more
 	}
 	if !from.More() {
 		return m, nil
 	}
-	return m, batch(m.startLoadingMore(), m.loadMore(from, inDetour, false))
+	m.startLoadingMore()
+	cmd := m.loadMore(id, from, inDetour, false)
+	return m, cmd
 }
 
 // fetchMoreToPlay asks for the next page because a track ran out at the end of
 // the one already fetched. A mix is endless, so without this the radio stops at
 // whatever page happened to be loaded when the track ended.
+//
+// The page is the playing listing's, which is not always the one on screen: a
+// mix plays on while the reader looks through a playlist, and the playlist's
+// next page has nothing in it to follow the mix with.
 func (m Model) fetchMoreToPlay() (tea.Model, tea.Cmd) {
-	if m.loadingMore || !m.more.More() {
+	_, from := m.playingListing()
+	if m.loadingMore || !from.More() {
 		return m, nil
 	}
-	return m, batch(m.startLoadingMore(), m.loadMore(m.more, false, true))
+	inDetour := m.playingFrom != m.showingID &&
+		m.detour.active && m.detour.tab.ID == m.playingFrom
+	m.startLoadingMore()
+	cmd := m.loadMore(m.playingFrom, from, inDetour, true)
+	return m, cmd
 }
 
 // refreshTab refetches the listing in front, ignoring what is cached. A
@@ -646,7 +678,12 @@ func (m Model) refreshTab() (tea.Model, tea.Cmd) {
 	delete(m.cache, tab.ID)
 	// showingID is left alone so the reader keeps their place in the list
 	// when the refetch lands.
-	return m, batch(m.startLoading(), m.fetchTracks(tab))
+	if m.detour.active {
+		m.startDetourLoading()
+	} else {
+		m.startLoading()
+	}
+	return m, m.fetchTracks(tab)
 }
 
 // moveCursor moves the track cursor and scrolls to keep it in view.
@@ -707,20 +744,40 @@ func (m Model) sortBy(spec sortSpec) (tea.Model, tea.Cmd) {
 	m.applySort()
 	m.trackCursor, m.trackOffset = 0, 0
 	m.detour.cursor, m.detour.offset = 0, 0
-	return m, m.continueSort()
+	cmd := m.continueSort()
+	return m, cmd
 }
 
-// setTracks puts a listing on screen, keeping the order it came in so that
-// a sort can be cleared again.
-func (m *Model) setTracks(tracks []Track) {
-	m.arrival = tracks
-	m.Tracks = sorted(tracks, m.sort)
-}
-
-// setDetourTracks does the same for the popover, which keeps the order it
-// arrived in because it cannot be sorted.
-func (m *Model) setDetourTracks(tracks []Track) {
-	m.detour.arrival, m.detour.tracks = tracks, tracks
+// addPage appends a page to the listing it was fetched for, wherever that
+// listing is now: in the popover, in the tabs, or only in the cache because
+// the reader has moved on from it. Putting it on whatever happened to be in
+// front would make it one playlist's tracks in another's list, and in its
+// cache for good.
+//
+// Each list is built afresh rather than appended to where it stands. The model
+// travels by value and the cache shares its slices, so an append into spare
+// capacity is an append into a copy somebody else is still reading.
+func (m *Model) addPage(id string, inDetour bool, tracks []Track, next ytm.Continuation) {
+	switch {
+	case inDetour && m.detour.active && m.detour.tab.ID == id:
+		m.detour.arrival, m.detour.more = slices.Concat(m.detour.arrival, tracks), next
+		// The popover shows its arrival order, so the new page is what it
+		// shows. applySort does not reach it.
+		m.detour.tracks = m.detour.arrival
+		if id != "" {
+			m.cache[id] = cached{m.detour.arrival, next}
+		}
+	case !inDetour && id == m.showingID:
+		m.arrival, m.more = slices.Concat(m.arrival, tracks), next
+		if id != "" {
+			m.cache[id] = cached{m.arrival, next}
+		}
+		m.applySort()
+	default:
+		if entry, ok := m.cache[id]; ok {
+			m.cache[id] = cached{slices.Concat(entry.tracks, tracks), next}
+		}
+	}
 }
 
 // applySort rebuilds both lists from the order they arrived in. Sorting the
@@ -761,12 +818,8 @@ func (m *Model) continueSort() tea.Cmd {
 		return nil
 	}
 	m.autoPages++
-	return batch(m.startLoadingMore(), m.loadMore(m.more, false, false))
-}
-
-// isPlaying reports whether a row is the track mpv is on.
-func (m Model) isPlaying(t Track) bool {
-	return m.playing.VideoID != "" && t.VideoID == m.playing.VideoID
+	m.startLoadingMore()
+	return m.loadMore(m.showingID, m.more, false, false)
 }
 
 // tabBox is the three sides of a tab that the tab draws: its top edge and its
@@ -849,16 +902,6 @@ const (
 	tabMarkerWidth = 2 // the square and the space after it
 )
 
-// tabHoldsPlaying reports whether the track playing is in a tab's listing.
-//
-// Only the listings it has fetched: a tab nobody has opened has no rows to look
-// through and says nothing until it does. That also means more than one tab can
-// say it, which is honest — a track can be in two playlists, and both of them
-// do hold it.
-func (m Model) tabHoldsPlaying(index int) bool {
-	return m.playingTabSet()[m.tabAt(index).ID]
-}
-
 // playingTabSet is every tab whose fetched listing holds the playing track,
 // found in one pass. The tab row asks about each tab it draws, so answering
 // one tab at a time was a scan per tab per frame; this scans the caches once.
@@ -875,7 +918,8 @@ func (m Model) playingTabSet() map[string]bool {
 			}
 		}
 	}
-	// The visible listing is not in the cache until it is left.
+	// The visible listing as well: what is on screen is not always what is
+	// kept for it — unliking a row takes it off the one and drops the other.
 	if m.showingID != "" {
 		for _, t := range m.Tracks {
 			if t.VideoID == m.playing.VideoID {
@@ -885,6 +929,77 @@ func (m Model) playingTabSet() map[string]bool {
 		}
 	}
 	return out
+}
+
+// playingTabs is playingTabSet without the scan, wherever the answer Update
+// kept still describes the model. That is nearly every frame: the scan reads
+// every listing fetched, and the frames come with every tick of the playhead,
+// while the answer changes only when the track or a listing does.
+func (m Model) playingTabs() map[string]bool {
+	if m.holds.describes(m) {
+		return m.holds.set
+	}
+	return m.playingTabSet()
+}
+
+// tabHolds is a playingTabSet with what it was worked out from, so a frame
+// can tell whether it still holds without doing the work again.
+//
+// Update builds a new one when the old no longer describes the model, and
+// nothing changes one after that: copies of the model share it, which is safe
+// for that reason.
+type tabHolds struct {
+	playing, showing string
+	visible          listRef
+	cached           map[string]listRef
+	set              map[string]bool
+}
+
+// listRef is a listing by identity rather than by its contents: where its rows
+// start and how many there are. Listings are replaced or extended and never
+// have one track swapped for another where they stand — a rating changes in
+// place, which tracks are there does not — so two that agree on this hold the
+// same tracks.
+type listRef struct {
+	first *Track
+	n     int
+}
+
+func refOf(tracks []Track) listRef {
+	if len(tracks) == 0 {
+		return listRef{}
+	}
+	return listRef{&tracks[0], len(tracks)}
+}
+
+// holdsFor works the set out afresh and records what it was worked out from.
+func (m Model) holdsFor() *tabHolds {
+	h := &tabHolds{
+		playing: m.playing.VideoID,
+		showing: m.showingID,
+		visible: refOf(m.Tracks),
+		cached:  make(map[string]listRef, len(m.cache)),
+		set:     m.playingTabSet(),
+	}
+	for id, entry := range m.cache {
+		h.cached[id] = refOf(entry.tracks)
+	}
+	return h
+}
+
+// describes reports whether nothing the set was worked out from has changed.
+// It costs a look at each listing kept, not at each track in them.
+func (h *tabHolds) describes(m Model) bool {
+	if h == nil || h.playing != m.playing.VideoID || h.showing != m.showingID ||
+		h.visible != refOf(m.Tracks) || len(h.cached) != len(m.cache) {
+		return false
+	}
+	for id, entry := range m.cache {
+		if ref, ok := h.cached[id]; !ok || ref != refOf(entry.tracks) {
+			return false
+		}
+	}
+	return true
 }
 
 const (
@@ -948,11 +1063,8 @@ func (m Model) controlsRow() int { return m.playerTop() + 1 }
 // bar appears to be — which is not the whole row: a time and a space sit
 // either side of it.
 func (m Model) barGeometry() (start, width int) {
-	if !m.barShowsTimes() {
-		return contentLeft, m.contentWidth()
-	}
-	left, right := m.barFlanks()
-	return contentLeft + left, max(m.contentWidth()-left-right, 0)
+	l := m.barLayout()
+	return l.start, l.width
 }
 
 // fraction is how far through the track the position is.
@@ -961,6 +1073,30 @@ func (m Model) fraction() float64 {
 		return 0
 	}
 	return float64(m.Position) / float64(m.Length)
+}
+
+// filledCells is how many cells of a bar a fraction of it fills, rounded to
+// the nearest and never past either end.
+func filledCells(width int, fraction float64) int {
+	return min(max(int(math.Round(float64(width)*fraction)), 0), width)
+}
+
+// barReading is what the bar row says about a position: the whole second the
+// time beside it reads, and how many cells of the bar are filled. Two
+// positions that read the same draw the same row.
+type barReading struct{ second, cells int }
+
+// barFrame reads positions against the bar as it is laid out now, for the
+// player's watch to tell a position worth a frame from one that is not.
+func (m Model) barFrame() func(time.Duration) barReading {
+	width, length := m.barLayout().width, m.Length
+	return func(at time.Duration) barReading {
+		r := barReading{second: int(at.Seconds())}
+		if length > 0 {
+			r.cells = filledCells(width, float64(at)/float64(length))
+		}
+		return r
+	}
 }
 
 func (m Model) View() tea.View {
@@ -976,28 +1112,27 @@ func (m Model) View() tea.View {
 		return v
 	}
 
-	if m.signedOut {
-		v := tea.NewView(m.renderSignIn(m.width, m.height))
-		v.AltScreen = true
-		v.WindowTitle = "youtuimusic"
-		v.MouseMode = tea.MouseModeCellMotion
-		v.ReportFocus = true
-		return v
-	}
-
-	content := lipgloss.JoinVertical(lipgloss.Left,
+	// Joined as text rather than through lipgloss.JoinVertical. Every part is
+	// already the width of the window — each pads itself to it, because each
+	// has its own fill to pad with — so there is nothing to align, and the
+	// join measured every line of the screen to find that out on every frame.
+	content := strings.Join([]string{
 		m.renderTabs(),
 		m.renderTracks(m.width, m.bodyHeight()),
 		m.renderPlayer(),
 		m.renderStatusBar(),
-	)
+	}, "\n")
 	// Anything floating sits over the frame rather than in it, so opening
 	// one reflows nothing underneath.
 	//
 	// This goes through a compositor rather than composing layers onto a
 	// canvas directly: a layer's own Draw ignores its position, and only
 	// the compositor works out where each one belongs.
-	layers := []*lipgloss.Layer{lipgloss.NewLayer(content)}
+	//
+	// The frame becomes a layer only when something floats over it. Making
+	// one measures every line of it, which a frame with nothing over it —
+	// most of them — has no use for.
+	var layers []*lipgloss.Layer
 	z := 1
 	if m.detour.active {
 		// Every popover in the stack, not only the one in front: an album
@@ -1029,8 +1164,9 @@ func (m Model) View() tea.View {
 		x, y, _, _ := m.sheetBounds()
 		layers = append(layers, lipgloss.NewLayer(m.renderSheet()).X(x).Y(y).Z(z))
 	}
-	if len(layers) > 1 {
-		content = lipgloss.NewCompositor(layers...).Render()
+	if len(layers) > 0 {
+		frame := lipgloss.NewLayer(content)
+		content = lipgloss.NewCompositor(append([]*lipgloss.Layer{frame}, layers...)...).Render()
 	}
 
 	v := tea.NewView(content)
@@ -1062,11 +1198,11 @@ func tabWidth(title string, marked bool) int {
 // Rendering and hit-testing share it, so a click lands on the tab it looks
 // like it should.
 func (m Model) tabSpans() []tabSpan {
-	return m.tabSpansWith(m.playingTabSet())
+	return m.tabSpansWith(m.playingTabs())
 }
 
 // tabSpansWith is tabSpans with the set of tabs holding the playing track
-// worked out already, so a render does not scan the caches once per tab.
+// in hand already, so a render asks for it once rather than once per tab.
 func (m Model) tabSpansWith(holds map[string]bool) []tabSpan {
 	count := m.tabCount()
 	if count == 0 || m.width <= 0 {
@@ -1096,7 +1232,7 @@ func (m Model) tabSpansWith(holds map[string]bool) []tabSpan {
 }
 
 func (m Model) renderTabs() string {
-	holds := m.playingTabSet()
+	holds := m.playingTabs()
 	spans := m.tabSpansWith(holds)
 	if len(spans) == 0 {
 		// With no tabs the row still has to be exactly as tall, or
@@ -1173,29 +1309,40 @@ func (m Model) renderTracks(width, height int) string {
 	return m.table(width, height).render()
 }
 
-// table is the main list as the shared table sees it.
+// table is the main list as the shared table sees it. It is the one that
+// goes quiet with something in front of it; a popover is always in front.
 func (m Model) table(width, height int) trackTable {
-	return trackTable{
-		sort:        m.sort,
-		highlight:   m.highlightColor(),
-		dimmed:      m.dimmedColor(),
-		inactive:    m.covered(),
-		quiet:       m.quietColor(),
-		mono:        m.mono,
-		now:         m.clock(),
-		tracks:      m.Tracks,
-		cursor:      m.trackCursor,
-		offset:      m.trackOffset,
-		width:       width,
-		height:      height,
-		showRating:  m.showsRating(),
-		accent:      m.accentOf(m.showingID),
-		playing:     m.playing.VideoID,
-		paused:      m.Paused,
-		more:        m.more.More(),
-		loadingMore: m.loadingMore,
-		loader:      m.loader(),
+	t := m.newTable(m.showingID, m.Tracks, m.list(), width, height)
+	t.inactive = m.covered()
+	return t
+}
+
+// newTable is a listing as the shared table sees it: its rows and the window
+// over them from the list, and everything else — the theme, the player, the
+// wait on a next page — from the model, which is the same for every list on
+// screen. The main list and the popover are both one of these, so a field
+// added here reaches both.
+func (m Model) newTable(id string, tracks []Track, pos listPos, width, height int) trackTable {
+	t := trackTable{
+		tracks:     tracks,
+		cursor:     pos.cursor,
+		offset:     pos.offset,
+		more:       pos.hasMore,
+		width:      width,
+		height:     height,
+		showRating: showsRating(id),
+		accent:     m.accentOf(id),
+		highlight:  m.highlightColor(),
+		dimmed:     m.dimmedColor(),
+		quiet:      m.quietColor(),
+		mono:       m.mono,
+		playing:    m.playing.VideoID,
+		paused:     m.Paused,
 	}
+	if t.more && m.loadingMore {
+		t.loadingMore, t.loader = true, m.loader()
+	}
+	return t
 }
 
 // hasScrollbar reports whether the list is longer than the window. The
@@ -1223,7 +1370,7 @@ func (m *Model) scrollTo(y int) {
 
 // showsRating is false on the liked playlist, where every row is liked and
 // the column would say the same thing all the way down.
-func (m Model) showsRating() bool { return m.showingID != likedPlaylistID }
+func showsRating(id string) bool { return id != likedPlaylistID }
 
 // The status bar is two blocks: a small coloured one saying what the app is
 // doing, and one holding what is playing that takes the rest of the row.
@@ -1262,13 +1409,14 @@ type statusSegment struct {
 // renderStatusBar draws the row under the player.
 func (m Model) renderStatusBar() string {
 	block, fill := m.statusBlock(), m.statusBarStyle()
-	room := max(m.width-lipgloss.Width(block), 0)
+	blockWidth := lipgloss.Width(block)
+	room := max(m.width-blockWidth, 0)
 
 	// The way into the keys sits at the far end of the band. It takes the
 	// band's own fill, so it reads as part of it rather than as something
 	// dropped on top, and it carries the cell of air the other end has.
 	tail := ""
-	if _, ok := m.helpButtonSpan(); ok {
+	if _, ok := helpButtonAt(m.width, blockWidth); ok {
 		state := buttonDefault
 		if m.sheetOpen {
 			state = buttonActive
@@ -1287,8 +1435,21 @@ func (m Model) renderStatusBar() string {
 // with a hole in it most of the time.
 func (m Model) statusBlock() string {
 	word, hue := m.statusState()
-	return statusBlockStyle.Background(hue).
-		Render(truncate(word, max(m.width-2*statusBlockPadding, 0)))
+	text := truncate(word, max(m.width-2*statusBlockPadding, 0))
+	style := statusBlockStyle
+	if word == labelLoading {
+		// The same glyph the list's loader turns, so a wait looks the same
+		// wherever it is said. Its own style is the list's; here it takes
+		// the block's ink like the word beside it, and sits right against
+		// it, and against the block's left edge where the padding would be:
+		// the glyph is a solid cell for most of its turn, so it is the
+		// block's edge, and air either side of it reads as gaps in a label
+		// that is one thing.
+		style = style.PaddingLeft(0)
+		text = truncate(ansi.Strip(m.spin.View())+word, max(m.width-statusBlockPadding, 0))
+	}
+	colours := m.blockColoursFor(hue)
+	return style.Foreground(colours.ink).Background(colours.fill).Render(text)
 }
 
 // statusState is what the block says and the colour it says it in, together,
@@ -1302,10 +1463,10 @@ func (m Model) statusState() (string, color.Color) {
 	switch {
 	case m.Err != nil:
 		return "ERROR", p.alert
-	case m.busy():
+	case m.busy(), m.loadingPlayback():
 		// A wait is not trouble and it is not nothing either: something is
 		// outstanding, and yellow is how long a wait gets noticed.
-		return "LOADING", p.busy
+		return labelLoading, p.busy
 	case m.playing.VideoID != "" && m.Paused:
 		return "PAUSED", p.live
 	case m.playing.VideoID != "":
@@ -1315,11 +1476,25 @@ func (m Model) statusState() (string, color.Color) {
 	}
 }
 
-// statusKey is the word alone.
-func (m Model) statusKey() string {
-	word, _ := m.statusState()
-	return word
+// loadingPlayback reports whether a track has been asked for and is not
+// sounding yet: its stream being resolved, mpv opening it, or mpv waiting on
+// the network partway through. Before this the block said PLAYING from the
+// moment play was pressed, over a second or two of silence.
+//
+// It is read from mpv's state rather than from its events. The answer to a
+// load and the events that follow it reach the model by different roads and
+// in either order, and a flag that waited for one after the other could miss
+// it and stay up; state cannot be missed, only read early.
+func (m Model) loadingPlayback() bool {
+	if m.requested != "" {
+		return true
+	}
+	return m.playing.VideoID != "" && m.coreIdle && !m.idleActive && !m.Paused
 }
+
+// labelLoading is the block's word for a wait, which it says with the
+// spinner beside it.
+const labelLoading = "LOADING"
 
 // labelNothingPlaying ends in an ellipsis for the same reason the search box and
 // the load-more row do: it is waiting on you rather than reporting on itself.
@@ -1376,9 +1551,6 @@ func fillRow(segments []statusSegment, fill lipgloss.Style, width int) string {
 	return b.String()
 }
 
-// playerBox is the frame around the bar and the controls. Its border
-// replaces the blank lines that used to separate them from the list, so it
-// costs no height.
 // separator divides the list from the player. A line is enough to say where
 // one ends and the other begins, and it costs the row a box cost four sides
 // of.
@@ -1490,37 +1662,40 @@ func (m Model) quietColor() color.Color {
 
 func (m Model) renderPlayer() string {
 	blank := strings.Repeat(" ", max(m.width, 0))
-	return lipgloss.JoinVertical(lipgloss.Left,
+	// Every line is the width of the window already; see View.
+	return strings.Join([]string{
 		m.separator(),
 		m.renderControls(),
 		blank,
 		m.renderBar(),
 		blank,
-	)
+	}, "\n")
 }
 
-// litRamp is the played part of the bar: the player's blue, flat.
+// The played part of the bar is the player's colour, flat — see playerColour,
+// which the tab marker and the playing row take as well, so the bar says
+// playing and paused in the same colours they do.
 //
 // It used to be a gradient between two steps of the accent, then the brightest
 // thing the scheme had. There is no gradient to give it — two adjacent greys
 // is not one — and worse, the step that would have been the low end is the
 // colour the paused bar uses, so a bar under half way was indistinguishable
-// from a paused one. It says playing the same the whole way along, and now it
-// says it in the same colour the row and the state block do.
+// from a paused one. It says playing the same the whole way along.
 //
-// It is a named palette entry rather than a hex value, which is what keeps
-// the bar inside the terminal's own scheme: the terminal resolves it, so it
-// is whatever the theme says blue is. The component's own blend could not be
-// used even when this was a gradient — it interpolates in RGB through
-// lipgloss.Blend1D and emits true colour, off-scheme by construction.
-func litRamp(_, _ float64) color.Color { return live }
+// Paused, the colour comes out of the played part without the part going: the
+// bar stops saying the track is running but still says where the playhead is.
+// That colour has to differ from the groove as well as from the lit state —
+// matching the groove hid the position, which is the one thing the bar is for.
+//
+// Each of those colours is a named palette entry rather than a hex value, which
+// is what keeps the bar inside the terminal's own scheme: the terminal
+// resolves it, so it is whatever the theme says blue is.
 
-// mutedRamp takes the colour out of the played part without taking the part
-// away: paused, the bar stops saying the track is running but still says where
-// the playhead is. It has to differ from the groove as well as from the lit
-// state — matching the groove hid the position, which is the one thing the bar
-// is for.
-func mutedRamp(_, _ float64) color.Color { return played }
+// filledCell is what the bar has passed. It is drawn in the fill colour on the
+// fill colour, so it reads as a whole cell, and it is a different glyph from
+// the groove's so that the playhead is still somewhere on a terminal that
+// draws no colour at all.
+const filledCell = '▌'
 
 // emptyCell is what the bar has not reached yet: a solid block, so the track
 // reads as a filled groove rather than as texture. The played part is told
@@ -1532,18 +1707,6 @@ func mutedRamp(_, _ float64) color.Color { return played }
 // U+25A6..U+25A9 — are in none of the fonts here, and a fallback font draws
 // at whatever width it likes. Only the shade and block characters are safe.
 const emptyCell = '█'
-
-func newBar(fill progress.ColorFunc) progress.Model {
-	bar := progress.New(
-		progress.WithoutPercentage(),
-		progress.WithColorFunc(fill),
-		progress.WithFillCharacters(progress.DefaultFullCharHalfBlock, emptyCell),
-	)
-	// Overwritten per render with the row highlight; this is only what an
-	// unrendered bar holds.
-	bar.EmptyColor = surface
-	return bar
-}
 
 // The times either side of the bar are as wide as they read and no wider, so
 // the bar gives up a cell when a track passes ten minutes and takes it back
@@ -1573,16 +1736,25 @@ func (m Model) barTimes() (at, runs string) {
 		strings.TrimSpace(formatDuration(m.Length))
 }
 
-// barFlanks is what the times and the space beside each of them occupy.
-func (m Model) barFlanks() (left, right int) {
-	at, runs := m.barTimes()
-	return lipgloss.Width(at) + 1, lipgloss.Width(runs) + 1
+// barLayout is the bar row worked out once: the times either side, whether
+// there is room for them, and the column the bar starts at and how wide it is.
+// Drawing the row and hit-testing it both start here, so they cannot disagree.
+type barLayout struct {
+	at, runs     string
+	times        bool
+	start, width int
 }
 
-// barShowsTimes reports whether there is room for them.
-func (m Model) barShowsTimes() bool {
-	left, right := m.barFlanks()
-	return m.contentWidth() >= left+right+barLeastWidth
+func (m Model) barLayout() barLayout {
+	at, runs := m.barTimes()
+	left, right := lipgloss.Width(at)+1, lipgloss.Width(runs)+1
+	if m.contentWidth() < left+right+barLeastWidth {
+		return barLayout{at: at, runs: runs, start: contentLeft, width: m.contentWidth()}
+	}
+	return barLayout{
+		at: at, runs: runs, times: true,
+		start: contentLeft + left, width: max(m.contentWidth()-left-right, 0),
+	}
 }
 
 // renderBar draws the position between the time it is at and the time it
@@ -1591,28 +1763,31 @@ func (m Model) barShowsTimes() bool {
 // The bar says how far through the track it is; the two times say how far
 // that is in seconds, which a bar on its own never does.
 //
-// The groove takes the row highlight, so the bar sits on the same surface
-// the selected row and the status bar do. It is set here rather than when the
-// bar is built because the highlight is not known until the terminal answers
-// for it; progress.Model is a value, so the copy carries the width already
-// set on the original.
+// It is two runs of one glyph each, one style apiece. The progress component
+// it used to be drew a style per filled cell whenever its colour came from a
+// function, and its colour came from one so that the half-block glyph could be
+// painted on a background of the same colour: two hundred styles a frame, for
+// a colour that never changed along the bar. The groove takes the row
+// highlight, so the bar sits on the same surface the selected row and the
+// status bar do; it is looked up here because the highlight is not known until
+// the terminal answers for it.
 func (m Model) renderBar() string {
-	bar := m.bar
-	if m.Paused {
-		bar = m.pausedBar
+	l := m.barLayout()
+	cells := filledCells(l.width, m.fraction())
+	var bar strings.Builder
+	if cells > 0 {
+		hue := m.playerHue()
+		bar.WriteString(lipgloss.NewStyle().Foreground(hue).Background(hue).
+			Render(strings.Repeat(string(filledCell), cells)))
 	}
-	bar.EmptyColor = m.highlightColor()
-	// The width is settled here and not on a resize, because the times are as
-	// wide as they read and what is left over is the bar's. barGeometry works
-	// it out the same way for the click that lands on it.
-	_, width := m.barGeometry()
-	bar.SetWidth(width)
-
-	if !m.barShowsTimes() {
-		return bar.ViewAs(m.fraction())
+	if rest := l.width - cells; rest > 0 {
+		bar.WriteString(lipgloss.NewStyle().Foreground(m.highlightColor()).
+			Render(strings.Repeat(string(emptyCell), rest)))
 	}
-	at, runs := m.barTimes()
-	return dim.Render(at) + " " + bar.ViewAs(m.fraction()) + " " + dim.Render(runs)
+	if !l.times {
+		return bar.String()
+	}
+	return dim.Render(l.at) + " " + bar.String() + " " + dim.Render(l.runs)
 }
 
 // truncate cuts a string to fit a number of screen cells, ending it with an
@@ -1622,30 +1797,18 @@ func (m Model) renderBar() string {
 // character or an emoji occupies two, a combining mark none. Slicing by rune
 // index against a width measured in cells panics on the first title that is
 // not Latin.
+//
+// And it knows a styled string when it is given one. The cut used to measure
+// rune by rune, which counted the three printable bytes of a bold's escape as
+// three cells and dropped the reset at the end of it with everything else
+// past the cut: a long album title on an artist's page came out three cells
+// short and turned the rest of its row bold. The ansi package walks escapes
+// and whole graphemes, and puts the ellipsis inside whatever style was open.
 func truncate(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	if lipgloss.Width(s) <= w {
-		return s
-	}
-	if w == 1 {
-		// No room for both a character and the mark saying there was more.
-		return "…"
-	}
-
-	var b strings.Builder
-	b.Grow(len(s))
-	width := 0
-	for _, r := range s {
-		cells := lipgloss.Width(string(r))
-		if width+cells > w-1 {
-			break
-		}
-		b.WriteRune(r)
-		width += cells
-	}
-	return b.String() + "…"
+	return ansi.Truncate(s, w, "…")
 }
 
 // padLeft is pad the other way round: the text against the right edge.

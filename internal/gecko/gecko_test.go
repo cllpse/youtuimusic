@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/cllpse/youtuimusic/internal/jar"
 )
 
 func sqlite3Bin(t *testing.T) string {
@@ -27,8 +29,8 @@ func store(t *testing.T, path string, rows ...string) {
 	}
 	sql := `CREATE TABLE moz_cookies (
 		id INTEGER PRIMARY KEY, originAttributes TEXT, name TEXT, value TEXT,
-		host TEXT, path TEXT, expiry INTEGER, isSecure INTEGER,
-		isHttpOnly INTEGER);
+		host TEXT, path TEXT, expiry INTEGER, lastAccessed INTEGER,
+		isSecure INTEGER, isHttpOnly INTEGER);
 	`
 	for _, r := range rows {
 		sql += r + "\n"
@@ -55,6 +57,15 @@ func row(host, name, value string, expiry int64) string {
 		host, name, value, expiry)
 }
 
+func read(t *testing.T, path string, now time.Time) jar.Jar {
+	t.Helper()
+	got, err := Profile{Path: path}.Read("music.youtube.com", now)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	return got
+}
+
 func TestReadsCookies(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cookies.sqlite")
 	future := time.Now().Add(24 * time.Hour).Unix()
@@ -64,11 +75,7 @@ func TestReadsCookies(t *testing.T) {
 		row("example.com", "OTHER", "nope", future),
 	)
 
-	got, err := Profile{Path: path}.Read("music.youtube.com", time.Now())
-	if err != nil {
-		t.Fatalf("Read: %v", err)
-	}
-	if h := Header(got); h != "SID=also; __Secure-1PSIDTS=the-session" {
+	if h := read(t, path, time.Now()).Header(); h != "SID=also; __Secure-1PSIDTS=the-session" {
 		t.Errorf("header = %q", h)
 	}
 }
@@ -84,30 +91,36 @@ func TestSkipsExpiredAndForeignCookies(t *testing.T) {
 		row(".youtube.com", "SESSION", "yes", 0),
 	)
 
-	got, err := Profile{Path: path}.Read("music.youtube.com", now)
-	if err != nil {
-		t.Fatalf("Read: %v", err)
-	}
-	if h := Header(got); h != "LIVE=yes; SESSION=yes" {
+	if h := read(t, path, now).Header(); h != "LIVE=yes; SESSION=yes" {
 		t.Errorf("header = %q", h)
 	}
 }
 
-func TestSendsFollowsCookieScoping(t *testing.T) {
-	cases := []struct {
-		hostKey, host string
-		want          bool
-	}{
-		{".youtube.com", "music.youtube.com", true},
-		{".youtube.com", "youtube.com", true},
-		{"music.youtube.com", "music.youtube.com", true},
-		{"www.youtube.com", "music.youtube.com", false},
-		{".youtube.com", "notyoutube.com", false},
+// A container's cookies, and partitioned ones, share the table with the
+// default ones; only the default ones are a request from the app.
+func TestSkipsContainerAndOffPathCookies(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cookies.sqlite")
+	store(t, path,
+		row(".youtube.com", "SID", "default", 0),
+		`INSERT INTO moz_cookies (originAttributes,host,name,value,expiry) VALUES ('^userContextId=2','.youtube.com','SID','work',0);`,
+		`INSERT INTO moz_cookies (originAttributes,host,name,value,expiry) VALUES ('^partitionKey=%28https%2Cexample.com%29','.youtube.com','EMBED','x',0);`,
+		`INSERT INTO moz_cookies (host,name,value,path,expiry) VALUES ('.youtube.com','WATCH','x','/watch',0);`,
+	)
+	if h := read(t, path, time.Now()).Header(); h != "SID=default" {
+		t.Errorf("header = %q, want the default container's SID alone", h)
 	}
-	for _, c := range cases {
-		if got := sends(c.hostKey, c.host); got != c.want {
-			t.Errorf("sends(%q, %q) = %v, want %v", c.hostKey, c.host, got, c.want)
-		}
+}
+
+// lastAccessed is microseconds since the Unix epoch.
+func TestCarriesLastAccess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cookies.sqlite")
+	at := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	store(t, path, fmt.Sprintf(
+		`INSERT INTO moz_cookies (host,name,value,expiry,lastAccessed) VALUES ('.youtube.com','SID','x',0,%d);`,
+		at.UnixMicro()))
+	got := read(t, path, time.Now())
+	if len(got.Cookies) != 1 || !got.Cookies[0].LastAccess.Equal(at) {
+		t.Errorf("last access = %+v, want %s", got.Cookies, at)
 	}
 }
 
@@ -166,64 +179,29 @@ func TestProfilesFallBackToGlob(t *testing.T) {
 	}
 }
 
-// A profile with the bellwether wins over one that merely has more cookies,
-// even when it is not first on disk.
-func TestPrefersTheProfileThatIsSignedIn(t *testing.T) {
+// Every profile with cookies for the host is returned, signed in or not;
+// choosing between them is jar.Pick's job.
+func TestJarsReadsEveryProfile(t *testing.T) {
 	dir := t.TempDir()
-	future := time.Now().Add(24 * time.Hour).Unix()
+	store(t, filepath.Join(dir, "noisy.default", "cookies.sqlite"), row(".youtube.com", "YSC", "x", 0))
+	store(t, filepath.Join(dir, "real.default-release", "cookies.sqlite"), row(".youtube.com", jar.Bellwether, "s", 0))
+	store(t, filepath.Join(dir, "other.default", "cookies.sqlite"), row(".example.com", "OTHER", "x", 0))
 
-	// Signed out, but noisy.
-	var noise []string
-	for i := 0; i < 8; i++ {
-		noise = append(noise, row(".youtube.com", fmt.Sprintf("JUNK%d", i), "x", future))
-	}
-	store(t, filepath.Join(dir, "noisy.default", "cookies.sqlite"), noise...)
-
-	store(t, filepath.Join(dir, "real.default-release", "cookies.sqlite"),
-		row(".youtube.com", Bellwether, "the-session", future),
-		row(".youtube.com", "SID", "also", future),
-	)
-	// Make the noisy one newer, so it would win on recency alone.
-	now := time.Now()
-	if err := os.Chtimes(filepath.Join(dir, "noisy.default", "cookies.sqlite"), now, now); err != nil {
-		t.Fatal(err)
-	}
-
-	ini := `[Profile0]
-Name=noisy
-IsRelative=1
-Path=noisy.default
-[Profile1]
-Name=real
-IsRelative=1
-Path=real.default-release
-`
-	if err := os.WriteFile(filepath.Join(dir, "profiles.ini"), []byte(ini), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	got, from, err := cookiesIn([]Browser{{Name: "Firefox", Dir: dir}}, "music.youtube.com", time.Now())
+	jars, err := jarsIn([]Browser{{Name: "Firefox", Dir: dir}}, "music.youtube.com", time.Now())
 	if err != nil {
-		t.Fatalf("Cookies: %v", err)
+		t.Fatalf("Jars: %v", err)
 	}
-	if from.Name != "real.default-release" {
-		t.Errorf("picked %q, want the signed-in profile", from.Name)
+	got := map[string]bool{}
+	for _, j := range jars {
+		got[j.Name()] = true
 	}
-	if h := Header(got); h != "SID=also; "+Bellwether+"=the-session" {
-		t.Errorf("header = %q", h)
+	if len(got) != 2 || !got["Firefox/noisy.default"] || !got["Firefox/real.default-release"] {
+		t.Errorf("jars = %v", got)
 	}
 }
 
-func TestSignedOutProfileSaysSo(t *testing.T) {
-	dir := t.TempDir()
-	store(t, filepath.Join(dir, "default", "cookies.sqlite"),
-		row(".youtube.com", "YSC", "anonymous", 0))
-
-	_, _, err := cookiesIn([]Browser{{Name: "Firefox", Dir: dir}}, "music.youtube.com", time.Now())
-	if err == nil {
-		t.Fatal("a signed-out profile was reported as success")
-	}
-	if !errors.Is(err, ErrNoBrowser) {
+func TestNoFirefoxSaysSo(t *testing.T) {
+	if _, err := jarsIn(nil, "music.youtube.com", time.Now()); !errors.Is(err, ErrNoBrowser) {
 		t.Errorf("err = %v, want ErrNoBrowser", err)
 	}
 }

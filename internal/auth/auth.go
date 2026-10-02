@@ -17,12 +17,13 @@
 // disk only ages, while the browser sharing the account keeps rolling the
 // session forward, and one day the copy is behind and stops working.
 //
-// So the session is read from the browser at launch instead. The browser
-// is the one client Google keeps rotating for, which makes its copy current
-// by definition, and reading it again on every run costs one file read. A
-// saved session remains as the fallback for when the browser cannot be
-// read at all — a locked keyring, a machine without one — and Load keeps it
-// up to date so the fallback is never the stale thing it used to be.
+// So the session is read from the browser at launch, and again whenever a
+// request comes back signed out. The browser is the one client Google keeps
+// rotating for, which makes its copy current by definition, and reading it
+// costs one pass over each profile's cookie store. A saved session remains
+// as the fallback for when the browser cannot be read at all — a locked
+// keyring, a machine without one — and Load keeps it up to date so the
+// fallback is never the stale thing it used to be.
 package auth
 
 import (
@@ -30,14 +31,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/cllpse/youtuimusic/internal/chromium"
 	"github.com/cllpse/youtuimusic/internal/gecko"
+	"github.com/cllpse/youtuimusic/internal/jar"
 	"github.com/cllpse/youtuimusic/internal/ytm"
 )
 
@@ -119,8 +119,8 @@ func Save(s ytm.Session) error {
 	return nil
 }
 
-// ErrNoSession means no session file was found.
-var ErrNoSession = errors.New("auth: no session found")
+// errNoFile means no session file was found.
+var errNoFile = errors.New("auth: no saved session found")
 
 // EnvPath overrides where the session is read from.
 const EnvPath = "YOUTUIMUSIC_SESSION"
@@ -149,52 +149,6 @@ const UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
 // Host is the site whose cookies a session is built from.
 const Host = "music.youtube.com"
 
-// LoginURL is where the default browser is sent when there is no session.
-const LoginURL = "https://accounts.google.com/ServiceLogin?service=youtube" +
-	"&continue=https%3A%2F%2Fmusic.youtube.com%2F"
-
-// OpenLogin opens LoginURL in the browser you already use, so a sign-in gets
-// your extensions and saved passwords instead of a bare profile.
-//
-// $BROWSER comes first because a desktop that sets it — Omarchy sets it to
-// its own launcher, which goes through the session's app runner — knows how a
-// browser should be started here better than a guess does. The rest are the
-// ordinary fallbacks.
-func OpenLogin() error {
-	var candidates [][]string
-	if runtime.GOOS == "darwin" {
-		candidates = [][]string{{"open", LoginURL}}
-	} else {
-		if b := strings.TrimSpace(os.Getenv("BROWSER")); b != "" {
-			candidates = append(candidates, append(strings.Fields(b), LoginURL))
-		}
-		candidates = append(candidates,
-			[]string{"xdg-open", LoginURL},
-			[]string{"gio", "open", LoginURL},
-			[]string{"sensible-browser", LoginURL},
-		)
-	}
-
-	var first error
-	for _, c := range candidates {
-		if _, err := exec.LookPath(c[0]); err != nil {
-			if first == nil {
-				first = err
-			}
-			continue
-		}
-		if err := exec.Command(c[0], c[1:]...).Start(); err == nil {
-			return nil
-		} else if first == nil {
-			first = err
-		}
-	}
-	if first == nil {
-		first = errors.New("no browser launcher found")
-	}
-	return first
-}
-
 // FromBrowser reads a live session out of a signed-in browser profile.
 func FromBrowser() (ytm.Session, error) {
 	header, err := browserHeader(Host, time.Now())
@@ -204,23 +158,26 @@ func FromBrowser() (ytm.Session, error) {
 	return ytm.Session{Cookie: header, UserAgent: UserAgent}, nil
 }
 
-// browserHeader asks each supported engine for the cookies a request to host
-// would send. Chromium is tried first: the rest of the app was built around
-// it, and on a machine with both a Chromium browser and Firefox signed in,
-// the Chromium session is the one the user was already using. Firefox is the
-// fallback, which is what most Linux desktops need.
+// browserHeader reads every profile of every supported browser and renders
+// the one holding the freshest session as a Cookie header.
+//
+// Freshness decides, not the browser: a machine can have Chromium and
+// Firefox both signed in, and the one not opened for a month still holds
+// cookies that look valid but that Google stopped rotating. Chromium is
+// listed first so it wins only a genuine tie, when neither store says when
+// its session was last used.
+//
+// The readers' own errors — a locked keyring, an unreadable store — are
+// reported only when no profile could be used, and then all of them, so a
+// locked keyring and "no Firefox" are not confused with each other.
 func browserHeader(host string, now time.Time) (string, error) {
-	chromiumCookies, _, chromiumErr := chromium.Cookies(host, now)
-	if chromiumErr == nil {
-		return chromium.Header(chromiumCookies), nil
+	chromiumJars, chromiumErr := chromium.Jars(host, now)
+	geckoJars, geckoErr := gecko.Jars(host, now)
+	picked, err := jar.Pick(append(chromiumJars, geckoJars...))
+	if err != nil {
+		return "", errors.Join(err, chromiumErr, geckoErr)
 	}
-	geckoCookies, _, geckoErr := gecko.Cookies(host, now)
-	if geckoErr == nil {
-		return gecko.Header(geckoCookies), nil
-	}
-	// Report both, so a locked keyring and "no Firefox" are not confused
-	// with each other.
-	return "", errors.Join(chromiumErr, geckoErr)
+	return picked.Header(), nil
 }
 
 // Load returns the session to sign in with.
@@ -257,17 +214,6 @@ func Load() (ytm.Session, error) {
 	return ytm.Session{}, fmt.Errorf("%w; and no saved session: %w", liveErr, savedErr)
 }
 
-// Cached returns the saved session file, if there is one, without reading
-// the browser. The app uses it to decide whether it can start straight into
-// the library or has to show the sign-in screen.
-func Cached() (ytm.Session, bool) {
-	s, err := loadFile()
-	if err != nil {
-		return ytm.Session{}, false
-	}
-	return s, true
-}
-
 // loadFile reads the first session file that exists.
 func loadFile() (ytm.Session, error) {
 	tried := sources()
@@ -286,7 +232,7 @@ func loadFile() (ytm.Session, error) {
 		return s, nil
 	}
 	return ytm.Session{}, fmt.Errorf("%w; looked in:\n  %s",
-		ErrNoSession, strings.Join(tried, "\n  "))
+		errNoFile, strings.Join(tried, "\n  "))
 }
 
 // parse reads a map of request headers. Both files are that shape, and

@@ -8,9 +8,9 @@ import (
 
 // loadWAL applies an uncheckpointed write-ahead log over the main file.
 //
-// Ignoring it would be the quiet kind of wrong: Chromium commits to the WAL
-// and checkpoints later, so a freshly refreshed session cookie can live only
-// there. Reading the main file alone would return the superseded value and
+// Ignoring it would be the quiet kind of wrong: both browsers commit to the
+// WAL and checkpoint later, so a freshly refreshed session cookie can live
+// only there. Reading the main file alone would return the superseded value and
 // look like a stale login.
 func (d *DB) loadWAL(path string) error {
 	data, err := os.ReadFile(path)
@@ -40,7 +40,8 @@ func (d *DB) loadWAL(path string) error {
 	salt := data[16:24]
 	s0, s1 := checksum(0, 0, data[0:24], bigEndian)
 	if s0 != binary.BigEndian.Uint32(data[24:28]) || s1 != binary.BigEndian.Uint32(data[28:32]) {
-		return fmt.Errorf("sqlitescan: %s: header checksum mismatch", path)
+		// A log caught mid-rewrite looks like this, so it is worth reading again.
+		return fmt.Errorf("%w: %s: header checksum mismatch", ErrMalformed, path)
 	}
 
 	pages := make(map[uint32][]byte)
@@ -68,7 +69,7 @@ func (d *DB) loadWAL(path string) error {
 			for n, p := range pending {
 				pages[n] = p
 			}
-			pending = make(map[uint32][]byte)
+			clear(pending)
 		}
 	}
 
@@ -85,14 +86,21 @@ const (
 
 // checksum is the WAL's rolling checksum: two accumulators fed pairs of
 // 32-bit words. The input is always a multiple of eight bytes.
+//
+// The two byte orders are separate loops rather than one through
+// binary.ByteOrder: this runs over every byte of the log, and the interface
+// call per word is most of what it costs.
 func checksum(s0, s1 uint32, b []byte, bigEndian bool) (uint32, uint32) {
-	order := binary.ByteOrder(binary.LittleEndian)
 	if bigEndian {
-		order = binary.BigEndian
+		for i := 0; i+8 <= len(b); i += 8 {
+			s0 += binary.BigEndian.Uint32(b[i:i+4]) + s1
+			s1 += binary.BigEndian.Uint32(b[i+4:i+8]) + s0
+		}
+		return s0, s1
 	}
 	for i := 0; i+8 <= len(b); i += 8 {
-		s0 += order.Uint32(b[i:i+4]) + s1
-		s1 += order.Uint32(b[i+4:i+8]) + s0
+		s0 += binary.LittleEndian.Uint32(b[i:i+4]) + s1
+		s1 += binary.LittleEndian.Uint32(b[i+4:i+8]) + s0
 	}
 	return s0, s1
 }

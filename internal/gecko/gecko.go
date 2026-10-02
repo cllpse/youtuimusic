@@ -3,8 +3,7 @@
 // Firefox is not Chromium, so none of internal/chromium applies: its cookies
 // live in cookies.sqlite, they are not encrypted, and profiles are listed in
 // profiles.ini rather than discovered as directories. What the two share is
-// the shape of the answer — the cookies a request to a host would send — and
-// the account cookie that says a session is real.
+// the shape of the answer, which is internal/jar.
 package gecko
 
 import (
@@ -18,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cllpse/youtuimusic/internal/jar"
 	"github.com/cllpse/youtuimusic/internal/sqlitescan"
 )
 
@@ -35,21 +35,8 @@ type Profile struct {
 	Path    string // the cookies.sqlite file itself
 }
 
-// Cookie is one stored cookie.
-type Cookie struct {
-	Name    string
-	Value   string
-	Host    string    // the host column, which may start with a dot
-	Expires time.Time // zero for a session cookie
-}
-
-// ErrNoBrowser means no Firefox profile held a usable session.
-var ErrNoBrowser = errors.New("gecko: no signed-in Firefox profile found")
-
-// Bellwether is the cookie a YouTube session actually turns on, the same one
-// internal/chromium looks for. A profile that has it is signed in; one that
-// has cookies without it is signed out.
-const Bellwether = "__Secure-1PSIDTS"
+// ErrNoBrowser means no Firefox-family browser is installed.
+var ErrNoBrowser = errors.New("gecko: no Firefox-family browser found")
 
 // roots are the directories Firefox keeps its data in, most likely first. The
 // flatpak and snap entries matter because on Linux those installs keep their
@@ -64,6 +51,8 @@ func roots() []string {
 			filepath.Join(home, "Library", "Application Support", "Firefox"),
 			filepath.Join(home, "Library", "Application Support", "LibreWolf"),
 			filepath.Join(home, "Library", "Application Support", "Waterfox"),
+			filepath.Join(home, "Library", "Application Support", "zen"),
+			filepath.Join(home, "Library", "Application Support", "Floorp"),
 		}
 	}
 	return []string{
@@ -71,17 +60,25 @@ func roots() []string {
 		filepath.Join(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"),
 		filepath.Join(home, "snap", "firefox", "common", ".mozilla", "firefox"),
 		filepath.Join(home, ".librewolf"),
+		filepath.Join(home, ".var", "app", "io.gitlab.librewolf-community", ".librewolf"),
 		filepath.Join(home, ".waterfox"),
+		filepath.Join(home, ".zen"),
+		filepath.Join(home, ".var", "app", "app.zen_browser.zen", ".zen"),
+		filepath.Join(home, ".floorp"),
 	}
 }
 
-// names maps a data directory to the product that keeps it.
+// name maps a data directory to the product that keeps it.
 func name(dir string) string {
 	switch {
 	case strings.Contains(dir, "LibreWolf") || strings.HasSuffix(dir, ".librewolf"):
 		return "LibreWolf"
 	case strings.Contains(dir, "Waterfox") || strings.HasSuffix(dir, ".waterfox"):
 		return "Waterfox"
+	case strings.HasSuffix(dir, filepath.Join("Application Support", "zen")) || strings.HasSuffix(dir, ".zen"):
+		return "Zen"
+	case strings.Contains(dir, "Floorp") || strings.HasSuffix(dir, ".floorp"):
+		return "Floorp"
 	default:
 		return "Firefox"
 	}
@@ -208,107 +205,96 @@ func (b Browser) Profiles() []Profile {
 	return out
 }
 
-// sends reports whether a cookie filed under hostKey would be sent to host.
-// A leading dot means the cookie covers subdomains.
-func sends(hostKey, host string) bool {
-	hostKey, host = strings.ToLower(hostKey), strings.ToLower(host)
-	if strings.HasPrefix(hostKey, ".") {
-		return host == hostKey[1:] || strings.HasSuffix(host, hostKey)
-	}
-	return host == hostKey
-}
-
 // Read returns the cookies in this profile that a request to host would send.
-func (p Profile) Read(host string, now time.Time) ([]Cookie, error) {
-	db, err := sqlitescan.Open(p.Path)
+//
+// Only cookies outside any container are taken. Firefox keeps a container's
+// cookies — and partitioned and private-browsing ones — in the same table,
+// told apart by originAttributes, and a request from the app is none of
+// those. Mixing them would mean two sessions' cookies in one header.
+func (p Profile) Read(host string, now time.Time) (jar.Jar, error) {
+	tbl, err := sqlitescan.ReadTable(p.Path, "moz_cookies")
 	if err != nil {
-		return nil, fmt.Errorf("gecko: %s: %w", p.Path, err)
-	}
-	tbl, err := db.Table("moz_cookies")
-	if err != nil {
-		return nil, fmt.Errorf("gecko: %s: %w", p.Path, err)
+		return jar.Jar{}, fmt.Errorf("gecko: %s: %w", p.Path, err)
 	}
 
-	var out []Cookie
+	out := jar.Jar{Browser: p.Browser.Name, Profile: p.Name, Modified: jar.StoreModified(p.Path)}
+	// Looked up by name once per table rather than once per row: a profile
+	// holds thousands of cookies, and most are for other sites.
+	var (
+		hostCol       = tbl.Index("host")
+		nameCol       = tbl.Index("name")
+		valueCol      = tbl.Index("value")
+		pathCol       = tbl.Index("path")
+		originCol     = tbl.Index("originAttributes")
+		expiryCol     = tbl.Index("expiry")
+		lastAccessCol = tbl.Index("lastAccessed")
+	)
 	for _, row := range tbl.Rows {
-		text := func(name string) string {
-			v, _ := tbl.Column(row, name)
-			s, _ := v.(string)
-			return s
-		}
-		hostKey, cookieName := text("host"), text("name")
-		if cookieName == "" || !sends(hostKey, host) {
+		hostKey := text(row, hostCol)
+		if !jar.Sends(hostKey, host) {
 			continue
 		}
-		value := text("value")
-		if value == "" {
+		name, path := text(row, nameCol), text(row, pathCol)
+		if name == "" || !jar.PathMatches(path, jar.RequestPath) {
+			continue
+		}
+		if text(row, originCol) != "" {
+			continue
+		}
+		value := text(row, valueCol)
+		if value == "" || !jar.Valid(value) {
 			continue
 		}
 		var expires time.Time
-		if secs, ok := tbl.Column(row, "expiry"); ok {
-			if n, ok := secs.(int64); ok && n > 0 {
-				expires = time.Unix(n, 0).UTC()
-				if expires.Before(now) {
-					continue
-				}
+		if n, ok := sqlitescan.Cell(row, expiryCol).(int64); ok && n > 0 {
+			expires = time.Unix(n, 0).UTC()
+			if expires.Before(now) {
+				continue
 			}
 		}
-		out = append(out, Cookie{Name: cookieName, Value: value, Host: hostKey, Expires: expires})
+		var lastAccess time.Time
+		if micros, ok := sqlitescan.Cell(row, lastAccessCol).(int64); ok && micros > 0 {
+			lastAccess = time.UnixMicro(micros).UTC()
+		}
+		out.Cookies = append(out.Cookies, jar.Cookie{
+			Name: name, Value: value, Host: hostKey, Path: path,
+			Expires: expires, LastAccess: lastAccess,
+		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
-// Cookies finds the Firefox profile signed in to host and returns its
-// cookies on this machine.
-func Cookies(host string, now time.Time) ([]Cookie, Profile, error) {
-	return cookiesIn(Installed(), host, now)
+// text is a cell read as a string, empty when it is not one.
+func text(row []any, i int) string {
+	s, _ := sqlitescan.Cell(row, i).(string)
+	return s
 }
 
-// cookiesIn is Cookies over an explicit set of browsers, so the selection
-// can be exercised without a real home directory.
-func cookiesIn(installed []Browser, host string, now time.Time) ([]Cookie, Profile, error) {
-	if len(installed) == 0 {
-		return nil, Profile{}, fmt.Errorf("%w: no Firefox-family browser on this machine",
-			ErrNoBrowser)
-	}
+// Jars reads every Firefox-family profile on this machine and returns what
+// each would send to host. Choosing between them is jar.Pick's job.
+func Jars(host string, now time.Time) ([]jar.Jar, error) {
+	return jarsIn(Installed(), host, now)
+}
 
-	var reasons []string
-	var best []Cookie
-	var from Profile
+// jarsIn is Jars over an explicit set of browsers, so it can be exercised
+// without a real home directory.
+func jarsIn(installed []Browser, host string, now time.Time) ([]jar.Jar, error) {
+	if len(installed) == 0 {
+		return nil, ErrNoBrowser
+	}
+	var jars []jar.Jar
+	var errs []error
 	for _, b := range installed {
 		for _, p := range b.Profiles() {
 			got, err := p.Read(host, now)
 			if err != nil {
-				reasons = append(reasons, err.Error())
+				errs = append(errs, err)
 				continue
 			}
-			for _, c := range got {
-				if c.Name == Bellwether {
-					return got, p, nil
-				}
-			}
-			if len(got) > len(best) {
-				best, from = got, p
+			if len(got.Cookies) > 0 {
+				jars = append(jars, got)
 			}
 		}
 	}
-
-	if len(best) > 0 {
-		return best, from, fmt.Errorf("%w: %s/%s has cookies for %s but no %s",
-			ErrNoBrowser, from.Browser.Name, from.Name, host, Bellwether)
-	}
-	if len(reasons) > 0 {
-		return nil, Profile{}, fmt.Errorf("%w: %s", ErrNoBrowser, strings.Join(reasons, "; "))
-	}
-	return nil, Profile{}, fmt.Errorf("%w: no profile had cookies for %s", ErrNoBrowser, host)
-}
-
-// Header renders cookies as a Cookie request header.
-func Header(cookies []Cookie) string {
-	parts := make([]string, 0, len(cookies))
-	for _, c := range cookies {
-		parts = append(parts, c.Name+"="+c.Value)
-	}
-	return strings.Join(parts, "; ")
+	return jars, errors.Join(errs...)
 }

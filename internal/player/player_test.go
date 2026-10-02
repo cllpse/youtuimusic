@@ -3,6 +3,8 @@ package player
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,12 +45,12 @@ func TestVolumeRoundTrips(t *testing.T) {
 	if err := p.SetVolume(42); err != nil {
 		t.Fatalf("SetVolume: %v", err)
 	}
-	got, err := p.Volume()
+	got, err := p.floatProperty(PropVolume)
 	if err != nil {
-		t.Fatalf("Volume: %v", err)
+		t.Fatalf("volume: %v", err)
 	}
 	if got != 42 {
-		t.Fatalf("volume = %d, want 42", got)
+		t.Fatalf("volume = %v, want 42", got)
 	}
 }
 
@@ -75,8 +77,8 @@ func TestPauseRoundTrips(t *testing.T) {
 // The whole point of using IPC over polling: state arrives as events.
 func TestObservedPropertiesArriveAsEvents(t *testing.T) {
 	p := newPlayer(t)
-	if err := p.SetVolume(37); err != nil {
-		t.Fatalf("SetVolume: %v", err)
+	if err := p.SetPaused(true); err != nil {
+		t.Fatalf("SetPaused: %v", err)
 	}
 	deadline := time.After(5 * time.Second)
 	for {
@@ -85,13 +87,35 @@ func TestObservedPropertiesArriveAsEvents(t *testing.T) {
 			if !ok {
 				t.Fatal("event channel closed")
 			}
-			if ev.Name == "volume" {
-				if v, isFloat := ev.Data.(float64); isFloat && int(v) == 37 {
-					return // observed without polling
-				}
+			if ev.Name == PropPause && ev.Data == true {
+				return // observed without polling
 			}
 		case <-deadline:
-			t.Fatal("no volume event within 5s")
+			t.Fatal("no pause event within 5s")
+		}
+	}
+}
+
+// mpv going away on its own — killed, crashed — closes Events, so the app
+// learns playback is gone, and fails commands instead of leaving them to
+// time out.
+func TestMPVExitingShutsThePlayerDown(t *testing.T) {
+	p := newPlayer(t)
+	_ = p.cmd.Process.Kill()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case _, ok := <-p.Events():
+			if ok {
+				continue
+			}
+			if _, err := p.command("get_property", "pause"); err == nil ||
+				!strings.Contains(err.Error(), "went away") {
+				t.Errorf("command after mpv exited: %v", err)
+			}
+			return
+		case <-deadline:
+			t.Fatal("Events was not closed after mpv exited")
 		}
 	}
 }
@@ -217,5 +241,29 @@ func TestEndFileReportsWhyPlaybackStopped(t *testing.T) {
 	}
 	if got != "stop" {
 		t.Errorf("replacing a track gave %q, want stop", got)
+	}
+}
+
+// A file mpv cannot open ends with reason "error" and says why, which is
+// what lets the app retry or report instead of sitting silent.
+func TestAFileThatWillNotOpenSaysWhy(t *testing.T) {
+	p := newPlayer(t)
+	if err := p.Load(filepath.Join(t.TempDir(), "missing.opus")); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-p.Events():
+			if ev.Name != EndFile {
+				continue
+			}
+			if ev.Data != "error" || ev.Err == "" {
+				t.Fatalf("end-file = %+v, want reason error with mpv's explanation", ev)
+			}
+			return
+		case <-deadline:
+			t.Fatal("no end-file within 5s")
+		}
 	}
 }

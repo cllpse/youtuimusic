@@ -8,6 +8,11 @@ before:
 
 builds:
   - main: ./cmd/youtuimusic
+    # Static binaries. With cgo on, the linux/amd64 build — the one target
+    # that matches the runner, so the one not cross-compiled — links glibc
+    # dynamically and will not start on musl distributions or NixOS.
+    env:
+      - CGO_ENABLED=0
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags:

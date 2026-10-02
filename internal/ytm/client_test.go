@@ -43,7 +43,7 @@ func (r rewriteHost) RoundTrip(req *http.Request) (*http.Response, error) {
 func TestAuthorizationHash(t *testing.T) {
 	c := NewClient(Session{Cookie: testCookie})
 	c.Now = func() time.Time { return time.Unix(1700000000, 0).UTC() }
-	got, err := c.authorization()
+	got, err := c.sign(c.current())
 	if err != nil {
 		t.Fatalf("authorization: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestAuthorizationHash(t *testing.T) {
 
 func TestMissingCookieIsAnError(t *testing.T) {
 	c := NewClient(Session{Cookie: "PREF=x"})
-	if _, err := c.authorization(); err == nil {
+	if _, err := c.sign(c.current()); err == nil {
 		t.Fatal("expected an error when __Secure-3PAPISID is absent")
 	}
 }
@@ -166,5 +166,112 @@ func TestFindAllWalksNestedRenderers(t *testing.T) {
 	_ = json.Unmarshal([]byte(`{"a":{"b":[{"target":1},{"c":{"target":2}}]},"target":3}`), &tree)
 	if got := findAll(tree, "target"); len(got) != 3 {
 		t.Fatalf("found %d, want 3: %v", len(got), got)
+	}
+}
+
+// loggedInFor answers like the server: signed in only for the cookie it knows.
+func loggedInFor(cookie string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		state := "0"
+		if r.Header.Get("Cookie") == cookie {
+			state = "1"
+		}
+		_, _ = w.Write([]byte(`{"responseContext":{"serviceTrackingParams":
+			[{"params":[{"key":"logged_in","value":"` + state + `"}]}]},"contents":{}}`))
+	}
+}
+
+// A session that went stale mid-listen is replaced from the browser and the
+// request retried, so it never reaches the screen.
+func TestASignedOutRequestIsRetriedWithARefreshedSession(t *testing.T) {
+	const fresh = "__Secure-3PAPISID=NEW"
+	c := testClient(t, loggedInFor(fresh))
+	refreshes := 0
+	c.Refresh = func() (Session, error) {
+		refreshes++
+		return Session{Cookie: fresh}, nil
+	}
+
+	if _, err := c.LibraryPlaylists(context.Background()); err != nil {
+		t.Fatalf("LibraryPlaylists: %v", err)
+	}
+	if refreshes != 1 {
+		t.Errorf("refreshes = %d, want 1", refreshes)
+	}
+	// The refreshed session is kept, so the next request needs no refresh.
+	if _, err := c.LibraryPlaylists(context.Background()); err != nil || refreshes != 1 {
+		t.Errorf("second request: err=%v refreshes=%d", err, refreshes)
+	}
+}
+
+// When the browser has nothing newer, the signed-out error stands, and the
+// browser is not asked again on every request that follows.
+func TestARefreshThatChangesNothingIsNotRepeated(t *testing.T) {
+	c := testClient(t, loggedInFor("nobody"))
+	refreshes := 0
+	c.Refresh = func() (Session, error) {
+		refreshes++
+		return Session{Cookie: testCookie}, nil
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := c.LibraryPlaylists(context.Background()); !errors.Is(err, ErrSignedOut) {
+			t.Fatalf("err = %v, want ErrSignedOut", err)
+		}
+	}
+	if refreshes != 1 {
+		t.Errorf("refreshes = %d, want 1 within the interval", refreshes)
+	}
+}
+
+// A 401 is the server refusing the signature, which is signed out too.
+func TestUnauthorizedIsSignedOut(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	if _, err := c.LibraryPlaylists(context.Background()); !errors.Is(err, ErrSignedOut) {
+		t.Fatalf("err = %v, want ErrSignedOut", err)
+	}
+}
+
+// A refresh can wait minutes on a keyring prompt. Requests that do not need
+// it must not wait with it, and one that does gives up with its context.
+func TestARefreshDoesNotHoldUpOtherRequests(t *testing.T) {
+	c := testClient(t, loggedInFor("nobody"))
+	started, release := make(chan struct{}), make(chan struct{})
+	c.Refresh = func() (Session, error) {
+		close(started)
+		<-release
+		return Session{Cookie: "__Secure-3PAPISID=NEW"}, nil
+	}
+	defer close(release)
+
+	go func() { _, _ = c.LibraryPlaylists(context.Background()) }()
+	<-started
+
+	got := make(chan Session, 1)
+	go func() { got <- c.current() }()
+	select {
+	case <-got:
+	case <-time.After(time.Second):
+		t.Fatal("reading the session waited on the refresh")
+	}
+
+	// A second signed-out request waits for the running refresh rather than
+	// starting its own, and stops waiting when its context ends.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := c.LibraryPlaylists(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want the request's own deadline", err)
+	}
+}
+
+// When the refresh itself fails, the reason travels with the signed-out
+// error rather than being swallowed.
+func TestAFailedRefreshIsReported(t *testing.T) {
+	c := testClient(t, loggedInFor("nobody"))
+	c.Refresh = func() (Session, error) { return Session{}, errors.New("keyring is locked") }
+	_, err := c.LibraryPlaylists(context.Background())
+	if !errors.Is(err, ErrSignedOut) || !strings.Contains(err.Error(), "keyring is locked") {
+		t.Errorf("err = %v, want signed out with the refresh's reason", err)
 	}
 }

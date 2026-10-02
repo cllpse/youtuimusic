@@ -65,7 +65,7 @@ func TestPlaybackChain(t *testing.T) {
 			if !ok {
 				t.Fatal("player events closed before playback started")
 			}
-			if ev.Name == "time-pos" {
+			if ev.Name == player.PropTimePos {
 				if pos, isFloat := ev.Data.(float64); isFloat && pos > 1.0 {
 					firstAudio = time.Since(loadStart)
 				}

@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +120,7 @@ func (f *fakeLibrary) Rate(_ context.Context, videoID string, r ytm.Rating) erro
 type fakeStreams struct {
 	prefetched []string
 	resolved   []string
+	forgotten  []string
 	err        error
 }
 
@@ -132,6 +134,10 @@ func (f *fakeStreams) Resolve(_ context.Context, id string) (stream.Track, error
 
 func (f *fakeStreams) Prefetch(id string) {
 	f.prefetched = append(f.prefetched, id)
+}
+
+func (f *fakeStreams) Forget(id string) {
+	f.forgotten = append(f.forgotten, id)
 }
 
 type fakeAudio struct {
@@ -755,6 +761,9 @@ func TestAskingForTheNextPageArmsTheSpinner(t *testing.T) {
 	m = drain(t, opened, cmd)
 
 	m.trackCursor = len(m.Tracks)
+	// wired dropped the commands its resize produced, the spinner's first
+	// tick among them, so the loop the model thinks is running is not.
+	m.spinning = false
 	next, cmd := m.fetchMore(false)
 	m = next.(Model)
 	if !m.loadingMore {
@@ -764,22 +773,11 @@ func TestAskingForTheNextPageArmsTheSpinner(t *testing.T) {
 		t.Fatal("asking for a page produced no command")
 	}
 
-	// Run the batch and look for the spinner's tick among the commands.
-	msg := cmd()
-	batch, ok := msg.(tea.BatchMsg)
-	if !ok {
-		t.Fatalf("got %T, want a batch", msg)
-	}
-	ticked := false
-	for _, c := range batch {
-		if c == nil {
-			continue
-		}
-		if _, isTick := c().(spinner.TickMsg); isTick {
-			ticked = true
-		}
-	}
-	if !ticked {
+	// Update arms the spinner on the way out of whatever message began the
+	// wait, so it is looked for there.
+	type nothing struct{}
+	armed, cmd := m.Update(nothing{})
+	if _, ticked := spinnerTick(cmd); !ticked || !armed.(Model).spinning {
 		t.Error("the next-page wait did not arm the spinner")
 	}
 }
@@ -797,6 +795,9 @@ func TestAFailedPageIsReported(t *testing.T) {
 	m = drain(t, opened, cmd)
 
 	m.trackCursor = len(m.Tracks)
+	// wired dropped the commands its resize produced, the spinner's first
+	// tick among them, so the loop the model thinks is running is not.
+	m.spinning = false
 	next, cmd := m.fetchMore(false)
 	m = drain(t, next.(Model), cmd)
 
@@ -991,5 +992,386 @@ func TestACachedTabKeepsItsPlaceInTheListing(t *testing.T) {
 	}
 	if m.rowCount() != len(m.Tracks)+1 {
 		t.Errorf("no offer of the rest: %d rows for %d tracks", m.rowCount(), len(m.Tracks))
+	}
+}
+
+// A tab whose load is still on its way when a popover opens over it is still
+// loaded. The load used to fetch whatever was in front when it came due, and
+// the answer was only put up if it was the thing in front: with a search open
+// meanwhile, the tab was never fetched, or fetched and dropped, and it sat on
+// the loader — with the spinner redrawing the screen — until it was left.
+func TestATabLoadingUnderAPopoverStillLoads(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	m := wired(t, lib, st, newFakeAudio())
+
+	next, cmd := m.Update(playlistsMsg(lib.playlists))
+	// The search opens before the tab's load is due, and the load lands with
+	// it still open.
+	m = press(next.(Model), "/")
+	m = drain(t, m, cmd)
+
+	if !slices.Contains(lib.askedFor, "LM") {
+		t.Fatalf("the tab was never fetched: asked for %v", lib.askedFor)
+	}
+	if len(m.Tracks) != 2 || m.showingID != "LM" {
+		t.Fatalf("the tab's answer was not put up under the popover: %d rows, showing %q",
+			len(m.Tracks), m.showingID)
+	}
+	if m.loading || m.busy() {
+		t.Error("still waiting with nothing on its way")
+	}
+
+	m = press(m, "esc")
+	if out := plain(m.View().Content); strings.Contains(out, loaderLabel) || !strings.Contains(out, "Alpha") {
+		t.Errorf("closing the popover found the tab still loading:\n%s", out)
+	}
+}
+
+// Moving to a tab already in memory cancels the load armed for the one before
+// it. Left to come due, it fetched the tab in front again — over what was
+// already there.
+func TestMovingToAKeptTabCancelsTheLoadBeforeIt(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	m := wired(t, lib, st, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked"}, {ID: "PL1", Title: "Favorites"}}
+	m.cache["PL1"] = cached{tracks: []Track{{VideoID: "p1", Title: "Kept"}}}
+
+	opened, cmd := m.showTab()
+	m, _ = opened.selectTab(1)
+	m = drain(t, m, cmd)
+
+	if len(lib.askedFor) != 0 {
+		t.Errorf("a load came due after its tab was left: asked for %v", lib.askedFor)
+	}
+	if m.loading || len(m.Tracks) != 1 || m.Tracks[0].VideoID != "p1" {
+		t.Errorf("the kept tab is not what is shown: loading=%v %+v", m.loading, m.Tracks)
+	}
+}
+
+// A next page belongs to the listing that asked for it. Moving to another tab
+// while it was on its way put one playlist's page on the end of another's,
+// gave the second the first's place in the listing, and kept both for good.
+func TestAPageLandsOnTheListingThatAskedForIt(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.tracks["LM"] = fromUI(rows(2))
+	lib.next = ytm.Continuation{Endpoint: "browse", Token: "more"}
+	lib.morePage = fromUI([]Track{{VideoID: "z", Title: "from page two"}})
+
+	m := wired(t, lib, st, newFakeAudio())
+	m.Playlists = []Playlist{{ID: "LM", Title: "Liked"}, {ID: "PL1", Title: "Favorites"}}
+	opened, cmd := m.showTab()
+	m = drain(t, opened, cmd)
+	m.cache["PL1"] = cached{tracks: []Track{{VideoID: "p1", Title: "Kept"}}}
+
+	m.trackCursor = len(m.Tracks)
+	// wired dropped the commands its resize produced, the spinner's first
+	// tick among them, so the loop the model thinks is running is not.
+	m.spinning = false
+	next, cmd := m.fetchMore(false)
+	m, _ = next.(Model).selectTab(1)
+	m = drain(t, m, cmd)
+
+	if len(m.Tracks) != 1 || m.Tracks[0].VideoID != "p1" {
+		t.Errorf("the page landed on the tab in front: %+v", m.Tracks)
+	}
+	if kept := m.cache["PL1"].tracks; len(kept) != 1 {
+		t.Errorf("the page was kept as the other tab's: %+v", kept)
+	}
+	if m.more.More() {
+		t.Error("the tab in front took the other's place in its listing")
+	}
+	if kept := m.cache["LM"].tracks; len(kept) != 3 || kept[2].VideoID != "z" {
+		t.Errorf("the tab that asked did not keep its page: %+v", kept)
+	}
+}
+
+// A listing that runs out while another tab is in front pages on in the
+// listing that was playing. It used to ask for the page of the tab in front,
+// which had nothing in it to follow the track with, and playback stopped.
+func TestPlaybackPagesOnInItsOwnListing(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.morePage = fromUI([]Track{{VideoID: "a2", Title: "Next in A"}})
+	au := newFakeAudio(player.Event{Name: player.EndFile, Data: "eof"})
+
+	m := wired(t, lib, st, au)
+	m.Playlists = []Playlist{{ID: "A", Title: "A"}, {ID: "B", Title: "B"}}
+	m.cache["A"] = cached{
+		tracks: []Track{{VideoID: "a1", Title: "Last in A"}},
+		next:   ytm.Continuation{Endpoint: "browse", Token: "more"},
+	}
+	m.cache["B"] = cached{tracks: []Track{{VideoID: "b1", Title: "Only in B"}}}
+	m, _ = m.showTab()
+	started, _ := m.start(m.Tracks[0])
+	m, _ = started.(Model).selectTab(1)
+
+	m = drain(t, m, m.watchEvents())
+
+	if m.playing.VideoID != "a2" {
+		t.Fatalf("playing %q after the end of A's page, want A's next track", m.playing.VideoID)
+	}
+	if len(m.Tracks) != 1 || len(m.cache["B"].tracks) != 1 {
+		t.Errorf("A's page landed on B: %+v", m.Tracks)
+	}
+}
+
+// A search result plays on into the next result. A search had no id, so a
+// track started from one was started from nowhere, and what followed it was
+// looked for in the list underneath.
+func TestASearchResultPlaysOnIntoTheNext(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	lib.results = []ytm.Track{{VideoID: "z1", Title: "One"}, {VideoID: "z2", Title: "Two"}}
+	au := newFakeAudio(player.Event{Name: player.EndFile, Data: "eof"})
+	m := wired(t, lib, st, au)
+	m.Tracks = fromAPI(lib.tracks["LM"])
+
+	m = press(m, "/", "x")
+	next, cmd := m.Update(keyPress("enter"))
+	m = drain(t, next.(Model), cmd)
+	m = press(m, "down", "enter")
+	if m.playing.VideoID != "z1" {
+		t.Fatalf("playing %q, want the first result", m.playing.VideoID)
+	}
+
+	m = drain(t, m, m.watchEvents())
+	if m.playing.VideoID != "z2" {
+		t.Errorf("playing %q after the first result, want the second", m.playing.VideoID)
+	}
+}
+
+// An answer to a query the reader has since replaced is not the answer. It
+// used to be put up whenever it landed, over the newer results.
+func TestAnOlderSearchDoesNotOverwriteANewerOne(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	m = press(m, "/")
+	m.detour.searched = "newer"
+	m.detour.loading = true
+
+	m = drain(t, m, func() tea.Msg {
+		return searchMsg{query: "older", page: ytm.Page{Tracks: []ytm.Track{{VideoID: "old"}}}}
+	})
+	if len(m.detour.tracks) != 0 {
+		t.Errorf("the older answer was put up: %+v", m.detour.tracks)
+	}
+	if !m.detour.loading {
+		t.Error("the older answer ended the newer one's wait")
+	}
+
+	m = drain(t, m, func() tea.Msg {
+		return searchMsg{query: "newer", page: ytm.Page{Tracks: []ytm.Track{{VideoID: "new"}}}}
+	})
+	if len(m.detour.tracks) != 1 || m.detour.tracks[0].VideoID != "new" || m.detour.loading {
+		t.Errorf("the newer answer was not put up: %+v", m.detour.tracks)
+	}
+}
+
+// A popover stepped back to while it is still waiting picks up its answer if
+// that arrived while something else was in front of it.
+func TestAPopoverSteppedBackToCatchesUp(t *testing.T) {
+	m, _, _, _ := menuModel(t)
+	m = openVia(t, m, menuAlbum)
+	album := m.detour.tab
+
+	m = press(m, "R")
+	if !m.detour.loading {
+		t.Fatal("the refetch is not waiting")
+	}
+	refetch := m.fetchTracks(album)
+	m, _ = m.enterDetour(Playlist{ID: "UCdaphni", Title: "DAPHNI", kind: tabArtist})
+	m = drain(t, m, refetch)
+
+	m, _ = m.leaveDetour()
+	if m.detour.tab.ID != album.ID {
+		t.Fatalf("stepped back to %q", m.detour.tab.ID)
+	}
+	if m.detour.loading || len(m.detour.tracks) != 1 {
+		t.Errorf("the album is still waiting on an answer it was given: loading=%v %+v",
+			m.detour.loading, m.detour.tracks)
+	}
+}
+
+// mpv going away ends the stream of events, and that is said rather than
+// swallowed — once, and without watching a stream that has ended.
+func TestThePlayerGoingAwayIsReported(t *testing.T) {
+	m := wired(t, library(), &fakeStreams{}, newFakeAudio())
+	m.loading = true
+
+	msg := m.watchEvents()()
+	next, cmd := m.Update(msg)
+	m = next.(Model)
+	if !errors.Is(m.Err, errPlayerGone) {
+		t.Fatalf("err = %v, want the player gone", m.Err)
+	}
+	if cmd != nil {
+		t.Error("an ended stream was watched again")
+	}
+	// It is not a fetch, so it ends no wait on one.
+	if !m.loading {
+		t.Error("the player going away ended a wait on the network")
+	}
+}
+
+// Positions that would not change the screen do not become messages: the row
+// says whole seconds and whole cells, and every message is a frame.
+func TestOnlyPositionsTheScreenShowsAreDelivered(t *testing.T) {
+	au := newFakeAudio(
+		player.Event{Name: player.PropTimePos, Data: 12.2},
+		player.Event{Name: player.PropTimePos, Data: 12.6},
+		player.Event{Name: player.PropPause, Data: true},
+		player.Event{Name: player.PropTimePos, Data: 12.9},
+		player.Event{Name: player.PropTimePos, Data: 13.1},
+	)
+	m := wired(t, library(), &fakeStreams{}, au)
+	// Long enough that a cell of the bar is several seconds, so it is the
+	// second that decides here.
+	m.Length = 1000 * time.Second
+
+	var delivered []player.Event
+	cmd := m.watchEvents()
+	for cmd != nil {
+		msg := cmd()
+		if ev, ok := msg.(eventMsg); ok {
+			delivered = append(delivered, player.Event(ev))
+		}
+		next, follow := m.Update(msg)
+		m, cmd = next.(Model), follow
+	}
+
+	want := []player.Event{
+		{Name: player.PropTimePos, Data: 12.2},
+		// 12.6 reads 0:12 on the same cells as 12.2.
+		{Name: player.PropPause, Data: true}, // anything but a position always goes
+		// 12.9 likewise.
+		{Name: player.PropTimePos, Data: 13.1},
+	}
+	if !slices.Equal(delivered, want) {
+		t.Errorf("delivered %v, want %v", delivered, want)
+	}
+	if m.Position != 13100*time.Millisecond {
+		t.Errorf("position = %v", m.Position)
+	}
+}
+
+// A position that moves the bar by a cell is a frame even inside one second:
+// on a short track a cell is less than a second long.
+func TestAPositionThatMovesTheBarIsDelivered(t *testing.T) {
+	au := newFakeAudio(
+		player.Event{Name: player.PropTimePos, Data: 12.2},
+		player.Event{Name: player.PropTimePos, Data: 12.9},
+	)
+	m := wired(t, library(), &fakeStreams{}, au)
+	m.Length = 20 * time.Second
+
+	first := m.watchEvents()()
+	_, cmd := m.Update(first)
+	if ev, ok := cmd().(eventMsg); !ok || ev.Data != 12.9 {
+		t.Errorf("a position a cell further along was skipped: got %v after %v", ev, first)
+	}
+}
+
+// A stream mpv refuses is usually a cached URL YouTube has stopped honouring.
+// The first refusal forgets it and resolves the track again; the screen must
+// not sit at 0:00 claiming to play.
+func TestARefusedStreamIsResolvedAgain(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	refused := player.Event{Name: player.EndFile, Data: "error", Err: "loading failed"}
+	au := newFakeAudio(refused)
+	m := wired(t, lib, st, au)
+	m.Tracks = fromAPI(lib.tracks["LM"])
+	m.playing = m.Tracks[0]
+
+	m = drain(t, m, m.watchEvents())
+
+	if len(st.forgotten) != 1 || st.forgotten[0] != "a" {
+		t.Fatalf("forgotten = %v, want the refused track's URL", st.forgotten)
+	}
+	if len(st.resolved) != 1 || st.resolved[0] != "a" {
+		t.Fatalf("resolved = %v, want the same track again", st.resolved)
+	}
+	if m.playing.VideoID != "a" || m.Err != nil {
+		t.Errorf("playing %q with err %v, want a playing again", m.playing.VideoID, m.Err)
+	}
+}
+
+// A track refused twice is the track's problem: it is said, not retried for
+// ever. Stepped through by hand, because the fake player's stream ends once
+// its events run out, and that end is reported over whatever was on screen.
+func TestAStreamRefusedTwiceIsReported(t *testing.T) {
+	lib, st := library(), &fakeStreams{}
+	refused := player.Event{Name: player.EndFile, Data: "error", Err: "loading failed"}
+	m := wired(t, lib, st, newFakeAudio())
+	m.Tracks = fromAPI(lib.tracks["LM"])
+	m.playing = m.Tracks[0]
+
+	next, _ := m.Update(eventMsg(refused)) // the first refusal retries
+	m = next.(Model)
+	if m.retried != "a" || m.Err != nil {
+		t.Fatalf("after one refusal: retried=%q err=%v", m.retried, m.Err)
+	}
+	// The retry gets as far as playing, and the same track keeps its mark.
+	next, _ = m.Update(playingMsg{track: m.playing, length: time.Minute})
+	m = next.(Model)
+	next, _ = m.Update(eventMsg(refused))
+	m = next.(Model)
+
+	if m.Err == nil || !strings.Contains(m.Err.Error(), "loading failed") {
+		t.Errorf("err = %v, want mpv's reason on screen", m.Err)
+	}
+	// Asking for it again earns it another retry.
+	again, _ := m.start(m.playing)
+	if again.(Model).retried != "" {
+		t.Error("playing the track again did not reset its retry")
+	}
+}
+
+// The block's word through a track's start: LOADING while its stream is
+// resolved and while mpv opens it, PLAYING once mpv says it is running, and
+// LOADING again if the network stalls it. Paused and stopped are never
+// mistaken for a wait.
+func TestTheStatusSaysLoadingUntilTheTrackSounds(t *testing.T) {
+	lib := library()
+	m := wired(t, lib, &fakeStreams{}, newFakeAudio())
+	m.Tracks = fromAPI(lib.tracks["LM"])
+	m.loading = false // the library is in; only playback is measured here
+	word := func(m Model) string { w, _ := m.statusState(); return w }
+	step := func(msg tea.Msg) {
+		t.Helper()
+		next, _ := m.Update(msg)
+		m = next.(Model)
+	}
+	idle := func(core, active bool) {
+		step(eventMsg(player.Event{Name: player.PropCoreIdle, Data: core}))
+		step(eventMsg(player.Event{Name: player.PropIdleActive, Data: active}))
+	}
+	idle(true, true) // mpv with nothing loaded
+
+	started, _ := m.start(m.Tracks[0])
+	m = started.(Model)
+	if w := word(m); w != "LOADING" {
+		t.Fatalf("resolving: %q, want LOADING", w)
+	}
+	step(playingMsg{track: m.Tracks[0], length: time.Minute})
+	idle(true, false) // handed to mpv, which is opening it
+	if w := word(m); w != "LOADING" {
+		t.Fatalf("opening: %q, want LOADING", w)
+	}
+	idle(false, false)
+	if w := word(m); w != "PLAYING" {
+		t.Fatalf("sounding: %q, want PLAYING", w)
+	}
+	idle(true, false) // the cache ran dry
+	if w := word(m); w != "LOADING" {
+		t.Fatalf("stalled: %q, want LOADING", w)
+	}
+	step(eventMsg(player.Event{Name: player.PropPause, Data: true}))
+	if w := word(m); w != "PAUSED" {
+		t.Fatalf("paused: %q, want PAUSED", w)
+	}
+
+	// A resolve that fails ends the wait; the error says the rest.
+	started, _ = m.start(m.Tracks[1])
+	m = started.(Model)
+	step(errMsg{errors.New("yt-dlp failed")})
+	if m.requested != "" || word(m) != "ERROR" {
+		t.Errorf("after a failed resolve: requested=%q word=%q", m.requested, word(m))
 	}
 }

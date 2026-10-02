@@ -4,9 +4,7 @@
 /deps/
 *.test
 
-# Local config / credentials — never commit
-/auth.json
-/config.toml
+# Local overrides — never commit
 *.local.*
 
 # Editor / OS

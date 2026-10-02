@@ -13,7 +13,6 @@ package ytm
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha1"
 	"encoding/json"
@@ -23,6 +22,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -47,16 +47,41 @@ func (s Session) sapisid() (string, error) {
 			return value, nil
 		}
 	}
-	return "", errors.New("ytm: no __Secure-3PAPISID cookie — not signed in")
+	return "", fmt.Errorf("%w: no __Secure-3PAPISID cookie", ErrSignedOut)
 }
 
 // Client talks to InnerTube.
 type Client struct {
-	HTTP    *http.Client
-	Session Session
-	// Now is overridable so the auth hash is testable.
+	HTTP *http.Client
+	// Now is overridable so the auth hash and the refresh interval are
+	// testable.
 	Now func() time.Time
+
+	// Refresh, when set, fetches a current session to retry with when a
+	// request comes back signed out.
+	//
+	// The cookie Google authenticates with rotates about every ten minutes
+	// and the API never hands back a replacement; only the browser gets one.
+	// So a session read at startup dies some time into a long listen, and
+	// the browser's newer copy is what revives it.
+	Refresh func() (Session, error)
+
+	// mu guards the fields below. It is only ever held for a moment: a
+	// refresh can wait minutes on a keyring prompt, and every request needs
+	// the session to start.
+	mu          sync.Mutex
+	session     Session
+	lastRefresh time.Time
+	// refreshing is open while a Refresh runs and closed when it ends, so
+	// requests that fail meanwhile wait for its answer instead of asking the
+	// browser again.
+	refreshing chan struct{}
 }
+
+// refreshInterval is how often a signed-out answer may send the client back
+// to the browser. A session that is gone for good — signed out in the
+// browser too — would otherwise cost a keyring read on every request.
+const refreshInterval = 30 * time.Second
 
 // NewClient returns a Client with a connection-pooling HTTP client. The pool
 // matters: the first request of a session pays a TLS handshake worth roughly
@@ -64,7 +89,7 @@ type Client struct {
 func NewClient(s Session) *Client {
 	return &Client{
 		HTTP:    &http.Client{Timeout: 30 * time.Second},
-		Session: s,
+		session: s,
 		Now:     time.Now,
 	}
 }
@@ -75,9 +100,73 @@ func NewClient(s Session) *Client {
 // indistinguishable from an account that genuinely has no playlists.
 var ErrSignedOut = errors.New("ytm: request was not authenticated")
 
-// authorization builds the SAPISIDHASH header value.
-func (c *Client) authorization() (string, error) {
-	sapisid, err := c.Session.sapisid()
+// current is the session to send with, taken whole so one request does not
+// mix two of them.
+func (c *Client) current() Session {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.session
+}
+
+// errNothingNewer means a refresh was not worth retrying with: it was asked
+// for too recently, or the browser held the same session.
+var errNothingNewer = errors.New("no newer session")
+
+// refreshed returns a session to retry with after stale was turned away.
+//
+// Several requests can fail on the same stale session at once. The first
+// runs Refresh, outside the lock; the rest wait for it — or for their own
+// context — and then retry with whatever it found.
+func (c *Client) refreshed(ctx context.Context, stale Session) (Session, error) {
+	for {
+		c.mu.Lock()
+		if c.session.Cookie != stale.Cookie {
+			s := c.session
+			c.mu.Unlock()
+			return s, nil
+		}
+		if wait := c.refreshing; wait != nil {
+			c.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return Session{}, ctx.Err()
+			}
+		}
+		if c.Refresh == nil || c.Now().Sub(c.lastRefresh) < refreshInterval {
+			c.mu.Unlock()
+			return Session{}, errNothingNewer
+		}
+		c.lastRefresh = c.Now()
+		done := make(chan struct{})
+		c.refreshing = done
+		c.mu.Unlock()
+
+		fresh, err := c.Refresh()
+		newer := err == nil && fresh.Cookie != "" && fresh.Cookie != stale.Cookie
+
+		c.mu.Lock()
+		if newer {
+			c.session = fresh
+		}
+		c.refreshing = nil
+		close(done)
+		c.mu.Unlock()
+
+		switch {
+		case err != nil:
+			return Session{}, err
+		case !newer:
+			return Session{}, errNothingNewer
+		}
+		return fresh, nil
+	}
+}
+
+// sign builds the SAPISIDHASH header value for a session.
+func (c *Client) sign(s Session) (string, error) {
+	sapisid, err := s.sapisid()
 	if err != nil {
 		return "", err
 	}
@@ -92,11 +181,34 @@ func (c *Client) clientVersion() string {
 	return "1." + c.Now().Format("20060102") + ".01.00"
 }
 
-// post sends a request and returns the parsed response tree. It unmarshals
-// exactly once: every reader of an InnerTube response searches the same tree,
-// and unmarshalling per reader is what made a mix page cost four passes.
+// post sends a request and returns the parsed response tree. A request
+// turned away as signed out is retried once with a refreshed session; when
+// the refresh itself failed, that is said alongside, since "signed out"
+// alone would hide a locked keyring.
 func (c *Client) post(ctx context.Context, endpoint string, body map[string]any) (map[string]any, error) {
-	authz, err := c.authorization()
+	session := c.current()
+	tree, err := c.send(ctx, session, endpoint, body)
+	if !errors.Is(err, ErrSignedOut) || c.Refresh == nil {
+		return tree, err
+	}
+	fresh, refreshErr := c.refreshed(ctx, session)
+	switch {
+	case errors.Is(refreshErr, errNothingNewer):
+		return tree, err
+	case refreshErr != nil:
+		return tree, fmt.Errorf("%w (reading the browser again: %w)", err, refreshErr)
+	}
+	return c.send(ctx, fresh, endpoint, body)
+}
+
+// send makes one request with one session. It decodes exactly once: every
+// reader of an InnerTube response searches the same tree, and unmarshalling
+// per reader is what made a mix page cost four passes.
+//
+// Compression is left to the transport, which asks for gzip and undoes it
+// on its own as long as the request does not set Accept-Encoding itself.
+func (c *Client) send(ctx context.Context, session Session, endpoint string, body map[string]any) (map[string]any, error) {
+	authz, err := c.sign(session)
 	if err != nil {
 		return nil, err
 	}
@@ -119,20 +231,19 @@ func (c *Client) post(ctx context.Context, endpoint string, body map[string]any)
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.Session.Cookie != "" {
-		req.Header.Set("Cookie", c.Session.Cookie)
+	if session.Cookie != "" {
+		req.Header.Set("Cookie", session.Cookie)
 	}
 	req.Header.Set("Authorization", authz)
 	req.Header.Set("Origin", origin)
-	req.Header.Set("Accept-Encoding", "gzip")
-	if c.Session.UserAgent != "" {
-		req.Header.Set("User-Agent", c.Session.UserAgent)
+	if session.UserAgent != "" {
+		req.Header.Set("User-Agent", session.UserAgent)
 	}
-	if c.Session.VisitorID != "" {
-		req.Header.Set("X-Goog-Visitor-Id", c.Session.VisitorID)
+	if session.VisitorID != "" {
+		req.Header.Set("X-Goog-Visitor-Id", session.VisitorID)
 	}
-	if c.Session.AuthUser != "" {
-		req.Header.Set("X-Goog-AuthUser", c.Session.AuthUser)
+	if session.AuthUser != "" {
+		req.Header.Set("X-Goog-AuthUser", session.AuthUser)
 	}
 
 	resp, err := c.HTTP.Do(req)
@@ -141,25 +252,19 @@ func (c *Client) post(ctx context.Context, endpoint string, body map[string]any)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	var reader io.Reader = resp.Body
-	if resp.Header.Get("Content-Encoding") == "gzip" {
-		gz, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("ytm: %s: gzip: %w", endpoint, err)
-		}
-		defer func() { _ = gz.Close() }()
-		reader = gz
-	}
-	raw, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, fmt.Errorf("ytm: %s: read: %w", endpoint, err)
-	}
 	if resp.StatusCode != http.StatusOK {
+		// Drained so the connection goes back to the pool.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		// A signature the server will not accept is a 401 rather than an
+		// anonymous answer, and it means the same thing.
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("%w: %s: HTTP 401", ErrSignedOut, endpoint)
+		}
 		return nil, fmt.Errorf("ytm: %s: HTTP %d", endpoint, resp.StatusCode)
 	}
 
 	var tree map[string]any
-	if err := json.Unmarshal(raw, &tree); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
 		return nil, fmt.Errorf("ytm: %s: parse: %w", endpoint, err)
 	}
 	if !loggedIn(tree) {
@@ -175,9 +280,15 @@ func (c *Client) post(ctx context.Context, endpoint string, body map[string]any)
 //
 // It walks for the one parameter rather than unmarshalling an envelope: the
 // tree is already in hand, and a second parse of a multi-megabyte page is what
-// this function used to cost.
-func loggedIn(tree any) bool {
-	value, ok := findParam(tree, "logged_in")
+// this function used to cost. The walk starts at responseContext, where the
+// parameter lives; from the root, map order would send it through the whole
+// page first about half the time.
+func loggedIn(tree map[string]any) bool {
+	from, ok := tree["responseContext"]
+	if !ok {
+		from = tree
+	}
+	value, ok := findParam(from, "logged_in")
 	return ok && value == "1"
 }
 
@@ -221,7 +332,7 @@ func (c *Client) LibraryPlaylists(ctx context.Context) ([]Playlist, error) {
 	var out []Playlist
 	for _, node := range findAll(tree, "musicTwoRowItemRenderer") {
 		item, _ := node.(map[string]any)
-		id := browseID(item)
+		id, _ := browseTile(item)
 		// The grid leads with a "New playlist" tile that has no browseId.
 		if id == "" {
 			continue
@@ -233,13 +344,6 @@ func (c *Client) LibraryPlaylists(ctx context.Context) ([]Playlist, error) {
 		})
 	}
 	return out, nil
-}
-
-func browseID(item map[string]any) string {
-	nav, _ := item["navigationEndpoint"].(map[string]any)
-	be, _ := nav["browseEndpoint"].(map[string]any)
-	id, _ := be["browseId"].(string)
-	return id
 }
 
 // runsText flattens InnerTube's {"runs":[{"text":...}]} shape.
@@ -286,28 +390,4 @@ func findAll(node any, key string) []any {
 	}
 	walk(node)
 	return out
-}
-
-// findFirst is findAll for the many callers that stop at the first hit. It
-// does not build the slice findAll would, which matters when the hit is found
-// near the top of a multi-megabyte page.
-func findFirst(node any, key string) (any, bool) {
-	switch v := node.(type) {
-	case map[string]any:
-		if hit, ok := v[key]; ok {
-			return hit, true
-		}
-		for _, child := range v {
-			if hit, ok := findFirst(child, key); ok {
-				return hit, true
-			}
-		}
-	case []any:
-		for _, child := range v {
-			if hit, ok := findFirst(child, key); ok {
-				return hit, true
-			}
-		}
-	}
-	return nil, false
 }

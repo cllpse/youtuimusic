@@ -21,10 +21,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cllpse/youtuimusic/internal/tool"
-	"github.com/cllpse/youtuimusic/internal/ytm"
 )
 
 // URLs are signed and expire. YouTube's are good for around six hours; five
@@ -74,6 +74,16 @@ type Resolver struct {
 	// CachePath is where resolved URLs are written so they survive a restart.
 	// Empty disables persistence.
 	CachePath string
+
+	// saveMu serialises writes of the cache file: resolves finish
+	// concurrently, and two writers racing on one file can leave it holding
+	// the older snapshot.
+	saveMu sync.Mutex
+
+	// prefetchSlots caps how many prefetches run yt-dlp at once, and
+	// prefetchGen is the newest one asked for. See Prefetch.
+	prefetchSlots chan struct{}
+	prefetchGen   atomic.Uint64
 }
 
 type call struct {
@@ -87,9 +97,10 @@ type call struct {
 // config; main wires it up with DefaultCachePath.
 func New() *Resolver {
 	return &Resolver{
-		cache:    make(map[string]entry),
-		inFlight: make(map[string]*call),
-		failures: make(map[string]failure),
+		cache:         make(map[string]entry),
+		inFlight:      make(map[string]*call),
+		failures:      make(map[string]failure),
+		prefetchSlots: make(chan struct{}, maxPrefetches),
 		// System, not Path: yt-dlp has to keep up with YouTube, so a newer
 		// copy on PATH beats the one bundled in the archive.
 		Binary: tool.System("yt-dlp"),
@@ -99,11 +110,11 @@ func New() *Resolver {
 	}
 }
 
-// DefaultCachePath is where resolved URLs live. It sits beside the session and
-// the remembered state. An error means no home directory, which just disables
-// persistence.
+// DefaultCachePath is where resolved URLs live: the user's cache directory,
+// since losing them costs one yt-dlp run per track and nothing else. An error
+// means no home directory, which just disables persistence.
 func DefaultCachePath() string {
-	dir, err := os.UserConfigDir()
+	dir, err := os.UserCacheDir()
 	if err != nil {
 		return ""
 	}
@@ -144,11 +155,16 @@ func (r *Resolver) load() {
 }
 
 // save writes the live cache to disk. It copies under the lock and writes
-// outside it, so a slow disk does not hold up a resolve.
+// outside it, so a slow disk does not hold up a resolve; saveMu keeps two
+// saves from interleaving, and the rename means a reader only ever sees a
+// whole file.
 func (r *Resolver) save() {
 	if r.CachePath == "" {
 		return
 	}
+	r.saveMu.Lock()
+	defer r.saveMu.Unlock()
+
 	r.mu.Lock()
 	stored := make(map[string]persistedEntry, len(r.cache))
 	for id, e := range r.cache {
@@ -160,14 +176,36 @@ func (r *Resolver) save() {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(r.CachePath), 0o755); err != nil {
+	dir := filepath.Dir(r.CachePath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
-	tmp := r.CachePath + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	tmp, err := os.CreateTemp(dir, ".streams-*")
+	if err != nil {
 		return
 	}
-	_ = os.Rename(tmp, r.CachePath)
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	_, err = tmp.Write(raw)
+	if closeErr := tmp.Close(); err != nil || closeErr != nil {
+		return
+	}
+	_ = os.Rename(tmp.Name(), r.CachePath)
+}
+
+// prune drops expired entries, so the cache — and the file written from it
+// on every resolve — holds the last few hours of listening rather than the
+// whole session. Called with mu held.
+func (r *Resolver) prune(now time.Time) {
+	for id, e := range r.cache {
+		if now.After(e.expires) {
+			delete(r.cache, id)
+		}
+	}
+	for id, f := range r.failures {
+		if now.After(f.expires) {
+			delete(r.failures, id)
+		}
+	}
 }
 
 // ErrNotResolved means yt-dlp ran but produced no usable URL.
@@ -184,6 +222,23 @@ func (r *Resolver) Cached(videoID string) (Track, bool) {
 		return Track{}, false
 	}
 	return e.track, true
+}
+
+// Forget drops a cached URL that turned out not to play.
+//
+// A URL is signed to last hours, but YouTube can refuse it long before that
+// — it is tied to the address it was resolved from, so a new network is
+// enough — and a cache that kept handing it out would leave the track
+// unplayable until it expired, across restarts too. The file is rewritten
+// so the next launch does not bring it back.
+func (r *Resolver) Forget(videoID string) {
+	r.mu.Lock()
+	_, had := r.cache[videoID]
+	delete(r.cache, videoID)
+	r.mu.Unlock()
+	if had {
+		r.save()
+	}
 }
 
 // cachedFailure returns a recent failure for videoID, if there is one.
@@ -222,14 +277,24 @@ func (r *Resolver) Resolve(ctx context.Context, videoID string) (Track, error) {
 	r.mu.Unlock()
 
 	c.track, c.err = r.run(ctx, videoID)
+	// A run cut short by its caller says nothing about the track, so it is
+	// reported as the cancellation it was and not remembered as a failure:
+	// one slow moment must not make the track unplayable for minutes.
+	cancelled := ctx.Err() != nil
+	if cancelled {
+		c.err = fmt.Errorf("yt-dlp %s: %w", videoID, ctx.Err())
+	}
 	close(c.done)
 
+	now := time.Now()
 	r.mu.Lock()
 	delete(r.inFlight, videoID)
-	if c.err == nil {
-		r.cache[videoID] = entry{track: c.track, expires: time.Now().Add(cacheTTL)}
-	} else {
-		r.failures[videoID] = failure{err: c.err, expires: time.Now().Add(failureTTL)}
+	r.prune(now)
+	switch {
+	case c.err == nil:
+		r.cache[videoID] = entry{track: c.track, expires: now.Add(cacheTTL)}
+	case !cancelled:
+		r.failures[videoID] = failure{err: c.err, expires: now.Add(failureTTL)}
 	}
 	r.mu.Unlock()
 	if c.err == nil {
@@ -240,12 +305,24 @@ func (r *Resolver) Resolve(ctx context.Context, videoID string) (Track, error) {
 
 // prefetchTimeout bounds a background resolve. Prefetch owns this so the
 // caller does not have to keep a context alive past the command that started
-// it, which is what the old design's timer leak was for.
+// it.
 const prefetchTimeout = 60 * time.Second
+
+// maxPrefetches is how many prefetches may run yt-dlp at once. Each is a
+// Python process costing tens of megabytes and a second or two of CPU, and
+// a cursor stepping down a playlist asks for a new one every few hundred
+// milliseconds.
+const maxPrefetches = 2
 
 // Prefetch resolves in the background and discards the result; the point is
 // the cache entry it leaves behind. Errors are intentionally dropped — a
 // failed prefetch just means the later Resolve reads the stored failure.
+//
+// At most maxPrefetches run at once. One that has to wait for a slot is
+// dropped when it gets one if a newer prefetch was asked for meanwhile: the
+// cursor has moved on, and the row it left is not worth a process. A running
+// prefetch is never cancelled, because a play of the same track may have
+// joined it.
 func (r *Resolver) Prefetch(videoID string) {
 	if videoID == "" {
 		return
@@ -256,7 +333,13 @@ func (r *Resolver) Prefetch(videoID string) {
 	if r.cachedFailure(videoID) != nil {
 		return
 	}
+	generation := r.prefetchGen.Add(1)
 	go func() {
+		r.prefetchSlots <- struct{}{}
+		defer func() { <-r.prefetchSlots }()
+		if r.prefetchGen.Load() != generation {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), prefetchTimeout)
 		defer cancel()
 		_, _ = r.Resolve(ctx, videoID)
@@ -280,9 +363,9 @@ func (r *Resolver) run(ctx context.Context, videoID string) (Track, error) {
 		"--no-playlist",
 		"https://music.youtube.com/watch?v="+videoID,
 	)
-	// Some tracks need a signed-in session. yt-dlp reads browser cookies, and
-	// its keyring choice depends on XDG_CURRENT_DESKTOP — see ytm.CookieEnv.
-	cmd.Env = ytm.Environ()
+	// A user's yt-dlp config may read browser cookies, and then its keyring
+	// choice depends on XDG_CURRENT_DESKTOP — see CookieEnv.
+	cmd.Env = environ()
 	out, err := cmd.Output()
 	if err != nil {
 		var ee *exec.ExitError

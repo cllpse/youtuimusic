@@ -17,7 +17,8 @@
 #   aur — an account at https://aur.archlinux.org, and the account's SSH key
 #     in ~/.ssh. One-time setup:
 #       # create the account in the web UI, then add your key in My Account
-#       ssh aur@aur.archlinux.org            # should greet you
+#       ssh aur@aur.archlinux.org            # should greet you by name
+#     and makepkg locally, to write .SRCINFO.
 #
 # Neither channel is touched unless its prerequisites are satisfied; the
 # script prints what is missing and what to do about it.
@@ -29,11 +30,18 @@ TAP_REPO=cllpse/homebrew-tap
 PKG=youtuimusic
 CHANNEL=${1:-all}
 VERSION=${2:-}
-WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
 
 say() { echo "release-channels: $*"; }
 die() { echo "release-channels: $*" >&2; exit 1; }
+
+# Checked before anything is fetched, so a typo costs nothing.
+case "$CHANNEL" in
+    homebrew|aur|all) ;;
+    *) die "unknown channel: $CHANNEL (use homebrew, aur or all)" ;;
+esac
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
 
 # ---- resolve the release ---------------------------------------------------
 
@@ -49,12 +57,15 @@ curl -fsSL "https://github.com/$REPO/releases/download/$VERSION/checksums.txt" \
     -o "$WORK/checksums.txt" ||
     die "cannot fetch checksums.txt for $VERSION — was it released by goreleaser?"
 
-sha() { awk -v f="$1" '$2 ~ f {print $1}' "$WORK/checksums.txt"; }
-DARWIN_AMD64=$(sha "youtuimusic_${VER}_darwin_amd64.tar.gz")
-DARWIN_ARM64=$(sha "youtuimusic_${VER}_darwin_arm64.tar.gz")
-LINUX_AMD64=$(sha "youtuimusic_${VER}_linux_amd64.tar.gz")
-LINUX_ARM64=$(sha "youtuimusic_${VER}_linux_arm64.tar.gz")
-[ -n "$DARWIN_AMD64" ] && [ -n "$LINUX_AMD64" ] ||
+sha() { awk -v f="$1" '$2 == f {print $1}' "$WORK/checksums.txt"; }
+DARWIN_AMD64=$(sha "${PKG}_${VER}_darwin_amd64.tar.gz")
+DARWIN_ARM64=$(sha "${PKG}_${VER}_darwin_arm64.tar.gz")
+LINUX_AMD64=$(sha "${PKG}_${VER}_linux_amd64.tar.gz")
+LINUX_ARM64=$(sha "${PKG}_${VER}_linux_arm64.tar.gz")
+# All four, or the formula and PKGBUILD would carry an empty sha256 for a
+# platform and fail there at install time instead of here.
+[ -n "$DARWIN_AMD64" ] && [ -n "$DARWIN_ARM64" ] &&
+    [ -n "$LINUX_AMD64" ] && [ -n "$LINUX_ARM64" ] ||
     die "checksums.txt is missing expected archives"
 
 # ---- homebrew --------------------------------------------------------------
@@ -107,7 +118,7 @@ class Youtuimusic < Formula
   end
 
   def install
-    bin "$PKG"
+    bin.install "$PKG"
   end
 
   def caveats
@@ -135,25 +146,36 @@ EOF
 # ---- aur -------------------------------------------------------------------
 
 do_aur() {
+    if ! command -v makepkg >/dev/null 2>&1; then
+        echo "aur: makepkg is required to write .SRCINFO (Arch, or pacman on other distros)" >&2
+        return 1
+    fi
+
     say "aur: checking ssh access to aur.archlinux.org"
+    # A registered key is greeted by name before the connection closes. The
+    # greeting is matched loosely — Hello or Welcome — rather than on one
+    # exact wording.
     if ! ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new aur@aur.archlinux.org 2>&1 |
-        grep -q "Hello"; then
+        grep -q -e "Hello" -e "Welcome"; then
         cat >&2 <<EOF
 aur: ssh to aur@aur.archlinux.org failed (no account or ssh key not registered)
 
   one-time setup:
     1. create an account at https://aur.archlinux.org/register
     2. in My Account, paste the public half of your ssh key (~/.ssh/id_*.pub)
-    3. ssh aur@aur.archlinux.org   # should print "Hello <username>!"
+    3. ssh aur@aur.archlinux.org   # should greet you by name
 
   then rerun this script.
 EOF
         return 1
     fi
 
+    # A package that does not exist yet clones as an empty repository, and
+    # the first push creates it, so a failure here is access, not absence.
     git clone -q "ssh://aur@aur.archlinux.org/$PKG.git" "$WORK/aur" ||
-        die "cannot clone the $PKG AUR package — create it first with: git init + push an initial PKGBUILD"
+        die "cannot clone ssh://aur@aur.archlinux.org/$PKG.git"
 
+    # This runs in a subshell (see run_channel), so the cd does not leak.
     cd "$WORK/aur"
     cat > PKGBUILD <<EOF
 # Maintainer: cllpse <https://github.com/cllpse>
@@ -179,22 +201,34 @@ EOF
         say "aur: PKGBUILD already at $VER — nothing to do"
     else
         git commit -q -m "$PKG $VER-1"
-        git push -q origin master
+        # HEAD:master, because an empty clone names its branch after the
+        # local init.defaultBranch, and the AUR only accepts master.
+        git push -q origin HEAD:master
         say "aur: pushed — installable with: paru -S $PKG"
     fi
-    cd - >/dev/null
 }
 
 # ---- run -------------------------------------------------------------------
 
+# run_channel runs one channel in a subshell with -e in force. Called the
+# obvious way, as `do_aur || RET=1`, the shell ignores -e for the whole
+# function body, so a failed clone, makepkg or push would carry on and
+# print "pushed". A failure in one channel still lets the other run.
 RET=0
+run_channel() {
+    set +e
+    (set -e; "$1")
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || RET=1
+}
+
 case "$CHANNEL" in
-    homebrew) do_homebrew || RET=1 ;;
-    aur) do_aur || RET=1 ;;
+    homebrew) run_channel do_homebrew ;;
+    aur) run_channel do_aur ;;
     all)
-        do_homebrew || RET=1
-        do_aur || RET=1
+        run_channel do_homebrew
+        run_channel do_aur
         ;;
-    *) die "unknown channel: $2 (use homebrew, aur or all)" ;;
 esac
 exit $RET

@@ -1,4 +1,4 @@
-package ytm
+package stream
 
 import (
 	"os"
@@ -27,7 +27,11 @@ var ytdlpKnownDesktops = []string{
 // encrypt cookies do it against gnome-libsecret.
 const desktopFallback = "GNOME"
 
-// CookieEnv returns the environment to run a cookie-reading subprocess under.
+// CookieEnv returns the environment to run yt-dlp under.
+//
+// youtuimusic does not ask yt-dlp for cookies, but a user's own yt-dlp
+// config may (--cookies-from-browser), and some tracks need a signed-in
+// session. When it does, this is what lets it decrypt them.
 //
 // XDG_CURRENT_DESKTOP is a colon-separated priority list and yt-dlp scans
 // every part, so appending a known desktop fixes the lookup while the real one
@@ -71,5 +75,5 @@ func desktopIsKnown(value string) bool {
 	return false
 }
 
-// Environ is CookieEnv applied to this process's environment.
-func Environ() []string { return CookieEnv(os.Environ()) }
+// environ is CookieEnv applied to this process's environment.
+func environ() []string { return CookieEnv(os.Environ()) }

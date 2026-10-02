@@ -7,9 +7,9 @@
 // fix feel worse than the problem.
 //
 // It holds three things and no more: the playlist that was open, the track
-// that was playing in it, and whether the reader had dropped the accent
-// colours. The theme is a display preference and it would be a small tax of
-// its own to choose it again every launch.
+// that was playing in it, and whether the reader had switched the accent
+// colours on. The app opens in monochrome; a reader who chose colour should
+// not have to choose it again every launch.
 package state
 
 import (
@@ -26,8 +26,10 @@ type State struct {
 	// Playing is the track that was playing, by video id. Empty when
 	// nothing was.
 	Playing string `json:"playing,omitempty"`
-	// Mono is whether the accent colours were off.
-	Mono bool `json:"mono,omitempty"`
+	// Colour is whether the accent colours were on. It is stored this way
+	// round because monochrome is the default, so the zero value — a fresh
+	// install, or a file from before the default changed — opens in it.
+	Colour bool `json:"colour,omitempty"`
 }
 
 // Path is where the state is kept. It sits beside the session rather than

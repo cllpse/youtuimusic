@@ -85,6 +85,12 @@ func (m Model) modalKind() string {
 	return "Album"
 }
 
+// searchID is what a search's results are kept under, and so what a track
+// played from them says it was started from. A search has no id of its own
+// until it has results; its query is the nearest thing, and the prefix keeps
+// it from ever meeting a playlist's.
+func searchID(query string) string { return "search:" + query }
+
 // newSearchInput builds the search box. It is bubbles' text input rather than
 // a hand-rolled one: cursor movement, deletion, paste and width are all things
 // it already gets right, and every one of them was a bug waiting in a switch
@@ -171,7 +177,9 @@ func (m Model) typeInto(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 		// The keys stay in the input: results arrive with nothing chosen,
 		// and down is what goes into them.
 		m.detour.searched = m.detour.query
-		return m, batch(m.startLoading(), m.runSearch(m.detour.query)), true
+		m.startDetourLoading()
+		cmd := m.runSearch(m.detour.query)
+		return m, cmd, true
 	case "down":
 		if len(m.detour.tracks) == 0 {
 			return m, nil, true
@@ -205,7 +213,7 @@ func (m Model) renderModal() string {
 	}
 	lines = append(lines, m.modalHeader(inner), under)
 
-	if m.detour.tab.kind == tabSearch && !m.loading && len(m.detour.tracks) == 0 {
+	if m.detour.tab.kind == tabSearch && !m.detour.loading && len(m.detour.tracks) == 0 {
 		note := dim.Render(labelTypeToSearch)
 		if m.detour.searched != "" {
 			// What was run, not what is being typed: mid-word there is
@@ -218,7 +226,7 @@ func (m Model) renderModal() string {
 		return modalBox.Render(strings.Join(lines, "\n"))
 	}
 
-	if m.loading && len(m.detour.tracks) == 0 {
+	if m.detour.loading && len(m.detour.tracks) == 0 {
 		lines = append(lines, pad(m.loader(), inner))
 		for len(lines) < modalHeader+height {
 			lines = append(lines, strings.Repeat(" ", inner))
@@ -226,26 +234,9 @@ func (m Model) renderModal() string {
 		return modalBox.Render(strings.Join(lines, "\n"))
 	}
 
-	lines = append(lines, trackTable{
-		sort:        m.sort,
-		highlight:   m.highlightColor(),
-		dimmed:      m.dimmedColor(),
-		mono:        m.mono,
-		now:         m.clock(),
-		tracks:      m.detour.tracks,
-		cursor:      m.detour.cursor,
-		offset:      m.detour.offset,
-		width:       inner,
-		height:      height,
-		showRating:  m.detour.tab.ID != likedPlaylistID,
-		accent:      m.accentOf(m.detour.tab.ID),
-		titleOnly:   m.detour.tab.kind == tabAlbum,
-		playing:     m.playing.VideoID,
-		paused:      m.Paused,
-		more:        m.detour.more.More(),
-		loadingMore: m.loadingMore,
-		loader:      m.loader(),
-	}.rows()...)
+	table := m.newTable(m.detour.tab.ID, m.detour.tracks, m.detourList(), inner, height)
+	table.titleOnly = m.detour.tab.kind == tabAlbum
+	lines = append(lines, table.rows()...)
 	return modalBox.Render(strings.Join(lines, "\n"))
 }
 

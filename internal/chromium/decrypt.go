@@ -8,6 +8,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+
+	"github.com/cllpse/youtuimusic/internal/jar"
 )
 
 // Chromium's cookie encryption, which is the same everywhere it is not
@@ -37,27 +39,47 @@ func deriveKey(password []byte, iterations int) ([]byte, error) {
 	return pbkdf2.Key(sha1.New, string(password), []byte(keySalt), iterations, keyLen)
 }
 
-// decrypt turns a stored encrypted_value into the cookie's text.
+// decrypt turns a stored encrypted_value into the cookie's text, trying each
+// key the set holds for the value's prefix.
+//
+// A key is taken only when its result unpads and reads as a cookie value. The
+// padding check alone lets a wrong key through about once in 256 cookies, and
+// what that produces is noise that would go out as a session cookie.
+func decrypt(value []byte, host string, keys keySet) (string, error) {
+	if len(value) < 3 {
+		return "", fmt.Errorf("%w: value too short", ErrEncrypted)
+	}
+	version := string(value[:3])
+	candidates, ok := keys[version]
+	if !ok {
+		return "", fmt.Errorf("%w: unsupported format %q", ErrEncrypted, version)
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("%w: no key for %q values", ErrEncrypted, version)
+	}
+	err := fmt.Errorf("%w: no key fits", ErrEncrypted)
+	for _, key := range candidates {
+		plain, e := decryptWith(value[3:], host, key)
+		if e != nil {
+			err = e
+			continue
+		}
+		if jar.Valid(plain) {
+			return plain, nil
+		}
+		err = fmt.Errorf("%w: not a cookie value (probably the wrong key)", ErrEncrypted)
+	}
+	return "", err
+}
+
+// decryptWith is one key's attempt.
 //
 // host is needed because newer Chromium prepends a SHA-256 of the cookie's
 // domain to the plaintext, binding the value to the host it was set for.
 // Rather than test the browser's version, this checks for the hash and
 // strips it when it is there, which is self-verifying and survives whatever
 // the next version does.
-func decrypt(value []byte, host string, keys map[string][]byte) (string, error) {
-	if len(value) < 3 {
-		return "", fmt.Errorf("%w: value too short", ErrEncrypted)
-	}
-	version := string(value[:3])
-	key, ok := keys[version]
-	if !ok {
-		return "", fmt.Errorf("%w: unsupported format %q", ErrEncrypted, version)
-	}
-	if key == nil {
-		return "", fmt.Errorf("%w: no key for %q values", ErrEncrypted, version)
-	}
-
-	body := value[3:]
+func decryptWith(body []byte, host string, key []byte) (string, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err

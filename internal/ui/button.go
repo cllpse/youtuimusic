@@ -2,7 +2,6 @@ package ui
 
 import (
 	"image/color"
-	"strings"
 
 	"charm.land/lipgloss/v2"
 )
@@ -20,9 +19,9 @@ import (
 // between buttons rather than part of one: every cell a button draws answers
 // to a click, and no cell it does not draw does.
 const (
-	buttonPadding = 0
-	buttonGap     = 2
-	// controlsRows is how tall a row of them is.
+	buttonGap = 2
+	// controlsRows is how tall a row of them is: one, because a button is one
+	// line.
 	controlsRows = 1
 )
 
@@ -50,18 +49,9 @@ const (
 // terminal to take its own foreground down, which lands on any theme.
 var disabledButton = lipgloss.NewStyle().Faint(true)
 
-// buttonWidth is what one button occupies: its label and the space either
-// side of it. What is drawn has to be this wide or a click lands on the
-// wrong one.
-func buttonWidth(label string) int {
-	return lipgloss.Width(label) + 2*buttonPadding
-}
-
-// padded is a label with its air.
-func padded(label string) string {
-	pad := strings.Repeat(" ", buttonPadding)
-	return pad + label + pad
-}
+// buttonWidth is what one button occupies, which is its label. What is drawn
+// has to be this wide or a click lands on the wrong one.
+func buttonWidth(label string) int { return lipgloss.Width(label) }
 
 // renderButton draws one button in a state.
 //
@@ -71,10 +61,10 @@ func padded(label string) string {
 // faint still wins where there is nothing to press.
 func renderButton(label string, state buttonState, hue color.Color) string {
 	if state == buttonDisabled {
-		return disabledButton.Render(padded(label))
+		return disabledButton.Render(label)
 	}
 	if hue == nil {
-		return padded(label)
+		return label
 	}
-	return lipgloss.NewStyle().Foreground(hue).Render(padded(label))
+	return lipgloss.NewStyle().Foreground(hue).Render(label)
 }

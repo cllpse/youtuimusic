@@ -131,14 +131,15 @@ func queueTracks(tree any) []Track {
 		if id == "" || skip[id] {
 			continue
 		}
+		r := scanRow(item)
 		out = append(out, Track{
 			VideoID:  id,
 			Title:    tidy(runsText(item["title"])),
-			Artist:   tidy(linkedText(item, pageTypeArtist)),
-			Album:    tidy(linkedText(item, pageTypeAlbum)),
+			Artist:   tidy(r.artist),
+			Album:    tidy(r.album),
 			Duration: parseDuration(runsText(item["lengthText"])),
-			ArtistID: browseTarget(item, pageTypeArtist),
-			AlbumID:  browseTarget(item, pageTypeAlbum),
+			ArtistID: r.artistID,
+			AlbumID:  r.albumID,
 		})
 	}
 	return out
@@ -233,7 +234,7 @@ func (c *Client) page(ctx context.Context, endpoint string, body map[string]any)
 	if endpoint == queueEndpoint {
 		tracks = queueTracks(tree)
 	} else {
-		tracks = c.parseTracks(tree)
+		tracks = parseTracks(tree)
 	}
 	return Page{
 		Tracks: tracks,
@@ -241,20 +242,50 @@ func (c *Client) page(ctx context.Context, endpoint string, body map[string]any)
 	}, nil
 }
 
-// continuationToken finds the token for the next page. The newer shape came
-// in without the older one going away, so both are looked for.
+// continuationKeys are where a page keeps the token for the next one, in
+// the order they are trusted. The newer shape came in without the older ones
+// going away, so all are looked for.
+var continuationKeys = [...]string{"continuationCommand", "nextContinuationData", "nextRadioContinuationData"}
+
+// continuationToken finds the token for the next page.
+//
+// All three keys are looked for in one walk. A key that is not there costs a
+// walk of the whole page to find out, and the last page of every listing has
+// none of them, so asking for each in turn was three walks of a page whose
+// answer was nothing.
 func continuationToken(tree any) string {
-	for _, key := range []string{"continuationCommand", "nextContinuationData", "nextRadioContinuationData"} {
-		node, ok := findFirst(tree, key)
-		if !ok {
-			continue
+	var found [len(continuationKeys)]map[string]any
+	var walk func(node any) bool
+	walk = func(node any) bool {
+		switch v := node.(type) {
+		case map[string]any:
+			for i, key := range continuationKeys {
+				if found[i] == nil {
+					found[i], _ = v[key].(map[string]any)
+				}
+			}
+			if found[0] != nil {
+				return true // the preferred shape: nothing else can win
+			}
+			for _, child := range v {
+				if walk(child) {
+					return true
+				}
+			}
+		case []any:
+			for _, child := range v {
+				if walk(child) {
+					return true
+				}
+			}
 		}
-		data, ok := node.(map[string]any)
-		if !ok {
-			continue
-		}
-		// The two old shapes spell the field differently; the command carries
-		// the token itself.
+		return false
+	}
+	walk(tree)
+
+	for _, data := range found {
+		// The two old shapes spell the field differently; the command
+		// carries the token itself.
 		for _, field := range []string{"token", "continuation"} {
 			if token, _ := data[field].(string); token != "" {
 				return token
@@ -287,7 +318,7 @@ func (c *Client) ArtistPage(ctx context.Context, browseID string) (Page, error) 
 		return Page{}, err
 	}
 	return Page{
-		Tracks: append(c.parseTracks(tree), parseReleases(tree)...),
+		Tracks: append(parseTracks(tree), parseReleases(tree)...),
 		Next:   Continuation{Endpoint: "browse", Token: continuationToken(tree)},
 	}, nil
 }
@@ -343,22 +374,22 @@ func (c *Client) Rate(ctx context.Context, videoID string, r Rating) error {
 }
 
 // parseTracks pulls every track row out of a browse or search response tree.
-func (c *Client) parseTracks(tree any) []Track {
+func parseTracks(tree any) []Track {
 	var out []Track
 	for _, node := range findAll(tree, "musicResponsiveListItemRenderer") {
 		item, ok := node.(map[string]any)
 		if !ok {
 			continue
 		}
+		r := scanRow(item)
 		t := Track{
-			Title:    flexColumn(item, 0),
+			Title:    tidy(flexColumn(item, 0)),
 			Duration: parseDuration(fixedColumn(item, 0)),
-			AlbumID:  browseTarget(item, pageTypeAlbum),
-			ArtistID: browseTarget(item, pageTypeArtist),
-			Rating:   ratingOf(item),
+			AlbumID:  r.albumID,
+			ArtistID: r.artistID,
+			Rating:   r.rating,
 		}
-		t.Title = tidy(t.Title)
-		t.Artist, t.Album = artistAndAlbum(item)
+		t.Artist, t.Album = artistAndAlbum(item, r)
 		t.Artist, t.Album = tidy(t.Artist), tidy(t.Album)
 		if t.Duration == 0 {
 			t.Duration = durationIn(flexColumn(item, 1))
@@ -369,7 +400,7 @@ func (c *Client) parseTracks(tree any) []Track {
 		}
 		if t.VideoID == "" {
 			// Search results carry the id on the play endpoint instead.
-			t.VideoID = firstVideoID(item)
+			t.VideoID = r.videoID
 		}
 		if t.VideoID == "" {
 			continue // a header or shelf row, not a track
@@ -386,9 +417,8 @@ func (c *Client) parseTracks(tree any) []Track {
 // by bullets, which read straight through as part of the artist's name. The
 // links say which part is which, so they are used first; the bullets are
 // only taken apart when a row links nowhere.
-func artistAndAlbum(item map[string]any) (artist, album string) {
-	artist = linkedText(item, pageTypeArtist)
-	album = linkedText(item, pageTypeAlbum)
+func artistAndAlbum(item map[string]any, r row) (artist, album string) {
+	artist, album = r.artist, r.album
 	if artist != "" && album != "" {
 		return artist, album
 	}
@@ -404,31 +434,6 @@ func artistAndAlbum(item map[string]any) (artist, album string) {
 		album = flexColumn(item, 2)
 	}
 	return artist, album
-}
-
-// linkedText finds the text of the run that leads to a given kind of page.
-func linkedText(item map[string]any, pageType string) string {
-	for _, node := range findAll(item, "runs") {
-		runs, ok := node.([]any)
-		if !ok {
-			continue
-		}
-		for _, r := range runs {
-			run, ok := r.(map[string]any)
-			if !ok {
-				continue
-			}
-			nav, _ := run["navigationEndpoint"].(map[string]any)
-			endpoint, _ := nav["browseEndpoint"].(map[string]any)
-			if endpoint == nil || pageTypeOf(endpoint) != pageType {
-				continue
-			}
-			if text, _ := run["text"].(string); text != "" {
-				return text
-			}
-		}
-	}
-	return ""
 }
 
 // tidy makes a field fit to draw in a column.
@@ -524,51 +529,12 @@ func fixedColumn(item map[string]any, n int) string {
 	return runsText(r["text"])
 }
 
-// ratingOf reads the thumbs state the server reports. Without it a track
-// already liked comes back looking unrated, and the controls show an empty
-// thumb for a song in Liked Music.
-//
-// It is searched for rather than reached: the like button hangs off the row's
-// menu at a depth that differs between a playlist and a search result.
-func ratingOf(item map[string]any) Rating {
-	for _, v := range findAll(item, "likeStatus") {
-		switch s, _ := v.(string); s {
-		case "LIKE":
-			return RatingUp
-		case "DISLIKE":
-			return RatingDown
-		case "INDIFFERENT":
-			return RatingNone
-		}
-	}
-	return RatingNone
-}
-
 // The page a browse id leads to, which is how an album link is told from an
 // artist link when both hang off the same row.
 const (
 	pageTypeAlbum  = "MUSIC_PAGE_TYPE_ALBUM"
 	pageTypeArtist = "MUSIC_PAGE_TYPE_ARTIST"
 )
-
-// browseTarget finds the browse id on a row that leads to a given kind of
-// page. The links live in the column runs — the artist in one, the album in
-// another — but which column is which varies, so they are told apart by
-// where they lead rather than by where they sit.
-func browseTarget(item map[string]any, pageType string) string {
-	for _, node := range findAll(item, "browseEndpoint") {
-		endpoint, ok := node.(map[string]any)
-		if !ok {
-			continue
-		}
-		id, _ := endpoint["browseId"].(string)
-		if id == "" || pageTypeOf(endpoint) != pageType {
-			continue
-		}
-		return id
-	}
-	return ""
-}
 
 func pageTypeOf(endpoint map[string]any) string {
 	configs, _ := endpoint["browseEndpointContextSupportedConfigs"].(map[string]any)
@@ -577,13 +543,124 @@ func pageTypeOf(endpoint map[string]any) string {
 	return pageType
 }
 
-func firstVideoID(item map[string]any) string {
-	for _, v := range findAll(item, "videoId") {
-		if s, ok := v.(string); ok && s != "" {
-			return s
+// row is what the parsers look for in a track row, gathered in one walk of
+// it.
+//
+// Where these sit differs between a playlist row, a search result and a
+// queue entry — the like button hangs off the row's menu at a depth that
+// varies, the links live in whichever column the artist or album landed in —
+// so a row is searched rather than navigated. It is searched once for all of
+// them: asking each question with its own walk was five or six walks of
+// every row, which on a long page cost as much again as decoding it.
+type row struct {
+	// albumID and artistID are the first browse ids leading to each kind of
+	// page, from anywhere in the row. album and artist are the text of the
+	// first column run that links to each.
+	albumID, artistID string
+	album, artist     string
+	// rating is the thumbs state the server reports. Without it a track
+	// already liked comes back looking unrated, and the controls show an
+	// empty thumb for a song in Liked Music.
+	rating Rating
+	rated  bool
+	// videoID is the first video id anywhere in the row, which is where a
+	// search result keeps it.
+	videoID string
+}
+
+func scanRow(item map[string]any) row {
+	var r row
+	var walk func(node any)
+	walk = func(node any) {
+		switch v := node.(type) {
+		case map[string]any:
+			for key, child := range v {
+				switch key {
+				case "browseEndpoint":
+					if endpoint, ok := child.(map[string]any); ok {
+						r.noteTarget(endpoint)
+					}
+				case "runs":
+					if runs, ok := child.([]any); ok {
+						r.noteRuns(runs)
+					}
+				case "likeStatus":
+					r.noteRating(child)
+				case "videoId":
+					if id, _ := child.(string); r.videoID == "" {
+						r.videoID = id
+					}
+				}
+				walk(child)
+			}
+		case []any:
+			for _, child := range v {
+				walk(child)
+			}
 		}
 	}
-	return ""
+	walk(item)
+	return r
+}
+
+// noteTarget keeps a browse id if it is the first to lead to its kind of
+// page. The links are told apart by where they lead rather than by where
+// they sit, because which column is which varies.
+func (r *row) noteTarget(endpoint map[string]any) {
+	id, _ := endpoint["browseId"].(string)
+	if id == "" {
+		return
+	}
+	switch pageTypeOf(endpoint) {
+	case pageTypeAlbum:
+		if r.albumID == "" {
+			r.albumID = id
+		}
+	case pageTypeArtist:
+		if r.artistID == "" {
+			r.artistID = id
+		}
+	}
+}
+
+// noteRuns keeps the text of the first run linking to each kind of page.
+func (r *row) noteRuns(runs []any) {
+	for _, item := range runs {
+		run, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		nav, _ := run["navigationEndpoint"].(map[string]any)
+		endpoint, _ := nav["browseEndpoint"].(map[string]any)
+		text, _ := run["text"].(string)
+		if endpoint == nil || text == "" {
+			continue
+		}
+		switch pageTypeOf(endpoint) {
+		case pageTypeAlbum:
+			if r.album == "" {
+				r.album = text
+			}
+		case pageTypeArtist:
+			if r.artist == "" {
+				r.artist = text
+			}
+		}
+	}
+}
+
+func (r *row) noteRating(status any) {
+	if r.rated {
+		return
+	}
+	switch s, _ := status.(string); s {
+	case "LIKE":
+		r.rating, r.rated = RatingUp, true
+	case "DISLIKE":
+		r.rating, r.rated = RatingDown, true
+	case "INDIFFERENT":
+		r.rating, r.rated = RatingNone, true
+	}
 }
 
 // parseDuration reads "2:54" and "1:02:03".

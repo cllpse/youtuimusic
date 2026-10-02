@@ -1,4 +1,4 @@
-package ytm
+package stream
 
 import (
 	"slices"

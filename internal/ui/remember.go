@@ -23,9 +23,8 @@ import (
 // the screen, not about anything the server has to say — so it is applied
 // here and now.
 func (m Model) Restore(st state.State) Model {
-	if st.Mono {
-		m = m.setMono(true)
-	}
+	// Monochrome unless colour was chosen.
+	m = m.setMono(!st.Colour)
 	if st.Playlist != "" {
 		m.restoring = &st
 	}
@@ -86,7 +85,7 @@ func (m Model) record() {
 	// when one is in front the playlist already on disk is the one worth
 	// keeping. The theme is written either way.
 	s := state.Load()
-	s.Mono = m.mono
+	s.Colour = !m.mono
 
 	tab, ok := m.SelectedPlaylist()
 	// A mix is gone when the app closes and its id names nothing the next

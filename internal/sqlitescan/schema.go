@@ -24,7 +24,9 @@ func parseColumns(sql string) (cols []string, rowidCol int) {
 		if name == "" {
 			continue
 		}
-		// "INTEGER PRIMARY KEY" — and only that spelling — is the rowid.
+		// A column declared INTEGER and PRIMARY KEY is the rowid, whatever
+		// constraints sit between — except PRIMARY KEY DESC, which SQLite
+		// keeps as an ordinary column for compatibility.
 		if rowidCol < 0 && isRowidAlias(rest) {
 			rowidCol = len(cols)
 		}
@@ -111,7 +113,7 @@ func isRowidAlias(rest string) bool {
 	}
 	for i := 1; i+1 < len(f); i++ {
 		if f[i] == "primary" && f[i+1] == "key" {
-			return true
+			return i+2 >= len(f) || f[i+2] != "desc"
 		}
 	}
 	return false

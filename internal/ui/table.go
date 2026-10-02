@@ -56,8 +56,6 @@ type trackTable struct {
 	// mono drops the accent hues for the terminal's own greys, so a rating
 	// and the player are told apart by weight rather than by colour.
 	mono bool
-	sort sortSpec
-	now  time.Time
 
 	// more draws one extra row at the end, offering the next page. While
 	// that page is on its way it becomes the same loader the rest of the
@@ -117,10 +115,6 @@ func (t trackTable) playingRow() int {
 		}
 	}
 	return -1
-}
-
-func (t trackTable) hasScrollbar() bool {
-	return needsScrollbar(t.rowCount(), t.rowsHeight())
 }
 
 // layout is the width of each column, given what the table has to work with.
@@ -198,25 +192,9 @@ func (t trackTable) moreRow(width int) string {
 	return dim.Render(centred)
 }
 
-// playerPen is the colour of everything that points at the track playing: the
-// player's blue while it is playing, and the paused bar's own colour while it is
-// not.
-//
-// The bar has said the difference that way since before any of these marks
-// existed — lit while it runs, a step down while it holds — so the marks say it
-// the same way rather than inventing a second language for the same fact.
-func (t trackTable) playerPen() color.Color {
-	if t.mono {
-		if t.paused {
-			return foreground
-		}
-		return emphasis
-	}
-	if t.paused {
-		return played
-	}
-	return live
-}
+// playerPen is the colour of everything in the table that points at the track
+// playing — see playerColour, which the bar and the tab row take too.
+func (t trackTable) playerPen() color.Color { return playerColour(t.mono, t.paused) }
 
 // rowSelected fills a row with the highlight. No foreground is set with it:
 // the highlight is a tint of the terminal's own background, so the
@@ -270,18 +248,7 @@ func (t trackTable) ratingHue(track Track) (color.Color, bool) {
 	if !t.showRating {
 		return nil, false
 	}
-	return track.Rating.hue(t.mono)
-}
-
-// dislikedPen is the colour a dislike is drawn in. The scrollbar uses it as the
-// one mark that outranks a like, so it has to name the same colour the rows do
-// under whichever theme is in force. Monochrome draws no rating marks at all,
-// so there is nothing for it to name there.
-func (t trackTable) dislikedPen() color.Color {
-	if t.mono {
-		return nil
-	}
-	return disliked
+	return track.Rating.hue(paletteFor(t.mono))
 }
 
 // trackLine draws one row. Every title starts at the edge: nothing goes in
@@ -339,7 +306,7 @@ const (
 //
 // Two, because a cell is one character and a character can be half one colour
 // and half another: an upper half block drawn in one colour over a background
-// of the other. The progress bar already gets sub-cell resolution this way.
+// of the other.
 //
 // It is worth the trouble because a cell is not one row. Seventy tracks in a
 // twenty row window puts three or four of them in every cell, so two tracks
@@ -354,7 +321,8 @@ func markAt(row, total, halves int) int {
 }
 
 // scrollbarMarks is what each half of each cell has to say about the rows that
-// fall in it: half 2i is the top of cell i and 2i+1 the bottom.
+// fall in it: half 2i is the top of cell i and 2i+1 the bottom, and nil is
+// nothing to say.
 //
 // Two rows in the same half still have to share one colour, so the more notable
 // of them takes it. A dislike outranks a like because there are fewer of them
@@ -362,23 +330,27 @@ func markAt(row, total, halves int) int {
 // because it matters more, but because its mark is the one that moves, and a
 // mark you are following cannot go missing every time the track it stands for
 // is liked.
-func (t trackTable) scrollbarMarks() map[int]color.Color {
+func (t trackTable) scrollbarMarks() []color.Color {
 	total, halves := t.rowCount(), t.rowsHeight()*markHalves
-	marks := map[int]color.Color{}
 	if total <= 0 || halves <= 0 {
-		return marks
+		return nil
 	}
-
-	for i, track := range t.tracks {
-		hue, rated := t.ratingHue(track)
-		if !rated {
-			continue
+	marks := make([]color.Color, halves)
+	// No walk down the list where no rating is drawn — the liked playlist,
+	// and monochrome — since every row would come back with nothing to say.
+	p := paletteFor(t.mono)
+	if t.showRating && (p.liked != nil || p.disliked != nil) {
+		for i, track := range t.tracks {
+			hue, rated := t.ratingHue(track)
+			if !rated {
+				continue
+			}
+			at := markAt(i, total, halves)
+			if marks[at] != nil && marks[at] == p.disliked {
+				continue
+			}
+			marks[at] = hue
 		}
-		at := markAt(i, total, halves)
-		if marks[at] == t.dislikedPen() {
-			continue
-		}
-		marks[at] = hue
 	}
 	if at := t.playingRow(); at >= 0 && at < total {
 		marks[markAt(at, total, halves)] = t.playerPen()
@@ -567,15 +539,6 @@ func (s sortSpec) next() sortSpec {
 		return sortSpec{}
 	}
 	return sortSpec{by: s.by + 1}
-}
-
-// on is what clicking a column header means: order by it, or reverse it if
-// it is already the one in use.
-func (s sortSpec) on(by sortColumn) sortSpec {
-	if s.by == by {
-		return sortSpec{by: by, desc: !s.desc}
-	}
-	return sortSpec{by: by}
 }
 
 // sortTracks orders a list in place. It is stable, so the order a listing

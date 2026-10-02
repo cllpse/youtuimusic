@@ -43,7 +43,31 @@ need python3
 need tar
 need unzip
 
-api() { curl -fsSL "https://api.github.com/repos/$1/releases/latest"; }
+# sha256sum is GNU coreutils; stock macOS has shasum instead. Without either
+# the yt-dlp check below would compare against nothing and report a
+# mismatch, which is the wrong thing to go looking for.
+if command -v sha256sum >/dev/null 2>&1; then
+    sha256() { sha256sum "$1" | awk '{print $1}'; }
+elif command -v shasum >/dev/null 2>&1; then
+    sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+else
+    die "sha256sum or shasum is required"
+fi
+
+# Scratch space for the downloads, removed on exit — a failed fetch included.
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+# The release workflow has GITHUB_TOKEN in the environment. Using it lifts the
+# API's unauthenticated rate limit, which runners sharing an address hit.
+api() {
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$1/releases/latest"
+    else
+        curl -fsSL "https://api.github.com/repos/$1/releases/latest"
+    fi
+}
 
 # ---- yt-dlp ----------------------------------------------------------------
 
@@ -67,7 +91,7 @@ fetch_ytdlp() {
     # the release than to ship a downloader nobody checked.
     want=$(curl -fsSL "$base/SHA2-256SUMS" | awk -v a="$asset" '$2 == a {print $1}')
     [ -n "$want" ] || die "yt-dlp: no checksum for $asset"
-    got=$(sha256sum "$dir/yt-dlp" | awk '{print $1}')
+    got=$(sha256 "$dir/yt-dlp")
     [ "$want" = "$got" ] || die "yt-dlp: checksum mismatch for $asset"
     chmod 0755 "$dir/yt-dlp"
 }
@@ -81,7 +105,8 @@ fetch_mpv_darwin() {
         amd64) variant=intel ;;
         *) die "no mpv build for darwin/$arch" ;;
     esac
-    url=$(api "$MPV_REPO" | python3 -c '
+    json=$(api "$MPV_REPO") || die "mpv: GitHub API request for $MPV_REPO failed"
+    url=$(printf '%s' "$json" | python3 -c '
 import json, re, sys
 assets = json.load(sys.stdin)["assets"]
 variant = sys.argv[1]
@@ -97,7 +122,7 @@ print(best[1] if best else "")
     [ -n "$url" ] || die "mpv: no darwin/$variant asset found"
 
     say "darwin/$arch: mpv ($(basename "$url"))"
-    tmp=$(mktemp -d)
+    tmp=$(mktemp -d "$WORK/mpv.XXXXXX")
     curl -fsSL -o "$tmp/mpv.zip" "$url"
     unzip -q -o "$tmp/mpv.zip" -d "$tmp"
     [ -f "$tmp/mpv.tar.gz" ] || die "mpv: $url did not contain mpv.tar.gz"
@@ -112,7 +137,8 @@ fetch_mpv_linux() {
         arm64) pat=anylinux-aarch64.AppImage ;;
         *) die "no mpv build for linux/$arch" ;;
     esac
-    url=$(api "$APPIMAGE_REPO" | python3 -c '
+    json=$(api "$APPIMAGE_REPO") || die "mpv: GitHub API request for $APPIMAGE_REPO failed"
+    url=$(printf '%s' "$json" | python3 -c '
 import json, sys
 pat = sys.argv[1]
 for a in json.load(sys.stdin)["assets"]:
@@ -123,7 +149,7 @@ for a in json.load(sys.stdin)["assets"]:
     [ -n "$url" ] || die "mpv: no linux/$arch asset found"
 
     say "linux/$arch: mpv ($(basename "$url"))"
-    tmp=$(mktemp -d)
+    tmp=$(mktemp -d "$WORK/mpv.XXXXXX")
     curl -fsSL -o "$tmp/mpv.AppImage" "$url"
     # Not extracted here: the payload only runs on its own architecture, and
     # install.sh unpacks it on the target anyway. Tar it so every target ships

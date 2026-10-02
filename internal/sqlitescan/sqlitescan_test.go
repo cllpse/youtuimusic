@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // These tests check the reader against the real thing: every fixture is
@@ -208,9 +209,12 @@ INSERT INTO cookies VALUES
 	if len(tbl.Columns) != 10 {
 		t.Fatalf("got %d columns, want 10", len(tbl.Columns))
 	}
-	v, ok := tbl.Column(tbl.Rows[0], "HOST_KEY")
-	if !ok || v != ".youtube.com" {
-		t.Fatalf("Column(host_key) = %v, %v", v, ok)
+	i := tbl.Index("HOST_KEY")
+	if v := Cell(tbl.Rows[0], i); i < 0 || v != ".youtube.com" {
+		t.Fatalf("host_key at %d = %v", i, v)
+	}
+	if tbl.Index("missing") != -1 || Cell(tbl.Rows[0], -1) != nil {
+		t.Fatal("a column the table lacks was found")
 	}
 }
 
@@ -235,10 +239,10 @@ INSERT INTO t VALUES(4, x'',                'empty');`)
 	tbl := check(t, path, "t", "SELECT * FROM t ORDER BY rowid")
 
 	// The rowid alias is stored as NULL; it has to come back as the rowid.
-	if got, _ := tbl.Column(tbl.Rows[0], "id"); got != int64(1) {
+	if got := Cell(tbl.Rows[0], tbl.Index("id")); got != int64(1) {
 		t.Fatalf("INTEGER PRIMARY KEY = %v, want the rowid 1", got)
 	}
-	if b, _ := tbl.Column(tbl.Rows[0], "blob"); len(b.([]byte)) != 100000 {
+	if b := Cell(tbl.Rows[0], tbl.Index("blob")); len(b.([]byte)) != 100000 {
 		t.Fatalf("overflowed blob came back %d bytes", len(b.([]byte)))
 	}
 }
@@ -290,7 +294,7 @@ INSERT INTO cookies VALUES('.google.com','__Secure-3PAPISID',x'763131CCCC');`)
 	if len(tbl.Rows) != 2 {
 		t.Fatalf("got %d rows, want 2 — the log was not applied", len(tbl.Rows))
 	}
-	got, _ := tbl.Column(tbl.Rows[0], "encrypted_value")
+	got := Cell(tbl.Rows[0], tbl.Index("encrypted_value"))
 	if fmt.Sprintf("%x", got) != "763131bbbbbb" {
 		t.Fatalf("value = %x, want the updated one from the log", got)
 	}
@@ -440,6 +444,25 @@ func TestOnlyIntegerPrimaryKeyAliasesTheRowid(t *testing.T) {
 	if _, rowid := parseColumns(`CREATE TABLE x (a INTEGER NOT NULL PRIMARY KEY)`); rowid != 0 {
 		t.Fatalf("rowid column = %d, want 0", rowid)
 	}
+	// SQLite's one exception: DESC makes it an ordinary column.
+	if _, rowid := parseColumns(`CREATE TABLE x (a INTEGER PRIMARY KEY DESC)`); rowid != -1 {
+		t.Fatalf("INTEGER PRIMARY KEY DESC treated as rowid alias (col %d)", rowid)
+	}
+}
+
+// A damaged payload length is an error, not an allocation the size of the
+// number — which would be a fatal out-of-memory that recover cannot catch.
+func TestAHugePayloadLengthIsAnError(t *testing.T) {
+	path := build(t, "CREATE TABLE t (a TEXT); INSERT INTO t VALUES ('x');")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A leaf cell whose payload claims about 2^56 bytes.
+	cell := []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f, 0x01, 0x00, 0x00, 0x00}
+	if _, _, err := db.leafCell(cell, 0); err == nil {
+		t.Fatal("a payload larger than the file was accepted")
+	}
 }
 
 func TestVarint(t *testing.T) {
@@ -461,5 +484,43 @@ func TestVarint(t *testing.T) {
 		if n != tc.n || (tc.n > 0 && got != tc.want) {
 			t.Errorf("uvarint(%x) = %d, %d; want %d, %d", tc.in, got, n, tc.want, tc.n)
 		}
+	}
+}
+
+// A torn read is retried; a file that is not there is not, since waiting
+// will not make it appear.
+func TestReadTableRetriesOnlyWhatCanChange(t *testing.T) {
+	path := build(t, "CREATE TABLE t (a TEXT); INSERT INTO t VALUES ('x');")
+	tbl, err := ReadTable(path, "t")
+	if err != nil || len(tbl.Rows) != 1 {
+		t.Fatalf("ReadTable = %v, %v", tbl, err)
+	}
+
+	for _, c := range []struct{ path, table string }{
+		{filepath.Join(t.TempDir(), "missing"), "t"},
+		{path, "no_such_table"},
+	} {
+		start := time.Now()
+		if _, err := ReadTable(c.path, c.table); err == nil {
+			t.Fatalf("%s/%s read as a table", c.path, c.table)
+		}
+		if time.Since(start) >= readBackoff {
+			t.Errorf("%s/%s was retried", c.path, c.table)
+		}
+	}
+
+	// A truncated file is the shape a mid-write read takes. It stays
+	// truncated here, so every attempt is spent and the error comes back.
+	raw, _ := os.ReadFile(path)
+	torn := filepath.Join(t.TempDir(), "torn")
+	if err := os.WriteFile(torn, raw[:len(raw)/2], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := ReadTable(torn, "t"); err == nil {
+		t.Fatal("a torn file read as a table")
+	}
+	if time.Since(start) < (readAttempts-1)*readBackoff {
+		t.Error("a torn file was not retried")
 	}
 }

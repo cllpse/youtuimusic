@@ -67,8 +67,6 @@ func steady(label string, set []string) string {
 	return lipgloss.PlaceHorizontal(widest, lipgloss.Center, label)
 }
 
-var widestRepeatLabel = lipgloss.Width(steady(labelRepeatOff, repeatLabels))
-
 // Repeat is what happens when a track ends.
 type Repeat int
 
@@ -219,49 +217,26 @@ func lay(group []button, at int) int {
 	return end
 }
 
-// renderControls draws the row of buttons, which is controlsRows lines tall.
-// Each button is assembled line by line rather than joined horizontally,
-// because they do not sit shoulder to shoulder: each one starts at the column
-// hit-testing says it does.
+// renderControls draws the row of buttons. A button is one line — its label —
+// so the row is one line too, and controlsRows says so to the layout.
+//
+// The buttons are placed rather than joined, because they do not sit shoulder
+// to shoulder: each one starts at the column hit-testing says it does, and the
+// gap up to it is spaces.
 func (m Model) renderControls() string {
-	width := m.contentWidth()
-	blank := strings.Repeat(" ", max(width, 0))
-	buttons := m.controlButtons()
-	if len(buttons) == 0 {
-		rows := make([]string, controlsRows)
-		for i := range rows {
-			rows[i] = blank
+	var row strings.Builder
+	at := contentLeft
+	for _, btn := range m.controlButtons() {
+		if btn.start > at {
+			row.WriteString(strings.Repeat(" ", btn.start-at))
 		}
-		return strings.Join(rows, "\n")
+		row.WriteString(renderButton(btn.label, btn.state, btn.hue))
+		at = btn.end
 	}
-
-	rows := make([]strings.Builder, controlsRows)
-	at := make([]int, controlsRows)
-	for i := range at {
-		at[i] = contentLeft
+	if end := contentLeft + m.contentWidth(); at < end {
+		row.WriteString(strings.Repeat(" ", end-at))
 	}
-	for _, btn := range buttons {
-		lines := strings.Split(renderButton(btn.label, btn.state, btn.hue), "\n")
-		for r := range rows {
-			if r >= len(lines) {
-				continue
-			}
-			if btn.start > at[r] {
-				rows[r].WriteString(strings.Repeat(" ", btn.start-at[r]))
-			}
-			rows[r].WriteString(lines[r])
-			at[r] = btn.end
-		}
-	}
-
-	out := make([]string, controlsRows)
-	for r := range rows {
-		if end := contentLeft + width; at[r] < end {
-			rows[r].WriteString(strings.Repeat(" ", end-at[r]))
-		}
-		out[r] = rows[r].String()
-	}
-	return strings.Join(out, "\n")
+	return row.String()
 }
 
 // press acts on a control.
@@ -367,22 +342,35 @@ func (m Model) open(t Track) (tea.Model, tea.Cmd) {
 // which tab happens to be in front when the track runs out.
 func (m Model) start(t Track) (tea.Model, tea.Cmd) {
 	m.playing, m.Position, m.Length = t, 0, t.Duration
+	m.retried = "" // asked for again, so it may be retried again
 	m.playingFrom = m.currentTab().ID
-	return m, m.play(t)
+	cmd := m.request(t)
+	return m, cmd
 }
 
-// playingTracks is the listing the playing track belongs to: the visible one
-// when that is where it is, otherwise whatever is cached for the tab it was
-// started from. Without the fallback, switching tabs stops playback at the end
-// of the current track.
-func (m Model) playingTracks() []Track {
+// playingListing is the listing the playing track belongs to and where it
+// carries on: the visible one when that is where it is, otherwise whatever is
+// kept for the tab, popover or search it was started from. Without the
+// fallback, switching tabs stops playback at the end of the current track.
+//
+// A listing nothing is kept for falls back to the visible rows, which is what a
+// model given rows and no tabs has. It does not fall back to the visible
+// list's next page: that would follow this listing's last track with another
+// listing's tracks.
+func (m Model) playingListing() ([]Track, ytm.Continuation) {
 	if m.playingFrom == m.showingID {
-		return m.Tracks
+		return m.Tracks, m.more
 	}
 	if entry, ok := m.cache[m.playingFrom]; ok {
-		return entry.tracks
+		return entry.tracks, entry.next
 	}
-	return m.Tracks
+	return m.Tracks, ytm.Continuation{}
+}
+
+// playingTracks is playingListing's rows.
+func (m Model) playingTracks() []Track {
+	rows, _ := m.playingListing()
+	return rows
 }
 
 // indexOfPlaying finds the playing track in the listing it belongs to.

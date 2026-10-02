@@ -4,24 +4,34 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
-// Reads the session the Python app already captured. Temporary: youtuimusic
-// will do its own extraction.
+// liveSession reads the session the app saved on its last run — or the file
+// YOUTUIMUSIC_SESSION names, as the app does. It reads the file itself
+// rather than going through internal/auth, which imports this package.
 func liveSession(t *testing.T) Session {
 	t.Helper()
 	if os.Getenv("YTM_NET") != "1" {
 		t.Skip("set YTM_NET=1")
 	}
-	raw, err := os.ReadFile(os.Getenv("HOME") + "/.config/ytm-player/auth.json")
+	path := os.Getenv("YOUTUIMUSIC_SESSION")
+	if path == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skipf("no home directory: %v", err)
+		}
+		path = filepath.Join(home, ".config", "youtuimusic", "session.json")
+	}
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Skipf("no session on disk: %v", err)
+		t.Skipf("no session on disk (run youtuimusic once): %v", err)
 	}
 	var h map[string]string
 	if err := json.Unmarshal(raw, &h); err != nil {
-		t.Fatalf("parse auth.json: %v", err)
+		t.Fatalf("parse %s: %v", path, err)
 	}
 	return Session{
 		Cookie:    h["cookie"],

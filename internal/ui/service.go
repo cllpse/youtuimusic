@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,12 +14,10 @@ import (
 )
 
 // Timeouts bound every call the UI makes, so nothing can wedge the event
-// loop. Resolving is slower than an API call because it runs yt-dlp, and a
-// sign-in can wait on a browser window for minutes.
+// loop. Resolving is slower than an API call because it runs yt-dlp.
 const (
 	requestTimeout = 30 * time.Second
 	resolveTimeout = 60 * time.Second
-	signInTimeout  = 5 * time.Minute
 )
 
 // Library is the part of the YouTube Music client the UI drives. These are
@@ -39,6 +38,9 @@ type Streams interface {
 	Resolve(ctx context.Context, videoID string) (stream.Track, error)
 	// Prefetch warms the cache for a track without blocking or reporting.
 	Prefetch(videoID string)
+	// Forget drops a cached URL that would not play, so the next Resolve
+	// asks again.
+	Forget(videoID string)
 }
 
 // Audio is the running player.
@@ -57,9 +59,6 @@ type Services struct {
 	Library Library
 	Streams Streams
 	Audio   Audio
-	// SignIn makes a Library when there is none yet, running off the event
-	// loop. The model draws a sign-in screen while it works.
-	SignIn func(ctx context.Context) (Library, error)
 }
 
 // Messages carry the result of everything that happens off the event loop.
@@ -73,9 +72,13 @@ type (
 		query string
 		page  ytm.Page
 	}
-	// moreMsg is the next page of whichever list asked for it. Only one can
-	// be waiting at a time, so which is a flag rather than an identifier.
+	// moreMsg is the next page of a listing. Only one can be waiting at a
+	// time, but the reader does not wait with it: by the time it lands the
+	// tab or the popover that asked may have been swapped for another, so it
+	// names the listing it belongs to. inDetour says which of the two lists
+	// asked, for the rare id the main list and a popover could share.
 	moreMsg struct {
+		id       string
 		page     ytm.Page
 		inDetour bool
 		// autoplay is set when the page was fetched to keep a track that ran
@@ -97,11 +100,6 @@ type (
 	}
 	eventMsg player.Event
 	errMsg   struct{ err error }
-	// signedInMsg carries the outcome of the browser sign-in.
-	signedInMsg struct {
-		library Library
-		err     error
-	}
 )
 
 // api maps the UI's thumbs state onto the client's.
@@ -206,8 +204,8 @@ func (m Model) runSearch(query string) tea.Cmd {
 	}
 }
 
-// loadMore fetches the page after the one a list is showing.
-func (m Model) loadMore(from ytm.Continuation, inDetour, autoplay bool) tea.Cmd {
+// loadMore fetches the page after the one a listing has read so far.
+func (m Model) loadMore(id string, from ytm.Continuation, inDetour, autoplay bool) tea.Cmd {
 	lib := m.services.Library
 	if lib == nil || !from.More() {
 		return nil
@@ -216,7 +214,7 @@ func (m Model) loadMore(from ytm.Continuation, inDetour, autoplay bool) tea.Cmd 
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		page, err := lib.More(ctx, from)
-		return moreMsg{page: page, inDetour: inDetour, autoplay: autoplay, err: err}
+		return moreMsg{id: id, page: page, inDetour: inDetour, autoplay: autoplay, err: err}
 	}
 }
 
@@ -235,6 +233,17 @@ func (m Model) rate(videoID string, r, previous Rating) tea.Cmd {
 			err:      lib.Rate(ctx, videoID, r.api()),
 		}
 	}
+}
+
+// request plays a track and marks the wait for it — but only when there is a
+// play to wait for. A model with no player says nothing is loading rather than
+// LOADING for ever.
+func (m *Model) request(t Track) tea.Cmd {
+	cmd := m.play(t)
+	if cmd != nil {
+		m.requested = t.VideoID
+	}
+	return cmd
 }
 
 func (m Model) play(t Track) tea.Cmd {
@@ -259,6 +268,19 @@ func (m Model) play(t Track) tea.Cmd {
 			return errMsg{fmt.Errorf("playing %s: %w", t.Title, err)}
 		}
 		return playingMsg{track: t, length: s.Duration}
+	}
+}
+
+// replay resolves a track afresh and plays it: its cached URL is forgotten
+// first, so this is a new one rather than the one that just failed.
+func (m Model) replay(t Track) tea.Cmd {
+	streams, play := m.services.Streams, m.play(t)
+	if streams == nil || play == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		streams.Forget(t.VideoID)
+		return play()
 	}
 }
 
@@ -306,19 +328,45 @@ func (m Model) togglePause() tea.Cmd {
 	}
 }
 
+// errPlayerGone is what the stream of player events ending means. Nothing
+// closes it while the app runs except mpv going away, and nothing here starts
+// another one.
+var errPlayerGone = errors.New("mpv exited — restart youtuimusic to play again")
+
 // watchEvents delivers one mpv property change. Each one re-arms the watch,
-// which is how a channel becomes a stream of messages in this architecture.
+// which is how a channel becomes a stream of messages in this architecture —
+// except the end of the stream, which is reported once and not watched again.
+//
+// Positions that would not change the screen are passed over here, before they
+// become a message. mpv reports one about ten times a second, the runtime
+// draws a whole frame for every message, and the bar row only says whole
+// seconds and whole cells: nine frames in ten were the last one again. What
+// the screen shows is taken when the watch is armed, which is every time one
+// is delivered, so a skipped position is always one the screen already says.
+//
+// A drag is no reason to pass one over, though handleEvent ignores every
+// position while one is on: this watch is already waiting when the button
+// comes up and could not hear about it, so skipping for the drag would hold
+// the bar where the drag left it until something other than a position came.
 func (m Model) watchEvents() tea.Cmd {
 	audio := m.services.Audio
 	if audio == nil {
 		return nil
 	}
 	events := audio.Events()
+	frame := m.barFrame()
+	shown := frame(m.Position)
 	return func() tea.Msg {
-		ev, ok := <-events
-		if !ok {
-			return nil
+		for ev := range events {
+			if f, ok := ev.Data.(float64); ok && ev.Name == player.PropTimePos &&
+				frame(seconds(f)) == shown {
+				continue
+			}
+			return eventMsg(ev)
 		}
-		return eventMsg(ev)
+		return errMsg{errPlayerGone}
 	}
 }
+
+// seconds is mpv's float seconds as a duration.
+func seconds(f float64) time.Duration { return time.Duration(f * float64(time.Second)) }

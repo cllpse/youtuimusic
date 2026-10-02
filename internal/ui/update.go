@@ -1,16 +1,16 @@
 package ui
 
 import (
-	"context"
-	"time"
+	"errors"
+	"fmt"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 
 	"github.com/cllpse/youtuimusic/internal/player"
 )
-
 
 // Update folds a message into the model and returns the next one.
 //
@@ -19,7 +19,32 @@ import (
 // scroll, setRating and the like — take a pointer and are called on the local
 // copy before it is returned. Mixing the two the other way round is how a
 // mutation lands on a copy nobody sees.
+//
+// Called before the return statement, and not inside it. In
+// `return m, m.startLoading()` Go does not say whether m is read before the
+// call changes it or after: the compiler today happens to run the call first,
+// and nothing promises it will tomorrow. So the command is taken first —
+// `cmd := m.startLoading(); return m, cmd` — and the model returned is the one
+// it changed.
+//
+// On the way out, the model works out again which tabs hold the playing track
+// when what it last worked out no longer describes it — see playingTabs — and
+// starts the spinner if a wait has just begun — see keepSpinning.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	after, ok := next.(Model)
+	if !ok {
+		return next, cmd
+	}
+	if !after.holds.describes(after) {
+		after.holds = after.holdsFor()
+	}
+	spin := after.keepSpinning()
+	return after, batch(cmd, spin)
+}
+
+// update is Update without the bookkeeping on the way out.
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
 		// A tint of the page rather than an entry from the scheme. The
@@ -48,6 +73,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case uv.UnknownOscEvent:
+		// One of the palette entries askColours asked for. Anything else
+		// that arrives this way is nothing the app asked about.
+		if entry, c, ok := paletteReply(string(msg)); ok && int(entry) < len(m.derived) {
+			m.derived[entry] = deriveBlock(c)
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		// The bar's width is not settled here: it depends on how wide the
@@ -55,25 +88,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// anything. renderBar sets it on the copy it draws.
 		m.scroll()
 		// The page may be a different colour than it was; ask again.
-		return m, tea.RequestBackgroundColor
+		return m, askColours()
 
 	case tea.FocusMsg:
 		// Coming back to the terminal is the closest thing to notice that the
 		// theme changed while we were not looking.
-		return m, tea.RequestBackgroundColor
+		return m, askColours()
 
 	case tea.KeyPressMsg:
-		if m.signedOut {
-			switch msg.String() {
-			case "enter":
-				if !m.signingIn {
-					return m.startSignIn()
-				}
-			case "ctrl+c":
-				return m, tea.Quit
-			}
-			return m, nil
-		}
 		if m.sheetOpen {
 			if next, cmd, handled := m.handleSheetKey(msg); handled {
 				return next, cmd
@@ -93,11 +115,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 
 	case spinner.TickMsg:
-		// The loop stops as soon as nothing is waiting. That includes the
-		// next-page row, which is why this is busy() and not loading:
-		// otherwise the load-more spinner is drawn but never moves. A
-		// sign-in is a wait too, and is not part of busy().
-		if !m.busy() && !m.signingIn {
+		// The loop stops as soon as nothing is waited on. That includes the
+		// next-page row and a track that has not started sounding, which is
+		// why this is waiting() and not loading: otherwise a spinner is drawn
+		// but never moves.
+		if !m.waiting() {
+			m.spinning = false
 			return m, nil
 		}
 		spin, cmd := m.spin.Update(msg)
@@ -114,27 +137,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tabLoadMsg:
-		if msg.generation != m.tabGen {
+		// A load armed for a listing the reader has since moved off is not
+		// this one's to make: a newer one was armed for what replaced it, or
+		// what replaced it was already in memory.
+		if msg.inDetour {
+			if msg.generation != m.detourGen || !m.detour.active || m.detour.tab.ID != msg.tab.ID {
+				return m, nil
+			}
+		} else if msg.generation != m.tabGen {
+			return m, nil
+		} else if m.tabAt(m.tabCursor).ID != msg.tab.ID {
+			// Nothing newer was armed for the tabs, so nothing else is going
+			// to end this wait.
+			m.loading = false
 			return m, nil
 		}
-		tab := m.currentTab()
-		// Search results arrive with the search; there is nothing to fetch.
-		if tab.ID == "" || tab.kind == tabSearch {
-			return m, nil
-		}
-		return m, m.fetchTracks(tab)
-
-	case signedInMsg:
-		m.signingIn = false
-		if msg.err != nil {
-			m.Err = msg.err
-			return m, nil
-		}
-		m.signedOut = false
-		m.Err = nil
-		m.services.Library = msg.library
-		m.loading = true
-		return m, batch(m.fetchPlaylists(), m.spin.Tick)
+		return m, m.fetchTracks(msg.tab)
 
 	case playlistsMsg:
 		// A fresh slice rather than truncating in place: the model travels by
@@ -158,33 +176,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Err = msg.err
 			return m, nil
 		}
-		if msg.inDetour {
-			m.detour.arrival = append(m.detour.arrival, fromAPI(msg.page.Tracks)...)
-			m.detour.more = msg.page.Next
-			// The popover shows its arrival order, so the new page is
-			// what it shows. applySort does not reach it any more.
-			m.detour.tracks = m.detour.arrival
-			m.cache[m.detour.tab.ID] = cached{m.detour.arrival, m.detour.more}
-		} else {
-			m.arrival = append(m.arrival, fromAPI(msg.page.Tracks)...)
-			m.more = msg.page.Next
-			if m.showingID != "" {
-				m.cache[m.showingID] = cached{m.arrival, m.more}
-			}
-		}
-		m.applySort()
+		m.addPage(msg.id, msg.inDetour, fromAPI(msg.page.Tracks), msg.page.Next)
 		// A page fetched to keep a track going advances as soon as it lands.
 		if msg.autoplay {
 			if next, ok := m.following(); ok {
-				return m, m.play(next)
+				cmd := m.request(next)
+				return m, cmd
 			}
 		}
 		// A sort over half a list is not the order, so it keeps going.
-		return m, m.continueSort()
+		cmd := m.continueSort()
+		return m, cmd
 
 	case tracksMsg:
-		// A menu is anchored to a row of the list being replaced.
-		m.menu = trackMenu{}
 		tracks := fromAPI(msg.page.Tracks)
 		// The server can still describe a just-rated track the old way, so
 		// what this app did wins over what the list says.
@@ -195,19 +199,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		// Kept whoever is in front, so that a listing the reader has moved
+		// off is there when they come back to it.
 		m.cache[msg.id] = cached{tracks, msg.page.Next}
 		if m.detour.active && m.detour.tab.ID == msg.id {
-			m.detour.arrival, m.detour.more = tracks, msg.page.Next
-			m.detour.tracks = tracks
-			m.detour.cursor, m.detour.offset = 0, 0
-			m.loading, m.Err = false, nil
-			if len(m.detour.tracks) > 0 {
-				return m, batch(m.prefetch(m.detour.tracks[0].VideoID), m.continueSort())
+			// A menu is anchored to a row of the list being replaced.
+			m.menu = trackMenu{}
+			m.detour.fill(msg.id, tracks, msg.page.Next)
+			m.Err = nil
+			if len(tracks) > 0 {
+				return m, m.prefetch(tracks[0].VideoID)
 			}
-			return m, m.continueSort()
+			return m, nil
 		}
-		if m.currentTab().ID != msg.id {
-			return m, nil // the view moved on while this was in flight
+		// The list in the tabs takes its own answer whatever is in front of
+		// it: it is still there underneath, and the popover is not forever.
+		// Asking which listing was in front instead is how a search opened
+		// while a tab loaded left the tab waiting on an answer it had thrown
+		// away. Anything else the reader has moved on from, and its answer
+		// waits in the cache for when they come back.
+		if m.tabAt(m.tabCursor).ID != msg.id {
+			return m, nil
+		}
+		if !m.detour.active {
+			m.menu = trackMenu{}
 		}
 		// A refetch of the list already on screen keeps the reader's place
 		// in it; arriving at a new tab starts at the top.
@@ -218,29 +233,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if refresh {
 			m.trackCursor = clamp(m.trackCursor, len(m.Tracks))
 			m.scroll()
-			return m, m.continueSort()
+			cmd := m.continueSort()
+			return m, cmd
 		}
 		m.trackCursor, m.trackOffset = 0, 0
 		m.restorePlaying(msg.id)
+		cmd := m.continueSort()
 		if len(m.Tracks) > 0 {
-			return m, batch(m.prefetch(m.Tracks[0].VideoID), m.continueSort())
+			cmd = batch(m.prefetch(m.Tracks[0].VideoID), cmd)
 		}
-		return m, m.continueSort()
+		return m, cmd
 
 	case searchMsg:
-		// The popover may have been closed, or replaced by an album, while
-		// this was in flight.
-		if !m.detour.active || m.detour.tab.kind != tabSearch {
+		// Kept under the query, where a popover stepped back to will look
+		// for it, and where a track played from these results says it came
+		// from.
+		id, tracks := searchID(msg.query), fromAPI(msg.page.Tracks)
+		m.cache[id] = cached{tracks, msg.page.Next}
+		// Shown only for the query the popover is on now. It may have been
+		// closed or covered by an album while this was in flight, and an
+		// answer to a query since replaced is not the answer: put up, it
+		// would overwrite the newer results and end a wait that is still on.
+		if !m.detour.active || m.detour.tab.kind != tabSearch || m.detour.searched != msg.query {
 			return m, nil
 		}
-		m.detour.arrival, m.detour.more = fromAPI(msg.page.Tracks), msg.page.Next
-		m.detour.tracks = m.detour.arrival
 		// Nothing is chosen: the results are results until the reader picks
 		// one, and picking the first for them was a guess that also cost a
 		// stream resolve for a track nobody had asked to hear.
-		m.detour.cursor, m.detour.offset = noRow, 0
-		m.loading, m.Err = false, nil
-		return m, m.continueSort()
+		m.detour.fill(id, tracks, msg.page.Next)
+		m.Err = nil
+		return m, nil
 
 	case ratedMsg:
 		if msg.err != nil {
@@ -270,6 +292,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Length = msg.length
 		m.Position, m.Paused, m.Err = 0, false, nil
 		m.playing = msg.track
+		// mpv has it now, and its own state says when it sounds. An older
+		// track arriving late leaves a newer request waiting.
+		if msg.track.VideoID == m.requested {
+			m.requested = ""
+		}
+		// A different track gets its own retry. The same one keeps the
+		// mark, or a stream that always fails would be retried forever.
+		if msg.track.VideoID != m.retried {
+			m.retried = ""
+		}
 		if next, ok := m.following(); ok && next.VideoID != m.playing.VideoID {
 			return m, m.prefetch(next.VideoID)
 		}
@@ -279,7 +311,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleEvent(player.Event(msg))
 
 	case errMsg:
-		m.Err, m.loading = msg.err, false
+		m.Err = msg.err
+		m.requested = ""
+		// The player going away ends no wait on the network. Anything else
+		// may be a fetch that failed, and nothing more is coming for one.
+		if !errors.Is(msg.err, errPlayerGone) {
+			m.loading, m.detour.loading = false, false
+		}
 		return m, nil
 	}
 	return m, nil
@@ -294,15 +332,23 @@ func (m Model) handleEvent(ev player.Event) (tea.Model, tea.Cmd) {
 		// playing and reporting where it actually is, and letting that
 		// through makes the bar fight the pointer.
 		if f, ok := ev.Data.(float64); ok && !m.scrubbing {
-			m.Position = time.Duration(f * float64(time.Second))
+			m.Position = seconds(f)
 		}
 	case player.PropDuration:
 		if f, ok := ev.Data.(float64); ok && f > 0 {
-			m.Length = time.Duration(f * float64(time.Second))
+			m.Length = seconds(f)
 		}
 	case player.PropPause:
 		if b, ok := ev.Data.(bool); ok {
 			m.Paused = b
+		}
+	case player.PropCoreIdle:
+		if b, ok := ev.Data.(bool); ok {
+			m.coreIdle = b
+		}
+	case player.PropIdleActive:
+		if b, ok := ev.Data.(bool); ok {
+			m.idleActive = b
 		}
 	case player.EndFile:
 		// Only a track running out advances the list. Loading a replacement
@@ -312,17 +358,48 @@ func (m Model) handleEvent(ev player.Event) (tea.Model, tea.Cmd) {
 		// This is deliberately not the eof-reached property: mpv unloads the
 		// file at the same moment, so the property goes unavailable rather
 		// than true and nothing ever fires.
-		if reason, _ := ev.Data.(string); reason == "eof" {
+		switch reason, _ := ev.Data.(string); reason {
+		case "eof":
 			if next, ok := m.following(); ok {
-				return m, batch(m.watchEvents(), m.play(next))
+				cmd := m.request(next)
+				return m, batch(m.watchEvents(), cmd)
 			}
 			// Nothing follows in what has been fetched. A mix is endless, so
 			// ask for the next page and let its arrival advance playback.
 			if next, cmd := m.fetchMoreToPlay(); cmd != nil {
 				return next, batch(m.watchEvents(), cmd)
 			}
+		case "error":
+			return m.playbackFailed(ev.Err)
 		}
 	}
+	return m, m.watchEvents()
+}
+
+// playbackFailed handles mpv refusing the stream it was given.
+//
+// The usual cause is a cached URL YouTube no longer honours, which fails the
+// moment it is opened, so the first failure of a track forgets its URL and
+// resolves it again. A second is the track's own and is said, rather than the
+// screen claiming it plays at 0:00 while nothing comes out.
+func (m Model) playbackFailed(reason string) (tea.Model, tea.Cmd) {
+	t := m.playing
+	if t.VideoID == "" {
+		return m, m.watchEvents()
+	}
+	if m.retried != t.VideoID {
+		m.retried = t.VideoID
+		cmd := m.replay(t)
+		if cmd != nil {
+			m.requested = t.VideoID
+		}
+		return m, batch(m.watchEvents(), cmd)
+	}
+	if reason == "" {
+		reason = "the stream would not play"
+	}
+	m.requested = ""
+	m.Err = fmt.Errorf("playing %s: %s", t.Title, reason)
 	return m, m.watchEvents()
 }
 
@@ -406,27 +483,4 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.applyRating(RatingDown)
 	}
 	return m, nil
-}
-
-// signIn runs the browser sign-in off the event loop, so the screen keeps
-// animating while it waits. Services.SignIn owns where the browser comes
-// from; the model only carries the result.
-func (m Model) signIn() tea.Cmd {
-	signIn := m.services.SignIn
-	if signIn == nil {
-		return nil
-	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), signInTimeout)
-		defer cancel()
-		library, err := signIn(ctx)
-		return signedInMsg{library: library, err: err}
-	}
-}
-
-// startSignIn clears the last failure and starts the browser sign-in.
-func (m Model) startSignIn() (tea.Model, tea.Cmd) {
-	m.signingIn = true
-	m.Err = nil
-	return m, batch(m.signIn(), m.spin.Tick)
 }

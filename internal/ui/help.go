@@ -178,14 +178,20 @@ func (m Model) clickSheet(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 // helpButtonSpan is where the ? sits on the status row: at the far end of the
 // band, with the cell of air the other end of it has. It reports false when
 // the row is too narrow to hold it, which is also when it is not drawn — the
-// renderer and the hit test both come here, so a click lands on the character
-// it looks like it should.
+// renderer and the hit test both come here, or to helpButtonAt under it, so a
+// click lands on the character it looks like it should.
 func (m Model) helpButtonSpan() (start int, ok bool) {
-	room := max(m.width-lipgloss.Width(m.statusBlock()), 0)
+	return helpButtonAt(m.width, lipgloss.Width(m.statusBlock()))
+}
+
+// helpButtonAt is helpButtonSpan for a status block already drawn, so the
+// frame that draws one does not draw it a second time to measure it.
+func helpButtonAt(width, block int) (start int, ok bool) {
+	room := max(width-block, 0)
 	// The track keeps a cell of the band: a bar with nothing but a ? in it
 	// would be a bar that stopped saying what is playing.
 	if room < helpButtonWidth+2 {
 		return 0, false
 	}
-	return m.width - helpButtonWidth - 1, true
+	return width - helpButtonWidth - 1, true
 }

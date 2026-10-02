@@ -1,7 +1,7 @@
 // Package sqlitescan is a read-only scanner for SQLite database files.
 //
-// It exists so youtuimusic can read Chromium's cookie database without
-// linking a SQLite engine. modernc.org/sqlite — the cgo-free option — costs
+// It exists so youtuimusic can read browsers' cookie databases — Chromium's
+// Cookies and Firefox's cookies.sqlite — without linking a SQLite engine. modernc.org/sqlite — the cgo-free option — costs
 // 7.7 MB of binary and 50 transitive modules, measured, to run one query at
 // startup. The file format itself is public and stable, and the part we need
 // is a table scan, so this reads it directly.
@@ -13,10 +13,12 @@ package sqlitescan
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"os"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -42,16 +44,33 @@ type Table struct {
 	Rows    [][]any
 }
 
-// Column returns the value of a named column in a row, and whether the
-// column exists. Names are matched case-insensitively, as SQLite does.
-func (t *Table) Column(row []any, name string) (any, bool) {
+// Index returns the position of a named column, or -1 when the table has
+// none. Names are matched case-insensitively, as SQLite does. Look a column
+// up once and read every row by position: a cookie table runs to thousands
+// of rows, and finding the column again for each of them is most of the
+// work of reading it.
+func (t *Table) Index(name string) int {
 	for i, c := range t.Columns {
-		if strings.EqualFold(c, name) && i < len(row) {
-			return row[i], true
+		if strings.EqualFold(c, name) {
+			return i
 		}
 	}
-	return nil, false
+	return -1
 }
+
+// Cell returns the value at column i of a row, or nil when there is none: a
+// column the table lacks (i < 0), or a row written before the column was
+// added, which SQLite stores short.
+func Cell(row []any, i int) any {
+	if i < 0 || i >= len(row) {
+		return nil
+	}
+	return row[i]
+}
+
+// ErrMalformed means the file's contents did not parse: a torn read of a
+// file being written, or a file that is damaged. ReadTable retries it.
+var ErrMalformed = errors.New("sqlitescan: malformed database")
 
 // Open reads a database file. The whole file is loaded: cookie databases are
 // a few megabytes, and it makes overlaying the write-ahead log trivial.
@@ -76,8 +95,11 @@ func Open(path string) (*DB, error) {
 		reserved: int(data[20]),
 		enc:      binary.BigEndian.Uint32(data[56:60]),
 	}
-	if db.reserved >= pageSize {
-		return nil, fmt.Errorf("sqlitescan: %s: reserved space %d exceeds page", path, db.reserved)
+	// SQLite itself refuses a usable page smaller than this, and below it the
+	// payload arithmetic in leafCell goes negative.
+	if pageSize-db.reserved < minUsable {
+		return nil, fmt.Errorf("sqlitescan: %s: reserved space %d leaves too little of a %d-byte page",
+			path, db.reserved, pageSize)
 	}
 	if err := db.loadWAL(path + "-wal"); err != nil {
 		return nil, err
@@ -85,8 +107,54 @@ func Open(path string) (*DB, error) {
 	return db, nil
 }
 
+// ReadTable opens a database and reads one table from it, trying again when
+// the contents fail to parse.
+//
+// The file belongs to a running browser. The main file and its write-ahead
+// log are read one after the other, not as a snapshot, so a write landing in
+// between — or a checkpoint folding the log into the file — can leave the
+// two disagreeing for a moment. That is a few milliseconds in a browser's
+// life, and reading again is all it takes. Anything else — a missing file,
+// one that is not a database, a table it does not have — is returned at
+// once: waiting will not change it.
+//
+// A disagreement that still parses is not caught: it reads as the file was
+// a moment earlier, which for a cookie store is a session a few seconds old.
+func ReadTable(path, name string) (*Table, error) {
+	var err error
+	for attempt := 0; attempt < readAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(readBackoff)
+		}
+		var db *DB
+		var tbl *Table
+		if db, err = Open(path); err == nil {
+			if tbl, err = db.Table(name); err == nil {
+				return tbl, nil
+			}
+		}
+		if !errors.Is(err, ErrMalformed) {
+			return nil, err
+		}
+	}
+	return nil, err
+}
+
+const (
+	readAttempts = 3
+	readBackoff  = 50 * time.Millisecond
+	minUsable    = 480
+)
+
 // usable is the page size minus any per-page reserved region.
 func (d *DB) usable() int { return d.pageSize - d.reserved }
+
+// pageCount is how many pages the database can hold, counting any the log
+// adds past the end of the main file.
+func (d *DB) pageCount() int { return len(d.data)/d.pageSize + len(d.wal) }
+
+// size is the most bytes any one payload could span.
+func (d *DB) size() uint64 { return uint64(d.pageCount()) * uint64(d.pageSize) }
 
 func (d *DB) page(n uint32) ([]byte, error) {
 	if n == 0 {
@@ -109,13 +177,13 @@ func (d *DB) Table(name string) (tbl *Table, err error) {
 	// bytes gets a backstop so a malformed page is an error, not a crash.
 	defer func() {
 		if r := recover(); r != nil {
-			tbl, err = nil, fmt.Errorf("sqlitescan: malformed database: %v", r)
+			tbl, err = nil, fmt.Errorf("%w: %v", ErrMalformed, r)
 		}
 	}()
 
 	schema, err := d.scan(1)
 	if err != nil {
-		return nil, fmt.Errorf("sqlitescan: schema: %w", err)
+		return nil, fmt.Errorf("%w: schema: %w", ErrMalformed, err)
 	}
 	for _, r := range schema {
 		// sqlite_master is (type, name, tbl_name, rootpage, sql).
@@ -130,13 +198,13 @@ func (d *DB) Table(name string) (tbl *Table, err error) {
 		}
 		root, ok := r.vals[3].(int64)
 		if !ok || root <= 0 {
-			return nil, fmt.Errorf("sqlitescan: table %q has no root page", name)
+			return nil, fmt.Errorf("%w: table %q has no root page", ErrMalformed, name)
 		}
 		sql, _ := r.vals[4].(string)
 		cols, rowidCol := parseColumns(sql)
 		rows, err := d.scan(uint32(root))
 		if err != nil {
-			return nil, fmt.Errorf("sqlitescan: table %q: %w", name, err)
+			return nil, fmt.Errorf("%w: table %q: %w", ErrMalformed, name, err)
 		}
 		out := make([][]any, 0, len(rows))
 		for _, r := range rows {
@@ -174,6 +242,9 @@ func (d *DB) scan(root uint32) ([]record, error) {
 		if err != nil {
 			return err
 		}
+		// The reserved bytes at the end of each page are not the b-tree's,
+		// so nothing below may read them.
+		pg = pg[:d.usable()]
 		// Page 1 carries the file header ahead of its b-tree header.
 		off := 0
 		if n == 1 {
@@ -258,6 +329,13 @@ func (d *DB) leafCell(pg []byte, at int) ([]byte, int64, error) {
 	}
 	body := pg[at+n1+n2:]
 
+	// A payload cannot be larger than the file it is stored in. Checking
+	// before allocating matters: a damaged size would otherwise ask for more
+	// memory than the machine has, and that is a fatal error, not a panic
+	// the recover in Table can catch.
+	if size > d.size() {
+		return nil, 0, fmt.Errorf("payload of %d bytes is larger than the database", size)
+	}
 	usable := d.usable()
 	maxLocal := usable - 35
 	if size <= uint64(maxLocal) {
@@ -281,7 +359,12 @@ func (d *DB) leafCell(pg []byte, at int) ([]byte, int64, error) {
 	buf = append(buf, body[:local]...)
 	next := binary.BigEndian.Uint32(body[local : local+4])
 
+	// A chain longer than the file has pages has looped back on itself.
+	hops, maxHops := 0, d.pageCount()
 	for next != 0 && uint64(len(buf)) < size {
+		if hops++; hops > maxHops {
+			return nil, 0, fmt.Errorf("overflow chain loops")
+		}
 		opg, err := d.page(next)
 		if err != nil {
 			return nil, 0, err
@@ -303,24 +386,22 @@ func (d *DB) leafCell(pg []byte, at int) ([]byte, int64, error) {
 }
 
 // parseRecord decodes one row: a header of serial types, then the values.
+// The header and the body are read together, one cursor in each, so a row
+// costs one slice of values and nothing on the side.
 func parseRecord(rec []byte, enc uint32) ([]any, error) {
 	hdrLen, n := uvarint(rec)
 	if n == 0 || hdrLen < uint64(n) || hdrLen > uint64(len(rec)) {
 		return nil, fmt.Errorf("bad record header")
 	}
-	var types []uint64
-	for p := n; p < int(hdrLen); {
-		t, m := uvarint(rec[p:])
+	header, body := rec[n:hdrLen], rec[hdrLen:]
+	// Every serial type takes at least a byte, so this is enough room.
+	vals := make([]any, 0, len(header))
+	for len(header) > 0 {
+		t, m := uvarint(header)
 		if m == 0 {
 			return nil, fmt.Errorf("bad serial type")
 		}
-		types = append(types, t)
-		p += m
-	}
-
-	body := rec[hdrLen:]
-	vals := make([]any, 0, len(types))
-	for _, t := range types {
+		header = header[m:]
 		size, err := serialSize(t)
 		if err != nil {
 			return nil, err
@@ -346,6 +427,10 @@ func serialSize(t uint64) (int, error) {
 		return 8, nil
 	case t == 10, t == 11:
 		return 0, fmt.Errorf("reserved serial type %d", t)
+	case t > 12+2*math.MaxInt32:
+		// Past SQLite's own limit on a value, and past what an int holds on
+		// some platforms.
+		return 0, fmt.Errorf("serial type %d is too large", t)
 	default:
 		return int((t - 12) / 2), nil
 	}
@@ -407,7 +492,7 @@ func decodeText(b []byte, enc uint32) string {
 	}
 }
 
-// varint reads SQLite's big-endian variable-length integer: up to nine
+// uvarint reads SQLite's big-endian variable-length integer: up to nine
 // bytes, seven bits each, with the ninth contributing all eight. It returns
 // the value and the bytes consumed, or 0 bytes if the input is short.
 func uvarint(b []byte) (uint64, int) {
